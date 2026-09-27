@@ -13,7 +13,11 @@ APPIMAGE ?= $(FRAMEWORK_DIR)/cpu2026-tools-x86_64.AppImage
 # Without an AppImage, build uses Verilator on PATH (provided by OJ).
 # Explicit overrides always win; an invalid override fails instead of falling back.
 VERILATOR ?=
-YOSYS ?=
+# Local workaround: this checkout lives under a non-ASCII path (大二上), which
+# Yosys 0.63's JSON writer mangles. Route Yosys through tools/yosys-wrap.sh;
+# it is a pass-through everywhere else. Remove this line after moving the repo
+# to an ASCII-only path.
+YOSYS ?= $(FRAMEWORK_DIR)/tools/yosys-wrap.sh
 ABC ?=
 STA ?=
 ASAP7_LIB ?=
