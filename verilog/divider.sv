@@ -1,37 +1,69 @@
 module divider (
+  input  logic        clk,
+  input  logic        reset,
+  input  logic        start,        // 1 拍脉冲；busy=1 时应忽略
   input  logic        is_signed,    // 1: DIV/REM, 0: DIVU/REMU
   input  logic [31:0] a,            // 被除数
   input  logic [31:0] b,            // 除数
+  output logic        busy,
+  output logic        done,         // 完成时 1 拍脉冲
   output logic [31:0] quotient,
   output logic [31:0] remainder
 );
 
-  logic [31:0] a_u;
   logic [31:0] b_u;
-  logic [31:0] quot_u;
-  logic [31:0] rem_u;
+  logic [31:0] quot_u, rest_u;
+  logic [4:0] i;
+  logic [31:0] quotient_mem, remainder_mem;
+  typedef enum logic[1:0] { IDLE, RUNNING, DONE } divider_state;
+  divider_state state;
   logic negative_a, negative_b;
   assign negative_a = is_signed && a[31];
   assign negative_b = is_signed && b[31];
-  assign a_u = negative_a ? -$signed(a) : a;
-  assign b_u = negative_b ? -$signed(b) : b;
-  logic [31:0] rest_u [0:32];
-  assign rest_u[32] = a_u;
-  always_comb begin
-    for (int i = 31; i >= 0; i--) begin
-      rest_u[i] = 32'b0;
-      quot_u[i] = 1'b0;
-      if ((rest_u[i + 1] >> i) >= b_u) begin
-        rest_u[i] = rest_u[i + 1] - (b_u << i);
-        quot_u[i] = 1;
-      end else begin
-        rest_u[i] = rest_u[i + 1];
-        quot_u[i] = 0;
-      end
+  always_ff @ (posedge clk or posedge reset) begin
+    if (reset) begin
+      rest_u <= negative_a ? -$signed(a) : a;
+      b_u <= negative_b ? -$signed(b) : b;
+      quot_u <= 32'b0;
+      i <= 5'b11111;
+      state <= IDLE;
+    end else begin
+      unique case (state)
+        IDLE: begin
+          if (start == 1) begin
+            /* do the special checks, omitted for now */
+            rest_u <= negative_a ? -$signed(a) : a;
+            b_u <= negative_b ? -$signed(b) : b;
+            quot_u <= 32'b0;
+            i <= 5'b11111;
+            state <= RUNNING;
+          end
+        end
+        RUNNING: begin
+          logic [31:0] new_rest_u, new_quot_u;
+          if ((rest_u  >> i) >= b_u) begin
+            new_rest_u = rest_u - (b_u << i);
+            new_quot_u = quot_u | (1 << i);
+          end else begin
+            new_rest_u = rest_u;
+            new_quot_u = quot_u;
+          end
+          rest_u <= new_rest_u;
+          quot_u <= new_quot_u;
+          quotient_mem <= (negative_a ^ negative_b) ? -$signed(new_quot_u) : new_quot_u;
+          remainder_mem <= negative_a ? -$signed(new_rest_u) : new_rest_u;
+          state <= (i == 0 ? DONE : RUNNING);
+          i <= i - 1;
+        end
+        DONE: begin
+          state <= IDLE;
+        end
+      endcase
     end
   end
-  assign rem_u = rest_u[0];
-  assign quotient = (negative_a ^ negative_b) ? -$signed(quot_u) : quot_u;
-  assign remainder = negative_a ? -$signed(rem_u) : rem_u;
+  assign busy = (state == RUNNING);
+  assign done = (state == DONE);
+  assign quotient = quotient_mem;
+  assign remainder = remainder_mem;
 
 endmodule
