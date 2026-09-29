@@ -4,7 +4,7 @@
 >
 > README-ZH「微架构要求」是无条件的：**乱序执行 + 按序提交 + 参数化**（发射
 > 宽度 / ROB Depth / PRF Size / 保留站或发射队列深度 / Cache 容量与相联度）；
-> 分支预测属于扣分项（未实现 → 60%+10%）。因此旧版 `first_worker.md` 里：
+> 分支预测属于扣分项（未实现 → 60%+10%）。因此旧版 `docs/plan/first_worker.md` 里：
 >
 > 1. ~~P1 顺序流水线 → P3 乱序~~ → **OoO + 按序提交从第一次集成起就是唯一
 >    架构**，没有"顺序阶段"；
@@ -14,7 +14,7 @@
 > 4. ~~最坏交顺序 CPU~~ → 降级只降性能旋钮（宽度/深度/Cache），**不降架构**；
 > 5. 分支预测从 P1 就接入（BTB + 2-bit BHT），P2/P3 再升级 gshare/RAS。
 >
-> 完整分工对象是乙（执行 & 存储线）；`division.md` 旧阶段划分冲突处以本文档
+> 完整分工对象是乙（执行 & 存储线）；`docs/plan/division.md` 旧阶段划分冲突处以本文档
 > 为准（division.md 待同步）。
 
 ---
@@ -36,7 +36,7 @@
 
 ### 0.2 现有资产（本仓库当前状态）
 
-- `environment.md`：环境已配好（AppImage + 本地 Verilator 回落，
+- `docs/environment.md`：环境已配好（AppImage + 本地 Verilator 回落，
   `tools/yosys-wrap.sh` 处理中文路径）。
 - `verilog/decoder.sv`、`icache.sv`：你的文件；`icache.sv` 当前是 2 拍/条的
   串行 FSM，**必须改造成每拍可接收的流水线**（多发射要求每拍出 W 条）。
@@ -132,7 +132,7 @@ stall+redirect、`pc+4` 溢出、10 万拍随机对拍。这是多发射/乱序�
 ### W5（0.5 天）骨架、签字与收尾
 
 - `verilog/core.sv` 薄封装骨架（只例化 frontend/backend/mem_subsystem 并
-  连线，空壳可编译，即 `division.md` 的 A0.5）；
+  连线，空壳可编译，即 `docs/plan/division.md` 的 A0.5）；
 - 和乙逐条 review `docs/interface.md`，双方签字冻结（M5）；
 - 打 tag、开分支：
 

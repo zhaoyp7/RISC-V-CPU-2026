@@ -12,7 +12,7 @@
 >
 > **当前起点**：顺序基线（`docs/report-stage1.md`：IPC 0.138、约 47 MHz、
 > 面积 5444 µm²）仅作为集成前 main 保活与调试参照；`divider.sv`（多周期）与
-> `test/divider_test/` 已完成；环境见 `environment.md`。
+> `test/divider_test/` 已完成；环境见 `docs/environment.md`。
 >
 > **课程评分阶段**（性能门禁，功能要求无条件）：
 > | 课程阶段 | 面积上限 | IPC 几何平均 | 频率 | 累计分 |

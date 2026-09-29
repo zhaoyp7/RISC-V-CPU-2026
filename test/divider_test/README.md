@@ -20,7 +20,7 @@ test/divider_test/
 
 - Verilator 5.020（与课程 AppImage 内置版本一致）；
 - 宿主机 g++（C++17）、GNU Make；
-- 本机已按 `environment.md` 装好本地 Verilator，默认在 `~/.local/bin`。
+- 本机已按 `docs/environment.md` 装好本地 Verilator，默认在 `~/.local/bin`。
   新开终端如果提示找不到 verilator：
 
 ```sh

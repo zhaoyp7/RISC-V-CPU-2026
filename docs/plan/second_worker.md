@@ -5,7 +5,7 @@
 > README-ZH「微架构要求」是无条件的：**乱序执行 + 按序提交 + 参数化**（发射
 > 宽度 / ROB Depth / PRF Size / 保留站或发射队列深度 / Cache 容量与相联度）；
 > 「缺陷情况（未实现分支预测 / 主要功能缺陷）60%+10%」说明**分支预测**也必须
-> 有。因此旧版 `second_worker.md` 里这些全部作废：
+> 有。因此旧版 `docs/plan/second_worker.md` 里这些全部作废：
 >
 > 1. ~~P1 先做顺序流水线、P3 再乱序~~ → **OoO 从第一次集成起就是唯一架构**，
 >    不存在"顺序版本"这一交付阶段；
@@ -16,7 +16,7 @@
 >    **不降架构**；
 > 5. 分支预测同样是必需功能，从 P1 起就接入简单预测器，不能等到最后。
 >
-> 完整分工对象仍是甲（前端 & 提交线）；`division.md` 的旧阶段划分冲突处，
+> 完整分工对象仍是甲（前端 & 提交线）；`docs/plan/division.md` 的旧阶段划分冲突处，
 > **以本文档为准**（division.md 待同步）。
 
 ---
@@ -48,7 +48,7 @@
   （100k 随机 fails=0；有符号除零由 `alu.sv` 兜底）；接口 `start/busy/done`，
   **`done` 当拍商/余数有效**。
 - `verilog/naive_divider.sv`：组合参考模型，**只用于对拍，不进 `filelist.f`**。
-- `environment.md`：环境已配好（AppImage + 本地 Verilator 回落，
+- `docs/environment.md`：环境已配好（AppImage + 本地 Verilator 回落，
   `tools/yosys-wrap.sh` 处理中文路径）。
 - `verilog/core.sv` 等：单周期顺序基线，仅作为**集成前的 main 保活版本**与
   调试参照；不是交付路线。
