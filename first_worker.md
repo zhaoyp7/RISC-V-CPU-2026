@@ -43,7 +43,9 @@
 - `verilog/core.sv` 等：单周期顺序基线，仅用于集成前 main 保活与调试参照，
   **不是交付路线**。
 - `verilog/divider.sv`：乙已完成（多周期，`test/divider_test` 通过）。
-- `docs/interface.md`：待你起草（P0）。
+- `test/decoder_test/`：W1 已完成并推送（commit `8b910be`）；后续单测按
+  `test/<module>_test/` 同样结构新建。
+- `docs/interface.md`：待你起草（P0 W2），冻结前需双方 review。
 
 ### 0.3 三条自我保护原则
 
@@ -56,44 +58,20 @@
 
 ---
 
-## 1. P0（约 1 周）：热身地基（独立任务优先）
+## 1. P0（约 1 周）：地基（接口优先）
 
-先做 W1/W2 找手感，再做 W3/W4。
+顺序：**W1（已完成）→ W2 参数与接口 → W3 pc_unit → W4 bpu → W5 骨架收尾**。
+理由：参数（所有模块的位宽来源）和七条总线是后续一切的契约；接口草案先发给
+乙 review，review 期间并行做 W3/W4，避免 P1 返工。W5 需要双方签字后收尾。
 
-### W1（1 天）`decoder.sv` 全量单测
+### W1（1 天，已完成）`decoder.sv` 全量单测
 
-- 用乙的 `tools/unit`（或临时 `verilator --top-module decoder` 命令）编译；
-- 穷举 opcode × funct3 × funct7，验证全部控制位与 `illegal`；
-- 五种立即数格式用边界值验证符号扩展（B/J 型位重排重点核对）；
-- 用 `testcases/*/program.dump` 真实指令交叉验证。
+- 已完成并推送：commit `8b910be`，测试在 `test/decoder_test/`
+  （`decoder_tb.cpp` + `run.sh` + `README.md`；穷举 131,072 组编码 +
+  立即数边界 + 20 万随机 + 3,112 条真实指令，`checked=334224 fails=0`）；
+- 后续所有模块单测都按同样结构放在 `test/<module>_test/`。
 
-### W2（1 天）`pc_unit.sv`：PC 与重定向（独立积木）
-
-```systemverilog
-module pc_unit (
-  input  logic        clk, reset,
-  input  logic        advance,        // 下游接收，pc <= pc+4
-  input  logic        stall,
-  input  logic        redirect_valid,
-  input  logic [31:0] redirect_pc,
-  output logic [31:0] pc
-);
-```
-
-优先级 `redirect > stall > advance`；单测覆盖复位、连续推进、停顿、同拍
-redirect、`pc+4` 溢出、10 万拍随机对拍。**重定向语义（同拍有效、下一拍 PC
-已切换）写进 `docs/interface.md`**，这是多发射/乱序恢复的基础。
-
-### W3（1.5 天）`bpu.sv` 原型（P1 就要用，不是 P2 彩蛋）
-
-- BTB（直接映射 `{valid, tag, target}`）+ 2-bit BHT；参数
-  `BTB_INDEX_BITS/BHT_INDEX_BITS`；
-- 接口：`fetch_pc → predict_taken/predict_target`，`br_update`（来自乙的
-  EX 解析）更新；同拍读写冲突要有旁路；
-- 用 C++ 参考模型对拍循环/交替分支流，记录准确率；
-- 目标 P1 就接上（先 BTB+BHT），P2/P3 升级 gshare/RAS。
-
-### W4（1.5 天）参数化与接口冻结
+### W2（1.5 天）参数化与接口冻结（先做）
 
 **Step 1**：`verilog/cpu_config.sv`（放 `rv32_defs.sv` 之后），所有参数加
 `` `ifndef`` 保护以便 `-D` 覆盖：
@@ -115,17 +93,57 @@ redirect、`pc+4` 溢出、10 万拍随机对拍。**重定向语义（同拍有
 `` `define`` 字段切片，Yosys 0.63 不支持 struct/package）：
 `dispatch[W]`、`commit[W]`、`cdb[R]`、`complete[W]`、`br_update`、
 `if_refill`、`data_mem`；位宽由参数推导（`ROB_TAG_W = $clog2(CPU_ROB_DEPTH)`）。
-和乙 review 后冻结。
+同时把 W3/W4 要用的语义写清：
 
-**Step 4**：打 tag、开分支：
+- `redirect`：EX 拍末有效、下一拍 PC 已切换，优先级高于 stall/顺序推进；
+- `br_update`：EX 解析的真实方向/目标，每条分支都更新（不只预测失败时）；
+- 数组化字段的切片位置（`` `define``）与 x0 约定（零 tag、永远 ready）。
+
+**Step 4**：把接口草案发给乙 review；按 M5 协议，冻结后任何改动都要
+"改文档 → 双方确认 → 同一次 commit 同步两侧 stub/RTL"。
+
+### W3（1 天）`pc_unit.sv`：PC 与重定向（接口冻结后做）
+
+```systemverilog
+module pc_unit (
+  input  logic        clk, reset,
+  input  logic        advance,        // 下游接收，pc <= pc+4
+  input  logic        stall,
+  input  logic        redirect_valid,
+  input  logic [31:0] redirect_pc,
+  output logic [31:0] pc
+);
+```
+
+优先级 `redirect > stall > advance`（与 W2 文档一致）；单测在
+`test/pc_unit_test/`，覆盖复位、连续推进、停顿、同拍 redirect、同拍
+stall+redirect、`pc+4` 溢出、10 万拍随机对拍。这是多发射/乱序恢复的基础。
+
+### W4（1.5 天）`bpu.sv` 原型（P1 就要用，不是 P2 彩蛋）
+
+- BTB（直接映射 `{valid, tag, target}`）+ 2-bit BHT；参数
+  `BTB_INDEX_BITS/BHT_INDEX_BITS`（默认值接入 `cpu_config.sv`）；
+- 接口：`fetch_pc → predict_taken/predict_target`，`br_update`（来自乙的
+  EX 解析，语义见 W2 冻结的 `docs/interface.md`）更新；同拍读写冲突要有旁路；
+- 单测在 `test/bpu_test/`：用 C++ 参考模型对拍循环/交替分支流，记录准确率、
+  冷启动与别名冲突表现；
+- 目标 P1 就接上（先 BTB+BHT），P2/P3 升级 gshare/RAS。
+
+### W5（0.5 天）骨架、签字与收尾
+
+- `verilog/core.sv` 薄封装骨架（只例化 frontend/backend/mem_subsystem 并
+  连线，空壳可编译，即 `division.md` 的 A0.5）；
+- 和乙逐条 review `docs/interface.md`，双方签字冻结（M5）；
+- 打 tag、开分支：
 
 ```sh
 git tag p0-baseline && git push origin p0-baseline
 git checkout -b p1-front
 ```
 
-**P0 验收**：decoder 单测全过；pc_unit/BPU 原型可独立仿真；
-`cpu_config.sv` + `config_gen.py` 可用；接口文档双方签字；tag 已推。
+**P0 验收**：decoder 单测全过（已完成）；`cpu_config.sv` + `config_gen.py`
+可用；接口文档双方签字；pc_unit/BPU 原型可独立仿真；空壳 `make build` 通过；
+tag 已推。
 
 ---
 
@@ -234,8 +252,8 @@ x0 不重命名、永远 ready。
 | 时点 | 动作 |
 | --- | --- |
 | 阶段开始 | 对齐接口 → 更新 `docs/interface.md` → 更新 stub |
-| 开发中 | 只在自己的 feature 分支；每模块先过 `tools/unit`；参数改完先跑冒烟 |
-| 合并前 | `tools/unit/run.sh` 全 PASS + `make test` 全绿（W=1/2） |
+| 开发中 | 只在自己的 feature 分支；每模块先过 `test/<module>_test/run.sh`；参数改完先跑冒烟 |
+| 合并前 | `test/*/run.sh` 全 PASS + `make test` 全绿（W=1/2） |
 | 集成窗口 | 逐边替换 → 小用例 → 全量 → perf/synth → tag → 更新 `docs/perf-log.md` |
 | 阶段结束 | `docs/journal-甲.md` 半页；和乙对人日账 |
 
@@ -277,10 +295,12 @@ git tag p1-ooo && git push origin p1-ooo
 
 | 时间 | 你做什么 |
 | --- | --- |
-| 第 1 天 | W1 decoder 全量单测 |
-| 第 2 天 | W2 pc_unit + 单测 |
-| 第 3~4 天 | W3 bpu 原型 + 单测 |
-| 第 5~6 天 | W4 参数/接口冻结 + config_gen + tag/分支 |
+| 第 1 天 | W1 decoder 全量单测（已完成） |
+| 第 2 天 | W2 cpu_config + config_gen；接口草案发乙 |
+| 第 3 天 | W2 interface.md 定稿并发乙 review |
+| 第 4 天 | W3 pc_unit + 单测 |
+| 第 5~6 天 | W4 bpu 原型 + 单测 |
+| 第 7 天 | W5 空壳 + 双方签字 + tag p0-baseline / 开 p1-front |
 | 第 2~4 周 | P1：I-Cache 流水线、rename/ROB/commit、与乙集成（W=1 全过、W=2 smoke） |
 | 第 5~7 周 | P2：双发射全速 + gshare；19/19 @W=1,2；阶段 1 指标 |
 | 第 8~10 周 | P3：恢复压力 + 参数扫描；阶段 2 指标 |
