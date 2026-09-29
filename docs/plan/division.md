@@ -79,7 +79,7 @@
 
 ---
 
-## 2. 接缝（Seams）：数组化的七条总线（P0 冻结）
+## 2. 接缝（Seams）：数组化的八条总线（P0 冻结）
 
 所有 bundle 用**扁平总线 + `` `define`` 字段切片 + `[W-1:0]` 打包数组**
 （Yosys 0.63 不支持 struct/package，见 `docs/report-stage1.md` §2.4）。
@@ -94,17 +94,19 @@ core.sv（薄封装，只连线）
  │        ◀── complete[W] ──
  │        ── commit[W] ────▶（store 释放 / 物理寄存器释放）
  │        ◀── br_update ────（EX 分支解析结果，供 BPU 更新）
+ │        ── squash ──────▶（丢弃错误路径的后端在飞 uop）
  │   if_refill 端口                    data_mem 端口
  └── mem_subsystem.sv（乙：axi_mem_if + 仲裁 + D-Cache）
 ```
 
 | Bundle | 方向 | 字段 | 备注 |
 | --- | --- | --- | --- |
-| `dispatch[W]` | 甲→乙 | `valid, pc, inst, 控制位, imm, dest_tag, src1_tag, src1_ready, src2_tag, src2_ready, lsq_id` | 等价于你模拟器 rename→RS 的入队包 |
+| `dispatch[W]` | 甲→乙 | `valid, pc, inst, 控制位, imm, dest_tag, src1_tag, src1_ready, src2_tag, src2_ready, lsq_id, rob_idx` | 等价于你模拟器 rename→RS 的入队包 |
 | `cdb[R]` | 乙→甲+乙内部 | `valid, tag, value, exception` | 广播唤醒 RS + 通知 ROB |
 | `complete[W]` | 乙→甲 | `valid, tag, exception` | 与 cdb 可合并 |
 | `commit[W]` | 甲→乙 | `valid, tag, is_store, lsq_id` | store 提交时写内存 |
-| `br_update` | 乙→甲 | `valid, pc, taken, target, is_jalr` | EX 解析结果 |
+| `br_update` | 乙→甲 | `valid, pc, taken, target, is_jalr, tag` | EX 解析结果；`tag` 供甲在 ROB 中精确定位 |
+| `squash` | 甲→乙 | `valid, rob_idx` | 保留该序号及更老，丢弃更年轻的在飞 uop |
 | `if_refill` | 甲→乙 | 请求 `valid, addr`；响应 `valid, rdata` | I-Cache 缺失回填 |
 | `data_mem` | 乙→mem_subsystem | 请求 `valid, we, addr, wdata, wstrb`；响应 `valid, rdata` | load/store |
 
@@ -167,7 +169,7 @@ Verilator（参考 `test/divider_test/run.sh`），支持 `-D` 参数覆盖：
 | A0.1 | 甲 | `decoder.sv` 穷举单测（控制位 + 立即数 + illegal） | 无 | 单测 | 1 |
 | A0.2 | 甲 | `pc_unit.sv` + 单测（redirect > stall > advance） | 无 | 单测 | 1 |
 | A0.3 | 甲 | `bpu.sv` 原型（BTB + 2-bit BHT，参数化） | 无 | 与 C++ 模型对拍 | 1.5 |
-| A0.4 | 甲 | `cpu_config.sv` + `tools/config_gen.py` + `docs/interface.md`（§2 七条总线）+ tag/分支 | 无 | 双方 review | 2 |
+| A0.4 | 甲 | `cpu_config.sv` + `tools/config_gen.py` + `docs/interface.md`（§2 八条总线）+ tag/分支 | 无 | 双方 review | 2 |
 | A0.5 | 甲 | `core.sv` 薄封装骨架（空壳可编译） | 仅接口 | `make build` | 0.5 |
 | B0.1 | 乙 | `tools/unit/build.py` 单元测试脚手架 | 无 | 能编译任意模块 | 1 |
 | B0.2 | 乙 | `divider.sv` 复验 + 接口固化（done 当拍结果有效） | 无 | `test/divider_test` | 0.5 |
@@ -295,7 +297,7 @@ make code                          # OJ 产物（干净环境复现）
 
 | 风险 | 症状 | 对策 | 负责人 |
 | --- | --- | --- | --- |
-| 接口反复变更 | 两边来回改 bundle | M5；P0 一次定全七条总线，只允许加宽/加深 | 两人 |
+| 接口反复变更 | 两边来回改 bundle | M5；P0 一次定全八条总线，只允许加宽/加深 | 两人 |
 | 集成地狱 | 集成窗口超时 | 逐边替换；stub 测试必须提前全绿 | 轮值集成人 |
 | 频率塌方 | 唤醒/选择/转发路径长 | select 流水化；除法器多周期；diagnose 定位 | 乙 |
 | 死锁 | ROB/RS/LSQ 满互相等待 | 满信号保持反压；压力用例 | 甲 |
@@ -318,7 +320,7 @@ make code                          # OJ 产物（干净环境复现）
 
 | 阶段 | 甲（前端/提交） | 乙（执行/存储） | 接缝 | 联合验收 |
 | --- | --- | --- | --- | --- |
-| P0 | decoder/pc_unit/BPU 原型 + 参数与接口冻结 | 测试脚手架 + divider 复验 + mem_subsystem v1 + 黄金模型 | interface.md（七条总线） | 双方签字、tag p0-baseline |
+| P0 | decoder/pc_unit/BPU 原型 + 参数与接口冻结 | 测试脚手架 + divider 复验 + mem_subsystem v1 + 黄金模型 | interface.md（八条总线） | 双方签字、tag p0-baseline |
 | P1 | I$ 流水线、rename、ROB/commit、恢复 | PRF、IQ、CDB、执行端口、LSQ v1 | dispatch/cdb/complete/commit | W=1 全过 + W=2 smoke、乱序证据 |
 | P2 | 2 宽 rename/commit、gshare | 双路 select、第二 ALU、D$、仲裁 | 同上（W=2 生效） | 19/19 @W=1/2、IPC ≥ 0.6、≤ 9000 µm²、300 MHz |
 | P3 | 恢复压力、BPU 准确率、参数扫描 | LSQ 完整、端口/乘法器、Cache 相联 | 同上 | IPC ≥ 0.845、≤ 18000 µm² |

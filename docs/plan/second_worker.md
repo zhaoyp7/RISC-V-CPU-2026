@@ -97,8 +97,8 @@
 ### W5（0.5 天）参数与接口评审
 
 和甲逐条过 `docs/interface.md`：`dispatch[W]`、`commit[W]`、`cdb[R]`、
-`complete`、`br_update` 的**数组宽度与位宽**；确认所有 tag/索引位宽由参数
-推导（`ROB_TAG_W = $clog2(CPU_ROB_DEPTH)` 等）。
+`complete`、`br_update`、`squash` 的**数组宽度与位宽**；确认所有 tag/索引
+位宽由参数推导（`ROB_TAG_W = $clog2(CPU_ROB_DEPTH)` 等）。
 
 **P0 验收**：`tools/unit/build.py` 能用；divider 复验通过；mem_subsystem、
 黄金模型可用；参数表与数组化接口双方签字；`git tag p0-baseline`。
@@ -111,11 +111,13 @@
 参数化结构全部就位。bring-up 调试时把 `ISSUE_WIDTH` 设 1，但 RTL 用 generate
 写成宽度通用；门禁要求 **W=1 全过、W=2 smoke 过**。
 
-### Step P1-1（0.5 天）冻结四条总线（含数组化）
+### Step P1-1（0.5 天）冻结接口（含数组化）
 
-`docs/interface.md` 定死：`dispatch[W]`（uop + dest_tag + src tags/ready +
-`lsq_id`）、`cdb[R]`（tag/value/exception）、`complete[W]`、`commit[W]`。
-约定 x0 恒映射到零 tag、永远 ready。
+`docs/interface.md` 定死八条总线：`dispatch[W]`（uop + dest_tag + src
+tags/ready + `lsq_id` + `rob_idx`）、`cdb[R]`（tag/value/exception）、
+`complete[W]`、`commit[W]`、`br_update`（含 `tag`）、`squash`（按 `rob_idx`
+清更年轻的在飞 uop）、`if_refill`/`data_mem`（乙内部）。约定 x0 恒映射到零
+tag、永远 ready。
 
 ### Step P1-2（1.5 天）`prf.sv`（参数 `CPU_PRF_SIZE`）
 
@@ -124,29 +126,37 @@
 
 ### Step P1-3（2 天）`issue_queue.sv`（参数 `CPU_RS_DEPTH`，按端口分布）
 
-- 表项：`valid, busy1, tag1, busy2, tag2, uop, age`；
-- 唤醒：所有 CDB 结果与 tag 比较清 busy；选择：每拍选 `W` 条最老的 ready；
-- 发射时读 PRF 送执行单元；满时反压 dispatch；
+- 表项：`valid, busy1, tag1, busy2, tag2, uop, age, rob_idx`；
+- 唤醒：所有 CDB 结果与 tag 比较清 busy；**dispatch 写入 IQ 的同拍必须用本拍
+  `cdb` 做旁路比较**（否则与 cdb 同拍的消费者会漏唤醒死锁）；
+- 选择：每拍选 `W` 条最老的 ready；发射时读 PRF 送执行单元；满时反压 dispatch；
 - 除法器等非流水单元占用表项直到 `done`。
 
 ### Step P1-4（1 天）`cdb.sv`（参数 `CPU_CDB_NUM`，先 1 条）
 
 - 来源：ALU（每拍 W 条）、除法 `done`、load 数据；单总线时按优先级仲裁，
   未获胜者锁存重试；
-- 广播 tag+value 同时写 PRF、唤醒 IQ；异常经 `complete` 通知 ROB。
+- 广播 tag+value 同时写 PRF、唤醒 IQ；异常经 `complete` 通知 ROB；
+- 分支/跳转解析后发 `br_update`（带 `tag`；每拍最多一条，同拍多条排队且
+  **不得丢失**）——甲在收到 `br_update` 前不会提交该分支，这是精确恢复前提。
 
 ### Step P1-5（1.5 天）执行单元与 `lsu.sv`/`lsq.sv` v1
 
 - ALU 复用现有 `alu.sv`（接 `divider.sv`）；W 路端口先各配一个 ALU；
-- LSQ v1：dispatch 按序分配 `lsq_id`；地址就绪即可算；load 等所有更老 store
-  地址已知（先保守），store 等 `commit` 释放后写 D-Cache；
+- LSQ v1：`lsq_id` 由**甲的 rename 分配**（随 dispatch 传来），乙以其为下标
+  建表项；地址就绪即可算；load 等所有更老 store 地址已知（先保守）；
+- store 收到 `commit` 后才写内存；已提交但未排空的表项仍占位并计入
+  `backend_ready`（否则 `lsq_id` 复用会覆盖未写出的数据）；
+- 响应 `squash(rob_idx)`：丢弃比它年轻的在飞 uop（IQ/LSQ），保证它们不再广播
+  `cdb`/`complete`；与 dispatch 同拍时 squash 优先；
 - 访存走 `mem_subsystem`（此时可先无 D-Cache，直接走 AXI，P2 加）。
 
 ### Step P1-6（2 天）单元测试（`stub_front_ooo.sv`）
 
 用甲的前端 stub 构造：长依赖链、乱序完成但按序提交、ROB/RS/LSQ 满反压、
-除法长延迟、连续分支失败后恢复、x0。**必须有一条测试证明"确实乱序执行"**
-（如后发的独立指令先完成），不是只看结果。
+除法长延迟、连续分支失败后恢复（含 `squash`：被清的 uop 不得再广播、更老的
+uop 不受影响）、cdb 与 dispatch 同拍唤醒、x0。**必须有一条测试证明"确实乱序
+执行"**（如后发的独立指令先完成），不是只看结果。
 
 ### Step P1-7（集成窗口 2 天，和甲一起）
 

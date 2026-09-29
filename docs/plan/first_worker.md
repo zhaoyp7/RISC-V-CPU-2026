@@ -61,7 +61,7 @@
 ## 1. P0（约 1 周）：地基（接口优先）
 
 顺序：**W1（已完成）→ W2 参数与接口 → W3 pc_unit → W4 bpu → W5 骨架收尾**。
-理由：参数（所有模块的位宽来源）和七条总线是后续一切的契约；接口草案先发给
+理由：参数（所有模块的位宽来源）和八条总线是后续一切的契约；接口草案先发给
 乙 review，review 期间并行做 W3/W4，避免 P1 返工。W5 需要双方签字后收尾。
 
 ### W1（1 天，已完成）`decoder.sv` 全量单测
@@ -92,11 +92,13 @@
 **Step 3**：`docs/interface.md` v1，全部 bundle **数组化**（用扁平总线 +
 `` `define`` 字段切片，Yosys 0.63 不支持 struct/package）：
 `dispatch[W]`、`commit[W]`、`cdb[R]`、`complete[W]`、`br_update`、
-`if_refill`、`data_mem`；位宽由参数推导（`ROB_TAG_W = $clog2(CPU_ROB_DEPTH)`）。
+`squash`、`if_refill`、`data_mem`；位宽由参数推导
+（`ROB_TAG_W = $clog2(CPU_ROB_DEPTH)`）。
 同时把 W3/W4 要用的语义写清：
 
-- `redirect`：EX 拍末有效、下一拍 PC 已切换，优先级高于 stall/顺序推进；
-- `br_update`：EX 解析的真实方向/目标，每条分支都更新（不只预测失败时）；
+- `br_update`：EX 解析的真实方向/目标 + `tag`，每条分支/跳转都发（不只预测失败时）；
+  甲据此更新 BPU，并用 `tag` 在 ROB 中定位该分支，与保存的预测比较，自行产生
+  内部重定向（EX 拍末有效、下一拍 PC 已切换，优先级高于 stall/顺序推进）；
 - 数组化字段的切片位置（`` `define``）与 x0 约定（零 tag、永远 ready）。
 
 **Step 4**：把接口草案发给乙 review；按 M5 协议，冻结后任何改动都要
@@ -155,8 +157,8 @@ RTL 全部写成宽度通用；门禁要求 **W=1 全过、W=2 smoke 过**。
 ### Step P1-1（0.5 天）对齐接口
 
 逐条确认：`dispatch[W]` 字段、`cdb[R]`、`complete[W]`、`commit[W]`、
-`backend_ready` 语义（ROB/空闲列表/发射队列任一满）、redirect/恢复协议；
-x0 不重命名、永远 ready。
+`backend_ready` 语义（ROB/空闲列表/发射队列任一满）、恢复协议（甲前端内部冲刷 +
+`dispatch.rob_idx` / `squash` 清理后端）；x0 不重命名、永远 ready。
 
 ### Step P1-2（2 天）改造 `icache.sv` 为流水线（关键）
 
@@ -169,7 +171,8 @@ x0 不重命名、永远 ready。
 
 - `icache` + `pc_unit` + `decoder` + `bpu` 组装；
 - `ISSUE_WIDTH` 组取指（先 W=1 调通，结构支持 W）；
-- 预测失败/非预测跳转：接收乙的 `redirect`，冲刷前端；
+- 预测失败/非预测跳转：收到乙的 `br_update` 后与保存的预测比较，自行冲刷前端，
+  并向乙发 `squash(rob_idx)` 丢弃后端里的错误路径 uop；
 - `backend_ready` 反压时保持状态。
 
 ### Step P1-4（2 天）`rename.sv`（RAT + 空闲列表）
@@ -186,14 +189,17 @@ x0 不重命名、永远 ready。
   exception`；每拍最多提交 W 条（W=1 时逐条）；
 - 提交：更新提交表、释放 `old_preg`、向乙发 `commit`（store 在此时写内存）、
   非法指令提交时停机；
-- **恢复**：分支失败时把提交表拷回重命名表、重建空闲列表、冲刷 ROB；
-  连续两次失败是最好用的一致性测试；
+- **恢复**：分支失败时把提交表拷回重命名表、重建空闲列表、冲刷 ROB，并向乙发
+  `squash` 清理后端在飞 uop；连续两次失败是最好用的一致性测试；
+- 分支/跳转必须**收到 `br_update` 后才允许提交**（保证预测失败先于提交被检出，
+  这是精确恢复的前提）；
 - 接收乙的 `complete`/`cdb` 置 done。
 
 ### Step P1-6（1 天）单元测试（`stub_exec.sv`）
 
-- 随机延迟发 `cdb`/`complete`、可伪造异常；覆盖乱序完成按序提交、
-  ROB 满、分支失败恢复、异常、x0、W 条提交边界。
+- 接收 `dispatch`/`squash`/`commit`（被冲刷的 uop 不再回应），随机延迟发
+  `cdb`/`complete`、可伪造异常；按脚本拉低 `backend_ready` 测反压；覆盖乱序
+  完成按序提交、ROB 满、分支失败恢复、异常、x0、W 条提交边界。
 
 ### Step P1-7（集成窗口 2 天，和乙一起）
 
@@ -274,7 +280,7 @@ git tag p1-ooo && git push origin p1-ooo
 ## 7. 坑清单（前端/提交专属）
 
 1. **I-Cache 吞吐**：不改流水线每 2 拍才 1 条，多发射直接没戏；
-2. **redirect 时序**：同拍有效、下一拍 PC 已切换；必须优先于 stall/顺序推进；
+2. **内部重定向时序**：由 `br_update` 与保存的预测比较产生；同拍有效、下一拍 PC 已切换；必须优先于 stall/顺序推进；
 3. **冲刷边界**：EX 解析分支时 IF/ID 各有年轻指令；你清 IF/ID，乙清 ID/EX，
    写进接口文档；
 4. **恢复一致性**：RAT/空闲列表/ROB 三者同步恢复；连续两次失败必测；
