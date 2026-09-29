@@ -23,6 +23,8 @@ DEFAULTS = {
     "rob": 32,
     "prf": 64,
     "rs": 8,
+    "cdb_num": 1,
+    "lsq": 8,
     "icache_index_bits": 10,
     "icache_ways": 1,
     "icache_line_bytes": 4,
@@ -40,7 +42,13 @@ def validate(args):
     errors = []
     if not 1 <= args.issue_width <= 4:
         errors.append("--issue-width must be 1..4")
-    for name, lo, hi in (("rob", 4, 4096), ("prf", 4, 4096), ("rs", 4, 4096)):
+    if not 1 <= args.cdb_num <= 4:
+        errors.append("--cdb-num must be 1..4")
+    # PRF 允许非 2 的幂（验收档位含 96）；索引位宽由 $clog2 推导，
+    # 实现侧只需保证分配的物理寄存器号 < CPU_PRF_SIZE。
+    if not 4 <= args.prf <= 4096:
+        errors.append("--prf must be 4..4096 (any integer, e.g. 64/96/128)")
+    for name, lo, hi in (("rob", 4, 4096), ("rs", 4, 4096), ("lsq", 4, 64)):
         value = getattr(args, name)
         if not (lo <= value <= hi) or not is_power_of_two(value):
             errors.append(f"--{name} must be a power of two in {lo}..{hi}")
@@ -67,6 +75,8 @@ def render(args):
             f"--rob {args.rob}",
             f"--prf {args.prf}",
             f"--rs {args.rs}",
+            f"--cdb-num {args.cdb_num}",
+            f"--lsq {args.lsq}",
             f"--icache-index-bits {args.icache_index_bits}",
             f"--icache-ways {args.icache_ways}",
             f"--icache-line-bytes {args.icache_line_bytes}",
@@ -99,6 +109,12 @@ def render(args):
 `ifndef CPU_RS_DEPTH
   `define CPU_RS_DEPTH {args.rs}
 `endif
+`ifndef CPU_CDB_NUM
+  `define CPU_CDB_NUM {args.cdb_num}
+`endif
+`ifndef CPU_LSQ_DEPTH
+  `define CPU_LSQ_DEPTH {args.lsq}
+`endif
 
 // ---- Cache 参数（行数 = 2^index_bits）---------------------------------------
 `ifndef CPU_ICACHE_INDEX_BITS
@@ -130,6 +146,9 @@ def render(args):
 `ifndef CPU_RS_IDX_W
   `define CPU_RS_IDX_W $clog2(CPU_RS_DEPTH)
 `endif
+`ifndef CPU_LSQ_IDX_W
+  `define CPU_LSQ_IDX_W $clog2(CPU_LSQ_DEPTH)
+`endif
 """
 
 
@@ -140,6 +159,8 @@ def main():
     parser.add_argument("--rob", type=int, default=DEFAULTS["rob"])
     parser.add_argument("--prf", type=int, default=DEFAULTS["prf"])
     parser.add_argument("--rs", type=int, default=DEFAULTS["rs"])
+    parser.add_argument("--cdb-num", type=int, default=DEFAULTS["cdb_num"])
+    parser.add_argument("--lsq", type=int, default=DEFAULTS["lsq"])
     parser.add_argument("--icache-index-bits", type=int, default=DEFAULTS["icache_index_bits"])
     parser.add_argument("--icache-ways", type=int, default=DEFAULTS["icache_ways"])
     parser.add_argument("--icache-line-bytes", type=int, default=DEFAULTS["icache_line_bytes"])
@@ -172,7 +193,8 @@ def main():
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(text)
     print(f"cpu_config: wrote {out}")
-    print(f"  issue_width={args.issue_width} rob={args.rob} prf={args.prf} rs={args.rs}")
+    print(f"  issue_width={args.issue_width} rob={args.rob} prf={args.prf} "
+          f"rs={args.rs} cdb={args.cdb_num} lsq={args.lsq}")
     print(f"  icache={args.icache_index_bits}b/{args.icache_ways}w/{args.icache_line_bytes}B "
           f"dcache={args.dcache_index_bits}b/{args.dcache_ways}w/{args.dcache_line_bytes}B")
     return 0
