@@ -4,6 +4,7 @@
 # rv32_defs.sv MUST be first: it only contains `define macros that the other
 # files consume, and both Verilator and Yosys share macros in file order.
 rv32_defs.sv
+cpu_config.sv
 alu.sv
 regfile.sv
 decoder.sv
