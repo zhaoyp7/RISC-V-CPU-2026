@@ -1,108 +1,106 @@
-# P1 集成状态（乙侧，2026-10-18）
+# P1 集成状态（2026-10-18）
 
-## 已完成
+## 最终结果：P1 PASS
 
-- P0：`divider` 边界修复、`tools/unit/build.py`、`mem_subsystem` v1、
-  黄金模型/`trace_diff`、接口复核、`p0-baseline` tag。
-- P1 后端：`prf.sv`、`cdb.sv`、`issue_queue.sv`、`lsu.sv`、`lsq.sv`、
-  `backend_ooo.sv`，以及对应 W=1/W=2 单测。
-- P1 stub：`verilog/stub_front_ooo.sv` + `test/stub_front_test`（W=1/2 队列
-  推送/弹出/commit/squash 透传全 PASS）。
-- 集成顶层：`verilog/student_top_ooo.sv`（模块名 `student_top`，仅用于
-  `test/integration/filelist.f`；官方 `verilog/filelist.f` 未改）。
-- 分支：`feat/p1-integration`。跨侧修复提交：
-  `9a4365d`（ROB RAT 重放）、`d101772`（BPU 驱动 PC）、
-  `8fccf25`（squash 结果过滤）、`e61734f`（集成顶层/脚本）、
-  `5b3e330`（stub front）。
+- **W=1 correctness：19/19 PASS**（`MAX_CYCLES=50,000,000`）
+- **W=2 smoke：7/7 PASS**（add_to_100、expr、gcd、naive、manyarguments、
+  multiarray、bulgarian）
+- 全部单元测试 PASS；官方 `sh test/run_all.sh --build` → **ALL PASS**
+- tag：`p1-ooo`
+- 集成使用 `test/integration/filelist.f`，官方 `verilog/filelist.f` 仍是
+  基线，尚未切换。
 
-## 当前集成结果
+### W=1 记录（cycles）
 
-```sh
-sh test/integration/run_smoke.sh correctness_add_to_100 200000
-```
+| case | cycles |
+| --- | ---: |
+| correctness_add_to_100 | 2,401 |
+| correctness_expr | 2,002 |
+| correctness_gcd | 1,464 |
+| correctness_naive | 849 |
+| correctness_manyarguments | 860 |
+| correctness_multiarray | 9,483 |
+| correctness_bulgarian | 1,450,991 |
+| correctness_hanoi | 26,010 |
+| correctness_lvalue2 | 904 |
+| correctness_magic | 3,170,417 |
+| correctness_pi | 21,204,137 |
+| correctness_qsort | 4,667,870 |
+| correctness_queens | 1,891,253 |
+| correctness_statement_test | 4,495 |
+| correctness_superloop | 1,059,467 |
+| correctness_tak | 9,446,589 |
+| correctness_array_test1/2 | 1,867 / 2,193 |
+| correctness_basicopt1 | 761,342 |
 
-结果：**FAIL / timeout**。当前提交轨迹在第 16 条指令（最后提交 PC `0x54`）
-后停止，ROB 填满 32 项，IQ 仍有 4 项且 `out_valid=0`，CDB 无有效结果。
-`correctness_add_to_100` 的黄金轨迹共 421 条；前 16 条与黄金模型一致。
+### W=2 smoke 记录
 
-## 已定位并修复的甲侧问题
-
-### 1. ROB 恢复时丢失在飞 RAT 映射
-
-`rename.sv` 原来在 `recover_valid` 时直接 `rat <= crat`，只恢复已提交映射。
-JALR 写 `ra` 后若发生误预测恢复，branch 自身及更老在飞 uop 的 rd 映射会丢失，
-重新取指的 `jalr zero,0(ra)` 读到旧物理寄存器，PC 跑飞。
-
-修复：
-
-- `rob.sv` 新增 `recover_rat[32*PW]`：从 `crat` 出发，按程序序重放
-  `branch` 及更老的有效表项（`entry_rd/dest_tag/reg_we`）。
-- `rename.sv` 恢复时使用 `recover_rat`，不再只用 `crat`。
-- `core_ooo.sv` 增加连接；`test/rename_test` 增加 `recover_rat` 驱动。
-
-回归：`rename_test` W=1/W=2、`rob_test` W=1/W=2 全 PASS。
-
-### 2. BPU 预测 taken 但没有驱动 PC
-
-`frontend_ooo.sv` 原来只把 `bpu_taken/bpu_target` 存进 slot 给 ROB 比较，
-PC 仍顺序 `+4`。预测 taken 时前端会取 fall-through，但 ROB 认为预测匹配，
-可能提交错误路径。
-
-修复：当一条 branch/jal/jalr 被接收且 `bpu_taken=1` 时：
-
-- 下一拍 PC 切到 `bpu_target`；
-- flush I-Cache 丢弃顺序路径；
-- 不清除已接收的分支 slot。
-
-回归：`frontend_test` W=1/W=2、`core_skeleton_test` 全 PASS。
-
-### 3. 已发射结果在 squash 后仍广播
-
-接口文档要求被 squash 的 uop 不得再广播 `cdb/complete`。原后端 ALU/divider
-结果缓冲、branch complete、store complete 没有 rob_idx 过滤。
-
-修复：
-
-- ALU/divider/branch-complete/store-complete 结果缓冲增加 `rob_idx`；
-- `squash_valid` 时丢弃更年轻的已发射结果；
-- 仍在运行的 divider 标记 discard，done 后不广播。
-
-回归：`backend_test` W=1/W=2、`lsu_test` 全 PASS。
-
-## 仍未解决的问题
-
-在上述修复之后，`correctness_add_to_100` 仍在 `0x54` 后死锁。可复现观察：
-
-- 最后提交：`0x54`（黄金轨迹前 16 条完全一致）；
-- ROB：head=16、count=32、`in_ready=0`，head 项 `0x58 addi a5,a5,1`
-  `done=0`；
-- IQ：`count=4`、`out_valid=0`，即剩余表项都不 ready；
-- CDB：无有效源，`alu_valid_q/div_valid_q/load_result_valid` 均为 0；
-- 说明 `0x58` 要么从未进入 IQ，要么被错误的 squash 清掉；其后所有
-  uop 依赖它，ROB 填满后死锁。
-
-下一步建议（需要甲一起看前端/squash 语义）：
-
-1. 用 `test/integration/run_smoke.sh correctness_add_to_100 20000` +
-   VCD 对齐 `0x58` 的 dispatch/rename/ROB index，确认它是否被
-   `squash_rob_idx` 误清。
-2. 检查 ROB `flush_young` 与 IQ/LSQ 的 squash 是否对“branch 本身/更老”
-   的边界完全一致；ROB depth=32，IQ depth=8，当前使用
-   `diff < DEPTH/2` 的模比较。
-3. 检查 branch 预测 taken 时 I-Cache flush 与 slot 保留的时序，确认
-   重定向后新 uop 的 rob_idx/tag 不复用旧路径表项。
-4. 如需彻底消除前端恢复复杂度，可考虑在 P1 bring-up 阶段对每个
-   branch/jal/jalr 暂停取指直到 `br_update`，换取正确性后再恢复预测。
+add_to_100 2,407；expr 1,877；gcd 1,458；naive 837；manyarguments 863；
+multiarray 9,511；bulgarian 1,448,579。全部 PASS。
 
 ## 复现命令
 
 ```sh
-sh test/integration/run_smoke.sh correctness_add_to_100 20000
+# W=1 全量 correctness
+make build FILELIST=test/integration/filelist.f BUILD=build/ooo JOBS=4
+python3 scripts/testcase.py --build build/ooo --kind correctness \
+    --max-cycles 50000000 --latency 10
+
+# W=2 smoke（需要带 define 的 Verilator wrapper，见 docs 记录）
+make build FILELIST=test/integration/filelist.f BUILD=build/ooo_w2 \
+    VERILATOR=/path/to/verilator_w2.sh JOBS=4
+python3 scripts/testcase.py --build build/ooo_w2 \
+    --case correctness_add_to_100 --max-cycles 50000000 --latency 10
 ```
 
-官方基线仍不受影响：
+W=2 wrapper 的内容：
 
 ```sh
-make build
-sh test/run_all.sh --build
+#!/bin/sh
+exec <repo>/cpu2026-tools-x86_64.AppImage exec /bin/sh -c \
+  'exec "$CPU2026_APPDIR/bin/verilator" +define+CPU_ISSUE_WIDTH=2 "$@"' sh "$@"
 ```
+
+## P0/P1 交付
+
+- P0：`tools/unit/build.py`、divider 边界修复、`mem_subsystem` v1、
+  RV32IM 黄金模型/`trace_diff`、接口复核、`p0-baseline` tag。
+- P1 后端：`prf.sv`、`cdb.sv`、`issue_queue.sv`、`lsu.sv`、`lsq.sv`、
+  `backend_ooo.sv`、`stub_front_ooo.sv`，含 W=1/2 单测。
+- 集成：`verilog/student_top_ooo.sv`（模块名 `student_top`，test-only）、
+  `test/integration/filelist.f`。
+
+## 集成期间定位并修复的问题
+
+1. **ROB 恢复丢失在飞 RAT**：`rename` 恢复时只装载 `crat`，丢失 branch
+   自身及更老在飞 uop 的 rd 映射。`rob.sv` 新增 `recover_rat`，按程序序
+   从 `crat` 重放 branch 及更老表项。
+2. **同拍 completion / recovery 竞态**：ROB 的 `recover_busy_mask` 采到了
+   CDB/complete 置 done 前的状态，把刚完成的 tag 重新标 busy。`rob.sv`
+   增加 `done_now_mask`；`rename.sv` 恢复时排除本拍 wake tag。
+3. **前端 BPU 预测未驱动 PC**：预测 taken 时仍顺序取 fall-through。
+   `frontend_ooo.sv` 用寄存一拍的 `bpu_redirect_q` 重定向 PC 并 flush
+   I-Cache，同时避免 `bpu_redirect → flush → resp_valid` 组合环。
+4. **ready/valid 组合环**：`backend_ready → ren_ready → dispatch.valid →
+   iq/lsu ready → backend_ready` 会振荡。`backend_ooo.sv` 增加 dispatch
+   skid buffer；IQ 用寄存后的 `in_alloc_mask` 计容量，LSQ 用 `alloc_fire`
+   控制真正分配。
+5. **skid 中的 stale ready**：skid 停住期间 producer 的 CDB 已过，保存的
+   `src_ready` 不会更新。skid 在 hold 期间用 CDB wake 更新 ready 位，并在
+   捕获新组时做同拍旁路。
+6. **squash 边界不一致**：IQ/LSQ/skid/LSU 原来用 `rob_idx` 模 32 的半窗口，
+   ROB 用 age；两者在回绕边界不一致，导致旧 store/load 残留。统一改为
+   32-bit dispatch seq：ROB squash 点映射到 `squash_seq`，后端按
+   `seq > squash_seq` 清理。
+7. **squash 后已发射结果仍广播**：ALU/divider/branch-complete/store-complete
+   按 seq 过滤；divider 在跑的 uop 用 discard 标记。
+8. **load 被误 squash 后永久占住 LSU**：请求尚未真正发出时被 squash，
+   `load_active/load_inflight` 永远不清。`lsu.sv` 在请求未启动时直接取消；
+   已在途的读响应丢弃。
+
+## 后续
+
+1. 甲侧确认后，把官方 `verilog/filelist.f`/`student_top.sv` 切换到 OoO
+   版本；当前官方 filelist 仍是基线。
+2. `make perf` / `make synth` 记录真实 IPC/面积/频率；P1 尚未做性能门禁。
+3. P2：W=2 双发射后端、D-Cache、mem_subsystem 三方仲裁。
