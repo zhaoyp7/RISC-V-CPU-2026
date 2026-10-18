@@ -100,6 +100,37 @@ exec <repo>/cpu2026-tools-x86_64.AppImage exec /bin/sh -c \
    `load_active/load_inflight` 永远不清。`lsu.sv` 在请求未启动时直接取消；
    已在途的读响应丢弃。
 
+## P1 性能与综合（官方 OoO filelist）
+
+### perf（`make perf MAX_CYCLES=50000000`）
+
+| benchmark | instructions | cycles | IPC |
+| --- | ---: | ---: | ---: |
+| perf_median | 6,961 | 46,505 | 0.1497 |
+| perf_multiply | 21,722 | 64,422 | 0.3372 |
+| perf_qsort | 139,900 | 862,789 | 0.1621 |
+| perf_rsort | 195,719 | 1,105,270 | 0.1771 |
+| perf_towers | 5,278 | 55,429 | 0.0952 |
+| perf_vvadd | 4,524 | 26,869 | 0.1684 |
+| **GEOMEAN** |  |  | **0.1689** |
+
+说明：P1 的目标是功能打通，不是性能门禁；0.1689 是当前 OoO 实现的真实
+IPC，主要受 branch/I-Cache 停顿和单发射后端限制。P2 再针对 IPC 做优化。
+
+### 综合（ASAP7 / 2 ns 目标）
+
+| mode | total area (µm²) | comb (µm²) | seq (µm²) | SRAM (µm²) | Fmax | min period | WNS vs 2 ns |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| diagnose | 17,383.665 | 10,569.232 | 4,578.528 | 2,235.905 | 63.53 MHz | 15.7412 ns | -13.7406 ns |
+| opt | 17,204.622 | 10,394.855 | 4,573.863 | 2,235.905 | 64.48 MHz | 15.5098 ns | -13.5088 ns |
+
+- 关键路径（diagnose）：`u_core/u_rob` → `u_backend`。
+- `opt` 相比 `diagnose`：面积减少 179.043 µm²，Fmax 提高 0.95 MHz。
+- 2 ns（500 MHz）目标未达到；当前 Fmax 约 64 MHz。P1 只要求综合可跑通，
+  时序优化留到 P2/P3。
+- 综合修复：`lsq.sv` 各组合块使用独立循环变量，避免 Yosys 对复用 `i`
+  推断 latch；`core_ooo.sv` 删除未使用的 `pc_out` 空连接。
+
 ## 后续
 
 1. 官方 filelist 已切换；下一步跑 `make perf` / `make synth`，记录真实
