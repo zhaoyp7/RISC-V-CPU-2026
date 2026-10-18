@@ -234,7 +234,12 @@ struct RefRob {
                 for (int i = 0; i <= e.br_pos; ++i) {
                     Entry& x = q[(size_t)i];
                     r.free_mask &= ~(1ull << x.dest);
-                    if (!x.done) r.busy_mask |= (1ull << x.dest);
+                    bool done_now = x.done;
+                    if (in.cdb_valid && x.dest == in.cdb_tag) done_now = true;
+                    for (int l = 0; l < W; ++l)
+                        if (in.comp_valid[l] && x.dest == in.comp_tag[l])
+                            done_now = true;
+                    if (!done_now) r.busy_mask |= (1ull << x.dest);
                     if (x.is_store || x.is_load)
                         r.lsq_ptr = (x.lsq_id == LSQ - 1) ? 0 : (uint8_t)(x.lsq_id + 1);
                 }

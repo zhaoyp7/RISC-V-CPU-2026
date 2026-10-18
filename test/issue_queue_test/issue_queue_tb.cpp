@@ -96,6 +96,7 @@ struct Harness {
     Vissue_queue* dut = nullptr;
     long checks = 0;
     long fails = 0;
+    uint32_t seq_base = 0;
 
     void tick() {
         dut->clk = 0;
@@ -106,11 +107,12 @@ struct Harness {
 
     void clear_inputs() {
         dut->in_valid = 0;
+        dut->in_alloc_mask = 0;
         for (int i = 0; i < IN_WORDS; ++i) dut->in_uop[i] = 0;
         dut->wake_valid = 0;
         dut->wake_tag = 0;
         dut->squash_valid = 0;
-        dut->squash_rob_idx = 0;
+        dut->squash_seq = 0;
         dut->out_ready = 0;
     }
 
@@ -120,6 +122,7 @@ struct Harness {
         for (int i = 0; i < 3; ++i) tick();
         dut->reset = 0;
         tick();
+        seq_base = 0;
     }
 
     void pack(int lane, const Uop& u) {
@@ -155,9 +158,12 @@ struct Harness {
         clear_inputs();
         pack(0, u);
         dut->in_valid = 1;
+        dut->in_alloc_mask = 1;
+        dut->seq_base = seq_base;
         dut->eval();
         if (!dut->in_ready) return false;
         tick();
+        seq_base += 1;
         clear_inputs();
         return true;
     }
@@ -171,9 +177,12 @@ struct Harness {
             mask |= 1u << lane;
         }
         dut->in_valid = mask;
+        dut->in_alloc_mask = mask;
+        dut->seq_base = seq_base;
         dut->eval();
         if (!dut->in_ready) return false;
         tick();
+        seq_base += W;
         clear_inputs();
         return true;
     }
@@ -290,7 +299,7 @@ int main(int argc, char** argv) {
     h.expect(dut.count == 4, "squash filled");
     h.clear_inputs();
     dut.squash_valid = 1;
-    dut.squash_rob_idx = 2;
+    dut.squash_seq = 1;
     h.tick();
     h.clear_inputs();
     h.expect(dut.count == 2, "squash keeps boundary and older");
@@ -316,6 +325,7 @@ int main(int argc, char** argv) {
     h.clear_inputs();
     h.pack(0, a);
     dut.in_valid = 1;
+    dut.in_alloc_mask = 1;
     dut.eval();
     h.expect(!dut.in_ready, "full rejects dispatch");
     h.issue_one();
@@ -331,11 +341,14 @@ int main(int argc, char** argv) {
     h.clear_inputs();
     h.pack(0, s3);
     dut.in_valid = 1;
+    dut.in_alloc_mask = 1;
+    dut.seq_base = h.seq_base;
     dut.squash_valid = 1;
-    dut.squash_rob_idx = 1;
+    dut.squash_seq = 0;
     dut.eval();
     h.expect(dut.in_ready, "squash frees slot for dispatch");
     h.tick();
+    h.seq_base += 1;
     h.clear_inputs();
     h.expect(dut.count == 2, "squash+dispatch count");
 

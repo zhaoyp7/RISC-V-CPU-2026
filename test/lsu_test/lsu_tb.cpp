@@ -59,6 +59,8 @@ struct Harness {
     bool auto_respond = true;
     long checks = 0;
     long fails = 0;
+    uint32_t seq_base = 0;
+    uint32_t seq_of_rob[32] = {};
 
     void tick() {
         dut->clk = 0;
@@ -98,7 +100,11 @@ struct Harness {
         dut->alloc_id = 0;
         dut->alloc_rob = 0;
         dut->alloc_is_store = 0;
+        dut->alloc_fire = 0;
+        dut->seq_base = 0;
+        dut->squash_seq = 0;
         dut->issue_valid = 0;
+        dut->issue_seq = 0;
         for (int i = 0; i < IN_WORDS; ++i) dut->issue_uop[i] = 0;
         dut->issue_src1 = 0;
         dut->issue_src2 = 0;
@@ -119,6 +125,8 @@ struct Harness {
         for (int i = 0; i < 3; ++i) tick();
         dut->reset = 0;
         tick();
+        seq_base = 0;
+        for (int i = 0; i < 32; ++i) seq_of_rob[i] = 0;
     }
 
     void pack(const Uop& u) {
@@ -140,9 +148,15 @@ struct Harness {
         dut->alloc_id = id;
         dut->alloc_rob = rob;
         dut->alloc_is_store = is_store ? 1 : 0;
+        dut->alloc_fire = 1;
+        dut->seq_base = seq_base;
         dut->eval();
         bool ok = dut->alloc_ready;
         tick();
+        if (ok) {
+            seq_of_rob[rob & 31] = seq_base;
+            seq_base += 1;
+        }
         clear_inputs();
         return ok;
     }
@@ -153,6 +167,7 @@ struct Harness {
         dut->issue_valid = 1;
         dut->issue_src1 = src1;
         dut->issue_src2 = src2;
+        dut->issue_seq = seq_of_rob[u.rob & 31];
         dut->eval();
         if (!dut->issue_ready) return false;
         tick();
@@ -174,6 +189,7 @@ struct Harness {
         clear_inputs();
         dut->squash_valid = 1;
         dut->squash_rob_idx = rob;
+        dut->squash_seq = seq_of_rob[rob & 31] - 1;
         tick();
         clear_inputs();
     }
@@ -347,6 +363,12 @@ int main(int argc, char** argv) {
 
     // ---- squash in-flight load -------------------------------------------
     h.reset();
+    h.expect(h.alloc(1, 1, true), "if dummy store alloc");
+    Uop dummy_st;
+    dummy_st.is_store = 1; dummy_st.lsq = 1; dummy_st.rob = 1;
+    dummy_st.imm = 0x9000; dummy_st.mem_size = WORD;
+    h.expect(h.issue(dummy_st, 0, 0x1234), "if dummy store issue");
+    h.tick();
     h.expect(h.alloc(0, 2, false), "if load alloc");
     Uop il;
     il.dest = 8; il.is_load = 1; il.lsq = 0; il.rob = 2;
@@ -359,6 +381,7 @@ int main(int argc, char** argv) {
     h.clear_inputs();
     dut.squash_valid = 1;
     dut.squash_rob_idx = 1;
+    dut.squash_seq = h.seq_of_rob[2] - 1;
     h.auto_respond = true;
     h.tick();
     h.clear_inputs();

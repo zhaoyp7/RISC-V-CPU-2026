@@ -390,6 +390,7 @@ int main(int argc, char** argv) {
     h.reset();
     Uop sq1; sq1.pc = 0x600; sq1.dest = 9; sq1.rob = 1; sq1.reg_we = 1;
     Uop sq2; sq2.pc = 0x604; sq2.dest = 10; sq2.rob = 2; sq2.reg_we = 1;
+    sq2.src1 = 20; sq2.src1_ready = 0;  // keep it in IQ/skid until squash
     if (W == 1) {
         h.expect(h.dispatch_one(sq1), "squash first dispatch");
         h.expect(h.dispatch_one(sq2), "squash second dispatch");
@@ -414,13 +415,13 @@ int main(int argc, char** argv) {
     block.pc = 0x700; block.dest = 11; block.rob = 1; block.reg_we = 1;
     block.src1 = 20; block.src1_ready = 0;  // never woken
     int accepted = 0;
-    for (int n = 0; n < 16 && accepted < 8; ++n) {
+    for (int n = 0; n < 24 && dut.backend_ready; ++n) {
         if (h.dispatch_one(block)) ++accepted;
         else h.tick();
         block.rob = (block.rob + 1) & 31;
     }
-    h.expect(accepted == 8, "filled issue queue");
-    h.expect(!dut.backend_ready, "backend_ready low when IQ full");
+    h.expect(accepted >= 8, "filled issue queue + skid");
+    h.expect(!dut.backend_ready, "backend_ready low with IQ+skid full");
 
     // ---- W=2 dispatch absorption -----------------------------------------
     if (W == 2) {
