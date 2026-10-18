@@ -6,9 +6,10 @@
 - **W=2 smoke：7/7 PASS**（add_to_100、expr、gcd、naive、manyarguments、
   multiarray、bulgarian）
 - 全部单元测试 PASS；官方 `sh test/run_all.sh --build` → **ALL PASS**
-- tag：`p1-ooo`
-- 集成使用 `test/integration/filelist.f`，官方 `verilog/filelist.f` 仍是
-  基线，尚未切换。
+- tag：`p1-ooo`（功能集成）、`p1-ooo-official`（官方 filelist 切换）
+- **官方 `verilog/filelist.f` 已切换到 OoO 顶层**；官方
+  `make test MAX_CYCLES=50000000` → **19/19 PASS**；官方 filelist 的
+  W=2 smoke → **7/7 PASS**。
 
 ### W=1 记录（cycles）
 
@@ -67,8 +68,9 @@ exec <repo>/cpu2026-tools-x86_64.AppImage exec /bin/sh -c \
   RV32IM 黄金模型/`trace_diff`、接口复核、`p0-baseline` tag。
 - P1 后端：`prf.sv`、`cdb.sv`、`issue_queue.sv`、`lsu.sv`、`lsq.sv`、
   `backend_ooo.sv`、`stub_front_ooo.sv`，含 W=1/2 单测。
-- 集成：`verilog/student_top_ooo.sv`（模块名 `student_top`，test-only）、
-  `test/integration/filelist.f`。
+- 集成：`verilog/student_top_ooo.sv`（模块名 `student_top`，现为官方
+  顶层）、`verilog/filelist.f`（官方 OoO filelist）、
+  `test/integration/filelist.f`（历史 test-only filelist）。
 
 ## 集成期间定位并修复的问题
 
@@ -100,7 +102,7 @@ exec <repo>/cpu2026-tools-x86_64.AppImage exec /bin/sh -c \
 
 ## 后续
 
-1. 甲侧确认后，把官方 `verilog/filelist.f`/`student_top.sv` 切换到 OoO
-   版本；当前官方 filelist 仍是基线。
-2. `make perf` / `make synth` 记录真实 IPC/面积/频率；P1 尚未做性能门禁。
-3. P2：W=2 双发射后端、D-Cache、mem_subsystem 三方仲裁。
+1. 官方 filelist 已切换；下一步跑 `make perf` / `make synth`，记录真实
+   IPC/面积/频率（P1 尚未做性能门禁）。
+2. P2：W=2 双发射后端、D-Cache、mem_subsystem 三方仲裁。
+3. 保留基线 `core.sv`/`icache.sv`/`student_top.sv` 作为回滚点。
