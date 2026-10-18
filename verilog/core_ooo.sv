@@ -155,7 +155,6 @@ module core_ooo #(
     .dec_pred_taken    (dec_pred_taken),
     .dec_pred_target   (dec_pred_target),
     .rename_ready      (rename_ready),
-    .pc_out            (),
     .refill_valid      (refill_valid),
     .refill_addr       (refill_addr),
     .refill_resp_valid (refill_resp_valid),

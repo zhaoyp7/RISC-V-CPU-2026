@@ -80,6 +80,10 @@ module lsq #(
   logic [7:0]      n_alloc;
 
   integer i, lane;
+  integer i_commit, lane_commit;
+  integer i_free, lane_free;
+  integer i_squash, i_drain, i_query;
+  integer i_count, lane_count;
   logic [`CPU_LSQ_IDX_W-1:0] id;
 
   // ---- allocation ---------------------------------------------------------
@@ -91,30 +95,30 @@ module lsq #(
 
   always_comb begin
     free_by_commit = '0;
-    for (i = 0; i < D; i = i + 1) begin
+    for (i_commit = 0; i_commit < D; i_commit = i_commit + 1) begin
       commit_hit = 1'b0;
-      for (lane = 0; lane < W; lane = lane + 1) begin
-        if (commit_valid[lane] && commit_is_load[lane] &&
-            (commit_id[lane*LW +: LW] == i[LW-1:0]))
+      for (lane_commit = 0; lane_commit < W; lane_commit = lane_commit + 1) begin
+        if (commit_valid[lane_commit] && commit_is_load[lane_commit] &&
+            (commit_id[lane_commit*LW +: LW] == i_commit[LW-1:0]))
           commit_hit = 1'b1;
       end
-      free_by_commit[i] = commit_hit;
+      free_by_commit[i_commit] = commit_hit;
     end
   end
 
   always_comb begin
     free_mask = '0;
-    for (i = 0; i < D; i = i + 1)
-      free_mask[i] = !valid[i] || free_by_commit[i] ||
-                     (drain_done && drain_valid &&
-                      (drain_id == i[LW-1:0]));
+    for (i_free = 0; i_free < D; i_free = i_free + 1)
+      free_mask[i_free] = !valid[i_free] || free_by_commit[i_free] ||
+                          (drain_done && drain_valid &&
+                           (drain_id == i_free[LW-1:0]));
 
     alloc_ok = 1'b1;
     alloc_used = '0;
     id = '0;
-    for (lane = 0; lane < W; lane = lane + 1) begin
-      if (alloc_valid[lane]) begin
-        id = alloc_id[lane*LW +: LW];
+    for (lane_free = 0; lane_free < W; lane_free = lane_free + 1) begin
+      if (alloc_valid[lane_free]) begin
+        id = alloc_id[lane_free*LW +: LW];
         if (!free_mask[id] || alloc_used[id])
           alloc_ok = 1'b0;
         alloc_used[id] = 1'b1;
@@ -128,10 +132,10 @@ module lsq #(
 
   always_comb begin
     squash_mask = '0;
-    for (i = 0; i < D; i = i + 1) begin
-      if (valid[i] && !committed[i] && squash_valid &&
-          (seq[i*32 +: 32] > squash_seq))
-        squash_mask[i] = 1'b1;
+    for (i_squash = 0; i_squash < D; i_squash = i_squash + 1) begin
+      if (valid[i_squash] && !committed[i_squash] && squash_valid &&
+          (seq[i_squash*32 +: 32] > squash_seq))
+        squash_mask[i_squash] = 1'b1;
     end
   end
 
@@ -149,12 +153,12 @@ module lsq #(
     best_seq    = 32'hffff_ffff;
     best_id     = '0;
     found       = 1'b0;
-    for (i = 0; i < D; i = i + 1) begin
-      if (valid[i] && is_store[i] && committed[i]) begin
-        if (!found || (seq[i*32 +: 32] < best_seq)) begin
+    for (i_drain = 0; i_drain < D; i_drain = i_drain + 1) begin
+      if (valid[i_drain] && is_store[i_drain] && committed[i_drain]) begin
+        if (!found || (seq[i_drain*32 +: 32] < best_seq)) begin
           found       = 1'b1;
-          best_seq    = seq[i*32 +: 32];
-          best_id     = i[LW-1:0];
+          best_seq    = seq[i_drain*32 +: 32];
+          best_id     = i_drain[LW-1:0];
         end
       end
     end
@@ -173,14 +177,14 @@ module lsq #(
   always_comb begin
     query_blocked = 1'b0;
     load_seq = seq[query_id*32 +: 32];
-    if (query_valid) begin
-      for (i = 0; i < D; i = i + 1) begin
-        if (valid[i] && is_store[i] && (seq[i*32 +: 32] < load_seq)) begin
-          if (!addr_known[i])
-            query_blocked = 1'b1;
-          else if ((addr[i*32 +: 32] & ~32'h3) == (query_addr & ~32'h3))
-            query_blocked = 1'b1;
-        end
+    for (i_query = 0; i_query < D; i_query = i_query + 1) begin
+      if (query_valid && valid[i_query] && is_store[i_query] &&
+          (seq[i_query*32 +: 32] < load_seq)) begin
+        if (!addr_known[i_query])
+          query_blocked = 1'b1;
+        else if ((addr[i_query*32 +: 32] & ~32'h3) ==
+                 (query_addr & ~32'h3))
+          query_blocked = 1'b1;
       end
     end
   end
@@ -189,10 +193,10 @@ module lsq #(
   always_comb begin
     count = '0;
     n_alloc = '0;
-    for (i = 0; i < D; i = i + 1)
-      if (valid[i]) count = count + 1'b1;
-    for (lane = 0; lane < W; lane = lane + 1)
-      if (alloc_valid[lane]) n_alloc = n_alloc + 1'b1;
+    for (i_count = 0; i_count < D; i_count = i_count + 1)
+      if (valid[i_count]) count = count + 1'b1;
+    for (lane_count = 0; lane_count < W; lane_count = lane_count + 1)
+      if (alloc_valid[lane_count]) n_alloc = n_alloc + 1'b1;
   end
 
   // ---- sequential ---------------------------------------------------------
