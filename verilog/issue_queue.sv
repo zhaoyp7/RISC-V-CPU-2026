@@ -4,10 +4,10 @@
 // 结构：
 //   - W 路 dispatch 写入；D 项表项，按 age 选择最老的 ready uop；
 //   - 源操作数就绪位在 dispatch 同拍用本拍 CDB 做旁路比较（关键，避免漏唤醒）；
-//   - CDB 广播清 busy；squash 按 rob_idx 丢弃更年轻的表项；
+//   - CDB 广播清 busy；squash 按 dispatch seq 丢弃更年轻的表项；
 //   - 输出 IW 路发射（P1 用 IW=1；dispatch 宽度仍可以是 W=2）。
 //
-// 表项字段只保存发射所需信息：完整 dispatch uop、两个源 tag/ready、age、rob_idx。
+// 表项字段只保存发射所需信息：完整 dispatch uop、两个源 tag/ready、age。
 // 结果写回、PRF 读、执行单元由 backend_ooo 负责。
 // -----------------------------------------------------------------------------
 
@@ -21,6 +21,7 @@ module issue_queue #(
 
   // dispatch
   input  logic [W-1:0]                       in_valid,
+  input  logic [W-1:0]                       in_alloc_mask,
   input  logic [W*`CPU_DISPATCH_W-1:0]       in_uop,
   output logic                               in_ready,
 
@@ -28,13 +29,17 @@ module issue_queue #(
   input  logic [`CPU_CDB_NUM-1:0]            wake_valid,
   input  logic [`CPU_CDB_NUM*`CPU_PRF_IDX_W-1:0] wake_tag,
 
-  // squash
+  // dispatch sequence: lane i is seq_base + i
+  input  logic [31:0]                        seq_base,
+
+  // squash: keep seq == squash_seq, drop seq > squash_seq
   input  logic                               squash_valid,
-  input  logic [`CPU_ROB_TAG_W-1:0]          squash_rob_idx,
+  input  logic [31:0]                        squash_seq,
 
   // issue
   output logic [IW-1:0]                      out_valid,
   output logic [IW*`CPU_DISPATCH_W-1:0]      out_uop,
+  output logic [IW*32-1:0]                   out_seq,
   input  logic                               out_ready,
 
   // status
@@ -43,7 +48,6 @@ module issue_queue #(
 );
 
   localparam integer PW  = `CPU_PRF_IDX_W;
-  localparam integer RW  = `CPU_ROB_TAG_W;
   localparam integer DW  = `CPU_DISPATCH_W;
   localparam integer R   = `CPU_CDB_NUM;
 
@@ -53,8 +57,7 @@ module issue_queue #(
   logic [D*PW-1:0]    src2_tag;
   logic [D-1:0]       src1_ready;
   logic [D-1:0]       src2_ready;
-  logic [D*16-1:0]    seq;
-  logic [D*RW-1:0]    rob_idx;
+  logic [D*32-1:0]    seq;
 
 
   // ---- dispatch 字段解包 --------------------------------------------------
@@ -62,7 +65,6 @@ module issue_queue #(
   logic [PW-1:0]      in_src2_tag [0:W-1];
   logic               in_src1_rdy [0:W-1];
   logic               in_src2_rdy [0:W-1];
-  logic [RW-1:0]      in_rob      [0:W-1];
   integer             i, lane;
 
   always_comb begin
@@ -71,7 +73,6 @@ module issue_queue #(
       in_src2_tag[i] = in_uop[i*DW + `CPU_DISPATCH_SRC2_TAG_OFF +: PW];
       in_src1_rdy[i] = in_uop[i*DW + `CPU_DISPATCH_SRC1_READY_OFF];
       in_src2_rdy[i] = in_uop[i*DW + `CPU_DISPATCH_SRC2_READY_OFF];
-      in_rob[i]      = in_uop[i*DW + `CPU_DISPATCH_ROB_IDX_OFF +: RW];
     end
   end
 
@@ -80,24 +81,19 @@ module issue_queue #(
   logic [D-1:0] squash_mask;
   logic [7:0] n_squash;
   logic [7:0] free_after;
-  logic [RW-1:0] rob_diff;
 
   always_comb begin
     n_in = '0;
     for (i = 0; i < W; i = i + 1)
-      if (in_valid[i]) n_in = n_in + 1'b1;
+      if (in_alloc_mask[i]) n_in = n_in + 1'b1;
   end
 
   always_comb begin
     squash_mask = '0;
     n_squash = '0;
-    rob_diff = '0;
     for (i = 0; i < D; i = i + 1) begin
-      if (valid[i]) begin
-        rob_diff = (rob_idx[i*RW +: RW] - squash_rob_idx) & ((1 << RW) - 1);
-        if (squash_valid && (rob_diff != '0) && (rob_diff < (`CPU_ROB_DEPTH/2)))
-          squash_mask[i] = 1'b1;
-      end
+      if (valid[i] && squash_valid && (seq[i*32 +: 32] > squash_seq))
+        squash_mask[i] = 1'b1;
     end
     for (i = 0; i < D; i = i + 1)
       if (squash_mask[i]) n_squash = n_squash + 1'b1;
@@ -142,7 +138,7 @@ module issue_queue #(
   logic [D-1:0] chosen;
   logic [IW-1:0] sel_valid;
   logic [7:0]   sel_idx [0:IW-1];
-  logic [15:0]  best_seq;
+  logic [31:0]  best_seq;
   logic [7:0]   best_idx;
   logic         found;
 
@@ -155,13 +151,13 @@ module issue_queue #(
     for (lane = 0; lane < IW; lane = lane + 1) begin
       sel_valid[lane] = 1'b0;
       sel_idx[lane] = '0;
-      best_seq = 16'hffff;
+      best_seq = 32'hffff_ffff;
       best_idx = '0;
       found = 1'b0;
       for (i = 0; i < D; i = i + 1) begin
-        if (cand[i] && !chosen[i] && (!found || (seq[i*16 +: 16] < best_seq))) begin
+        if (cand[i] && !chosen[i] && (!found || (seq[i*32 +: 32] < best_seq))) begin
           found = 1'b1;
-          best_seq = seq[i*16 +: 16];
+          best_seq = seq[i*32 +: 32];
           best_idx = i[7:0];
         end
       end
@@ -176,9 +172,12 @@ module issue_queue #(
   always_comb begin
     out_valid = sel_valid;
     out_uop = '0;
+    out_seq = '0;
     for (lane = 0; lane < IW; lane = lane + 1) begin
-      if (sel_valid[lane])
+      if (sel_valid[lane]) begin
         out_uop[lane*DW +: DW] = uop[sel_idx[lane]*DW +: DW];
+        out_seq[lane*32 +: 32] = seq[sel_idx[lane]*32 +: 32];
+      end
     end
   end
 
@@ -194,14 +193,12 @@ module issue_queue #(
   endfunction
 
   // ---- 时序 ----------------------------------------------------------------
-  logic [15:0] seq_counter;
 
   always_ff @(posedge clk) begin
     if (reset) begin
       valid      <= '0;
       src1_ready <= '0;
       src2_ready <= '0;
-      seq_counter <= '0;
     end else begin
       // 1) squash：清更年轻的表项
       for (i = 0; i < D; i = i + 1) begin
@@ -239,14 +236,39 @@ module issue_queue #(
                                           tag_hit(in_src1_tag[lane]);
           src2_ready[alloc_slot[lane]] <= in_src2_rdy[lane] |
                                           tag_hit(in_src2_tag[lane]);
-          rob_idx[alloc_slot[lane]*RW +: RW] <= in_rob[lane];
-          seq[alloc_slot[lane]*16 +: 16] <= seq_counter + lane;
+          seq[alloc_slot[lane]*32 +: 32] <= seq_base + lane;
           valid[alloc_slot[lane]] <= 1'b1;
         end
       end
-      if (in_ready)
-        seq_counter <= seq_counter + {8'b0, n_in};
     end
   end
+
+`ifdef LOCAL_TRACE
+  always_ff @(posedge clk) begin
+    if (!reset) begin
+      if (in_valid[0] && in_ready)
+        $display("[IQ_PUSH] t=%0t pc=%08x inst=%08x rob=%0d dest=%0d s1=%0d/%0b s2=%0d/%0b",
+                 $time,
+                 in_uop[`CPU_DISPATCH_PC_OFF +: 32],
+                 in_uop[`CPU_DISPATCH_INST_OFF +: 32],
+                 in_uop[`CPU_DISPATCH_ROB_IDX_OFF +: `CPU_ROB_TAG_W],
+                 in_uop[`CPU_DISPATCH_DEST_TAG_OFF +: PW],
+                 in_uop[`CPU_DISPATCH_SRC1_TAG_OFF +: PW],
+                 in_uop[`CPU_DISPATCH_SRC1_READY_OFF],
+                 in_uop[`CPU_DISPATCH_SRC2_TAG_OFF +: PW],
+                 in_uop[`CPU_DISPATCH_SRC2_READY_OFF]);
+      if (out_valid[0] && out_ready)
+        $display("[IQ_POP] t=%0t pc=%08x inst=%08x rob=%0d dest=%0d",
+                 $time,
+                 out_uop[`CPU_DISPATCH_PC_OFF +: 32],
+                 out_uop[`CPU_DISPATCH_INST_OFF +: 32],
+                 out_uop[`CPU_DISPATCH_ROB_IDX_OFF +: `CPU_ROB_TAG_W],
+                 out_uop[`CPU_DISPATCH_DEST_TAG_OFF +: PW]);
+      if (squash_valid)
+        $display("[IQ_SQUASH] t=%0t seq=%0d mask=%08b", $time,
+                 squash_seq, squash_mask);
+    end
+  end
+`endif
 
 endmodule

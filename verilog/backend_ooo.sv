@@ -47,19 +47,87 @@ module backend_ooo #(
   // dispatch / commit / squash 解包
   // ---------------------------------------------------------------------------
   logic [W-1:0]        disp_valid;
-  logic [W-1:0]        disp_is_load, disp_is_store;
-  logic [W*LW-1:0]     disp_lsq;
-  logic [W*RW-1:0]     disp_rob;
-
   integer i;
   always_comb begin
+    for (i = 0; i < W; i = i + 1)
+      disp_valid[i] = dispatch[i*DW + `CPU_DISPATCH_VALID_OFF];
+  end
+
+  // dispatch skid buffer: breaks the combinational loop
+  // backend_ready -> ren_ready -> dispatch.valid -> iq/lsq ready -> backend_ready.
+  logic                 skid_valid;
+  logic [W-1:0]         skid_vmask;
+  logic [W*DW-1:0]      skid_uop;
+  logic [W-1:0]         skid_is_load, skid_is_store;
+  logic [W*LW-1:0]      skid_lsq;
+  logic [W*RW-1:0]      skid_rob;
+  logic                 skid_drain;
+
+  // unified dispatch sequence for IQ/LSQ squash
+  logic [31:0]          disp_seq;
+  logic [31:0]          rob_seq [0:`CPU_ROB_DEPTH-1];
+  logic [31:0]          squash_seq;
+  logic [3:0]           n_disp;
+
+  assign squash_seq = rob_seq[sq_rob];
+
+  always_comb begin
+    n_disp = '0;
+    for (i = 0; i < W; i = i + 1)
+      if (skid_vmask[i]) n_disp = n_disp + 1'b1;
+  end
+
+  always_comb begin
     for (i = 0; i < W; i = i + 1) begin
-      disp_valid[i]    = dispatch[i*DW + `CPU_DISPATCH_VALID_OFF];
-      disp_is_load[i]  = dispatch[i*DW + `CPU_DISPATCH_IS_LOAD_OFF];
-      disp_is_store[i] = dispatch[i*DW + `CPU_DISPATCH_IS_STORE_OFF];
-      disp_lsq[i*LW +: LW] = dispatch[i*DW + `CPU_DISPATCH_LSQ_ID_OFF +: LW];
-      disp_rob[i*RW +: RW] = dispatch[i*DW + `CPU_DISPATCH_ROB_IDX_OFF +: RW];
+      skid_is_load[i]  = skid_uop[i*DW + `CPU_DISPATCH_IS_LOAD_OFF];
+      skid_is_store[i] = skid_uop[i*DW + `CPU_DISPATCH_IS_STORE_OFF];
+      skid_lsq[i*LW +: LW] = skid_uop[i*DW + `CPU_DISPATCH_LSQ_ID_OFF +: LW];
+      skid_rob[i*RW +: RW] = skid_uop[i*DW + `CPU_DISPATCH_ROB_IDX_OFF +: RW];
     end
+  end
+
+  // skid 持有期间 producer 可能已经通过 CDB 完成；必须更新保存的 ready 位，
+  // 否则 IQ 会等待一个已经过去的广播。
+  logic [W*DW-1:0] skid_uop_next;
+  logic [W*DW-1:0] disp_uop_woken;
+
+  function automatic logic wake_hit(input logic [PW-1:0] tag);
+    integer w;
+    begin
+      wake_hit = 1'b0;
+      for (w = 0; w < R; w = w + 1)
+        if (cdb_wake_valid[w] && (cdb_wake_tag[w*PW +: PW] == tag))
+          wake_hit = 1'b1;
+    end
+  endfunction
+
+  always_comb begin
+    skid_uop_next  = skid_uop;
+    disp_uop_woken = dispatch;
+    for (i = 0; i < W; i = i + 1) begin
+      if (!skid_uop_next[i*DW + `CPU_DISPATCH_SRC1_READY_OFF] &&
+          wake_hit(skid_uop_next[i*DW + `CPU_DISPATCH_SRC1_TAG_OFF +: PW]))
+        skid_uop_next[i*DW + `CPU_DISPATCH_SRC1_READY_OFF] = 1'b1;
+      if (!skid_uop_next[i*DW + `CPU_DISPATCH_SRC2_READY_OFF] &&
+          wake_hit(skid_uop_next[i*DW + `CPU_DISPATCH_SRC2_TAG_OFF +: PW]))
+        skid_uop_next[i*DW + `CPU_DISPATCH_SRC2_READY_OFF] = 1'b1;
+
+      if (!disp_uop_woken[i*DW + `CPU_DISPATCH_SRC1_READY_OFF] &&
+          wake_hit(disp_uop_woken[i*DW + `CPU_DISPATCH_SRC1_TAG_OFF +: PW]))
+        disp_uop_woken[i*DW + `CPU_DISPATCH_SRC1_READY_OFF] = 1'b1;
+      if (!disp_uop_woken[i*DW + `CPU_DISPATCH_SRC2_READY_OFF] &&
+          wake_hit(disp_uop_woken[i*DW + `CPU_DISPATCH_SRC2_TAG_OFF +: PW]))
+        disp_uop_woken[i*DW + `CPU_DISPATCH_SRC2_READY_OFF] = 1'b1;
+    end
+  end
+
+  // squash 也要清 skid：被解析的 branch 已经离开 skid，skid 里的内容必然
+  // 比它年轻，属于错误路径。整组丢弃，避免 seq 映射边界问题。
+  logic [W-1:0] skid_vmask_next;
+  always_comb begin
+    skid_vmask_next = skid_vmask;
+    if (sq_valid)
+      skid_vmask_next = '0;
   end
 
   logic [W-1:0]    cm_valid, cm_is_store, cm_is_load;
@@ -89,21 +157,25 @@ module backend_ooo #(
   logic        iq_in_ready;
   logic        iq_out_valid;
   logic [DW-1:0] issue_uop;
+  logic [31:0]   issue_seq;
   logic        issue_ready;
   logic [7:0]  iq_count, iq_free;
 
   issue_queue #(.W(W), .IW(1)) u_iq (
     .clk            (clk),
     .reset          (reset),
-    .in_valid       (disp_valid),
-    .in_uop         (dispatch),
+    .in_valid       (skid_drain ? skid_vmask : '0),
+    .in_alloc_mask  (skid_valid ? skid_vmask : '0),
+    .in_uop         (skid_uop),
     .in_ready       (iq_in_ready),
     .wake_valid     (cdb_wake_valid),
     .wake_tag       (cdb_wake_tag),
+    .seq_base       (disp_seq),
     .squash_valid   (sq_valid),
-    .squash_rob_idx (sq_rob),
+    .squash_seq     (squash_seq),
     .out_valid      (iq_out_valid),
     .out_uop        (issue_uop),
+    .out_seq        (issue_seq),
     .out_ready      (issue_ready),
     .count          (iq_count),
     .free_count     (iq_free)
@@ -240,37 +312,28 @@ module backend_ooo #(
   // ---------------------------------------------------------------------------
   logic        alu_valid_q;
   logic [PW-1:0] alu_tag_q;
-  logic [RW-1:0] alu_rob_q;
+  logic [31:0]  alu_seq_q;
   logic [31:0] alu_value_q;
   logic        alu_exc_q;
 
   logic        div_valid_q;
   logic [PW-1:0] div_tag_q;
-  logic [RW-1:0] div_rob_q;
+  logic [31:0]  div_seq_q;
   logic [31:0] div_value_q;
   logic        div_exc_q;
-  logic [RW-1:0] div_pending_rob;
+  logic [31:0]  div_pending_seq;
   logic        div_discard;
 
   logic        br_valid_q;
   logic [31:0] br_pc_q, br_target_q;
   logic        br_taken_q, br_jalr_q;
   logic [PW-1:0] br_tag_q;
-  logic [RW-1:0] br_rob_q;
+  logic [31:0]  br_seq_q;
 
   logic        be_complete_valid_q;
   logic [PW-1:0] be_complete_tag_q;
   logic        be_complete_exc_q;
-  logic [RW-1:0] be_complete_rob_q;
-
-  function automatic logic is_younger(input logic [RW-1:0] entry_rob,
-                                      input logic [RW-1:0] squash_rob);
-    logic [RW-1:0] diff;
-    begin
-      diff = (entry_rob - squash_rob) & ((1 << RW) - 1);
-      is_younger = (diff != '0) && (diff < (`CPU_ROB_DEPTH/2));
-    end
-  endfunction
+  logic [31:0]  be_complete_seq_q;
 
   // 需要 ALU 产生 CDB 值的 uop
   logic needs_alu_result;
@@ -321,13 +384,18 @@ module backend_ooo #(
   lsu #(.W(W)) u_lsu (
     .clk                  (clk),
     .reset                (reset),
-    .alloc_valid          (disp_valid & (disp_is_load | disp_is_store)),
-    .alloc_id             (disp_lsq),
-    .alloc_rob            (disp_rob),
-    .alloc_is_store       (disp_is_store),
+    .alloc_valid          (skid_valid ?
+                           (skid_vmask & (skid_is_load | skid_is_store)) : '0),
+    .alloc_id             (skid_lsq),
+    .alloc_rob            (skid_rob),
+    .alloc_is_store       (skid_is_store),
     .alloc_ready          (lsu_alloc_ready),
+    .alloc_fire           (skid_drain),
+    .seq_base             (disp_seq),
+    .squash_seq           (squash_seq),
     .issue_valid          (iq_out_valid && issue_ready && i_is_mem),
     .issue_uop            (issue_uop),
+    .issue_seq            (issue_seq),
     .issue_src1           (issue_src1),
     .issue_src2           (issue_src2),
     .issue_ready          (lsu_issue_ready),
@@ -427,6 +495,40 @@ module backend_ooo #(
   // ---------------------------------------------------------------------------
   always_ff @(posedge clk) begin
     if (reset) begin
+      skid_valid <= 1'b0;
+      skid_vmask <= '0;
+      skid_uop   <= '0;
+      disp_seq   <= '0;
+      for (i = 0; i < `CPU_ROB_DEPTH; i = i + 1)
+        rob_seq[i] <= '0;
+    end else begin
+      if (skid_drain) begin
+        skid_valid <= 1'b0;
+        for (i = 0; i < W; i = i + 1)
+          if (skid_vmask[i])
+            rob_seq[skid_rob[i*RW +: RW]] <= disp_seq + i;
+        disp_seq <= disp_seq + n_disp;
+`ifdef LOCAL_TRACE
+        $display("[SKID_DRAIN] t=%0t seq=%0d rob=%0d mask=%b",
+                 $time, disp_seq, skid_rob[0 +: RW], skid_vmask);
+`endif
+      end
+      if (skid_valid && !skid_drain) begin
+        skid_uop   <= skid_uop_next;
+        skid_vmask <= skid_vmask_next;
+        if (skid_vmask_next == '0)
+          skid_valid <= 1'b0;
+      end
+      if ((|disp_valid) && backend_ready) begin
+        skid_valid <= 1'b1;
+        skid_vmask <= disp_valid;
+        skid_uop   <= disp_uop_woken;
+      end
+    end
+  end
+
+  always_ff @(posedge clk) begin
+    if (reset) begin
       alu_valid_q  <= 1'b0;
       div_valid_q  <= 1'b0;
       br_valid_q   <= 1'b0;
@@ -434,21 +536,21 @@ module backend_ooo #(
       div_tag_pending <= '0;
       div_op_q <= '0;
       div_exc_pending <= 1'b0;
-      div_pending_rob <= '0;
+      div_pending_seq <= '0;
       div_discard <= 1'b0;
     end else begin
       // squash 丢弃已发射的年轻结果，防止污染重新分配的 tag
-      if (sq_valid && alu_valid_q && is_younger(alu_rob_q, sq_rob))
+      if (sq_valid && alu_valid_q && (alu_seq_q > squash_seq))
         alu_valid_q <= 1'b0;
-      if (sq_valid && div_valid_q && is_younger(div_rob_q, sq_rob))
+      if (sq_valid && div_valid_q && (div_seq_q > squash_seq))
         div_valid_q <= 1'b0;
-      if (sq_valid && br_valid_q && is_younger(br_rob_q, sq_rob))
+      if (sq_valid && br_valid_q && (br_seq_q > squash_seq))
         br_valid_q <= 1'b0;
       if (sq_valid && be_complete_valid_q &&
-          is_younger(be_complete_rob_q, sq_rob))
+          (be_complete_seq_q > squash_seq))
         be_complete_valid_q <= 1'b0;
       if (sq_valid && div_busy &&
-          is_younger(div_pending_rob, sq_rob))
+          (div_pending_seq > squash_seq))
         div_discard <= 1'b1;
 
       // ALU 结果
@@ -457,7 +559,7 @@ module backend_ooo #(
       if (alu_issue && needs_alu_result) begin
         alu_valid_q  <= 1'b1;
         alu_tag_q    <= i_dest;
-        alu_rob_q    <= i_rob;
+        alu_seq_q    <= issue_seq;
         alu_value_q  <= wb_value;
         alu_exc_q    <= 1'b0;
       end
@@ -469,14 +571,14 @@ module backend_ooo #(
         div_tag_pending <= i_dest;
         div_op_q        <= i_alu_op;
         div_exc_pending <= i_illegal;
-        div_pending_rob <= i_rob;
+        div_pending_seq <= issue_seq;
         div_discard     <= 1'b0;
       end
       if (div_done) begin
         if (!div_discard) begin
           div_valid_q <= 1'b1;
           div_tag_q   <= div_tag_pending;
-          div_rob_q   <= div_pending_rob;
+          div_seq_q   <= div_pending_seq;
           div_value_q <= ((div_op_q == `ALU_DIV) || (div_op_q == `ALU_DIVU))
                          ? div_quot : div_rem;
           div_exc_q   <= div_exc_pending;
@@ -494,13 +596,13 @@ module backend_ooo #(
         br_target_q <= br_target;
         br_jalr_q   <= i_is_jalr;
         br_tag_q    <= i_dest;
-        br_rob_q    <= i_rob;
+        br_seq_q    <= issue_seq;
       end
       if (alu_issue && (i_illegal || (!i_reg_we && !i_is_mem))) begin
         be_complete_valid_q <= 1'b1;
         be_complete_tag_q   <= i_dest;
         be_complete_exc_q   <= i_illegal;
-        be_complete_rob_q   <= i_rob;
+        be_complete_seq_q   <= issue_seq;
       end
     end
   end
@@ -536,6 +638,44 @@ module backend_ooo #(
   // ---------------------------------------------------------------------------
   // backend_ready
   // ---------------------------------------------------------------------------
-  assign backend_ready = iq_in_ready && lsu_alloc_ready;
+  assign skid_drain    = skid_valid && iq_in_ready && lsu_alloc_ready &&
+                         !sq_valid;
+  assign backend_ready = !skid_valid || skid_drain;
+
+`ifdef LOCAL_TRACE
+  integer stall_dbg = 0;
+  always_ff @(posedge clk) begin
+    if (!reset) begin
+      if (iq_out_valid && !issue_ready && stall_dbg < 12) begin
+        $display("[STALL] t=%0t pc=%08x inst=%08x dest=%0d rob=%0d mem=%0b div=%0b alu_rdy=%0b div_rdy=%0b lsu_rdy=%0b alu_buf=%0b cdb_rdy0=%0b",
+                 $time, i_pc, i_inst, i_dest, i_rob, i_is_mem, i_is_div,
+                 alu_issue_ready, div_issue_ready, lsu_issue_ready,
+                 alu_valid_q, cdb_src_ready[0]);
+        stall_dbg <= stall_dbg + 1;
+      end
+      if (iq_out_valid && issue_ready)
+        $display("[ISSUE] t=%0t pc=%08x inst=%08x dest=%0d rob=%0d mem=%0b div=%0b we=%0b br=%0b",
+                 $time, i_pc, i_inst, i_dest, i_rob, i_is_mem, i_is_div,
+                 i_reg_we, i_is_branch_any);
+      if (cdb_out[`CPU_CDB_VALID_OFF])
+        $display("[CDB] t=%0t tag=%0d val=%08x exc=%0b",
+                 $time, cdb_out[`CPU_CDB_TAG_OFF +: PW],
+                 cdb_out[`CPU_CDB_VALUE_OFF +: 32],
+                 cdb_out[`CPU_CDB_EXCEPTION_OFF]);
+      if (complete[`CPU_COMPLETE_VALID_OFF])
+        $display("[COMPLETE] t=%0t tag=%0d exc=%0b",
+                 $time, complete[`CPU_COMPLETE_TAG_OFF +: PW],
+                 complete[`CPU_COMPLETE_EXCEPTION_OFF]);
+      if (sq_valid)
+        $display("[SQUASH] t=%0t rob=%0d", $time, sq_rob);
+      if (alu_issue && needs_alu_result)
+        $display("[ALU_SET] t=%0t tag=%0d rob=%0d val=%08x",
+                 $time, i_dest, i_rob, wb_value);
+      if (div_done)
+        $display("[DIV_DONE] t=%0t discard=%0b tag=%0d rob=%0d",
+                 $time, div_discard, div_tag_pending, div_pending_rob);
+    end
+  end
+`endif
 
 endmodule

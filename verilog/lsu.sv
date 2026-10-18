@@ -24,10 +24,14 @@ module lsu #(
   input  logic [W*`CPU_ROB_TAG_W-1:0]  alloc_rob,
   input  logic [W-1:0]                 alloc_is_store,
   output logic                         alloc_ready,
+  input  logic                         alloc_fire,
+  input  logic [31:0]                  seq_base,
+  input  logic [31:0]                  squash_seq,
 
   // issue from IQ (single lane)
   input  logic                         issue_valid,
   input  logic [`CPU_DISPATCH_W-1:0]   issue_uop,
+  input  logic [31:0]                  issue_seq,
   input  logic [31:0]                  issue_src1,
   input  logic [31:0]                  issue_src2,
   output logic                         issue_ready,
@@ -136,6 +140,7 @@ module lsu #(
   logic        load_waiting;
   logic        load_inflight;
   logic        load_squashed;
+  logic [31:0] load_seq;
   logic        load_illegal;
   logic [LW-1:0] load_id;
   logic [RW-1:0] load_rob;
@@ -149,19 +154,9 @@ module lsu #(
 
   assign query_valid = load_active && load_waiting;
 
-  // 年轻判定：与 ROB/issue_queue 相同的模 ROB_DEPTH 距离约定。
-  function automatic logic is_younger(input logic [RW-1:0] entry_rob,
-                                      input logic [RW-1:0] squash_rob);
-    logic [RW-1:0] diff;
-    begin
-      diff = (entry_rob - squash_rob) & ((1 << RW) - 1);
-      is_younger = (diff != '0) && (diff < (`CPU_ROB_DEPTH/2));
-    end
-  endfunction
-
   logic load_squash_now;
   assign load_squash_now = squash_valid && load_active &&
-                           is_younger(load_rob, squash_rob_idx);
+                           (load_seq > squash_seq);
 
   // ---- data_mem 状态 ------------------------------------------------------
   logic        mem_busy;
@@ -215,6 +210,9 @@ module lsu #(
     .alloc_rob       (alloc_rob),
     .alloc_is_store  (alloc_is_store),
     .alloc_ready     (alloc_ready),
+    .alloc_fire      (alloc_fire),
+    .seq_base        (seq_base),
+    .squash_seq      (squash_seq),
     .fill_valid      (fill_valid),
     .fill_id         (fill_id),
     .fill_addr       (fill_addr),
@@ -226,7 +224,6 @@ module lsu #(
     .commit_is_load  (commit_is_load),
     .commit_id       (commit_id),
     .squash_valid    (squash_valid),
-    .squash_rob_idx  (squash_rob_idx),
     .drain_valid     (store_drain_valid),
     .drain_id        (store_drain_id),
     .drain_addr      (store_drain_addr),
@@ -254,7 +251,7 @@ module lsu #(
   logic                         load_result_exception_q;
   logic                         store_complete_valid_q;
   logic [PW-1:0]                store_complete_tag_q;
-  logic [RW-1:0]                store_complete_rob_q;
+  logic [31:0]                  store_complete_seq_q;
   logic                         store_complete_exception_q;
 
   assign load_result_valid     = load_result_valid_q;
@@ -286,15 +283,25 @@ module lsu #(
       // squash：等待中的 load 直接取消；已在内存管线中的等响应后丢弃。
       // store 的 complete 脉冲若属于年轻路径也必须撤销。
       if (squash_valid && store_complete_valid_q &&
-          is_younger(store_complete_rob_q, squash_rob_idx))
+          (store_complete_seq_q > squash_seq))
         store_complete_valid_q <= 1'b0;
       if (load_squash_now) begin
-        if (load_waiting && !load_inflight) begin
+        if (!load_inflight || !mem_busy || mem_owner_store) begin
+          // 请求尚未真正发出（或当前 mem 事务属于 store）：直接取消。
           load_active   <= 1'b0;
           load_waiting  <= 1'b0;
-        end else if (load_inflight) begin
+          load_inflight <= 1'b0;
+          load_squashed <= 1'b0;
+        end else begin
+          // 读请求已在途：等响应返回后丢弃。
           load_squashed <= 1'b1;
         end
+      end else if (load_squashed && !mem_busy) begin
+        // squash 时恰好还未启动请求：清理，避免永久占住 LSU。
+        load_active   <= 1'b0;
+        load_waiting  <= 1'b0;
+        load_inflight <= 1'b0;
+        load_squashed <= 1'b0;
       end else if (load_active && load_waiting && !query_blocked) begin
         // 更老 store 约束满足，下一拍发起读请求。
         load_waiting  <= 1'b0;
@@ -318,6 +325,7 @@ module lsu #(
           load_illegal  <= 1'b0;
           load_id       <= issue_lsq;
           load_rob      <= issue_rob;
+          load_seq      <= issue_seq;
           load_tag      <= issue_dest;
           load_addr     <= issue_addr;
           load_size     <= issue_mem_size;
@@ -328,7 +336,7 @@ module lsu #(
       if (store_issue) begin
         store_complete_valid_q     <= 1'b1;
         store_complete_tag_q       <= issue_dest;
-        store_complete_rob_q       <= issue_rob;
+        store_complete_seq_q       <= issue_seq;
         store_complete_exception_q <= issue_illegal;
       end
 
@@ -369,5 +377,25 @@ module lsu #(
       end
     end
   end
+
+`ifdef LOCAL_TRACE
+  always_ff @(posedge clk) begin
+    if (!reset) begin
+      if (issue_valid && issue_ready)
+        $display("[LSU_ISSUE] t=%0t pc=%08x ld=%0b st=%0b lsq=%0d rob=%0d addr=%08x",
+                 $time, issue_pc, issue_is_load, issue_is_store, issue_lsq,
+                 issue_rob, issue_addr);
+      if (load_result_valid)
+        $display("[LOAD_RES] t=%0t tag=%0d val=%08x exc=%0b",
+                 $time, load_result_tag, load_result_value,
+                 load_result_exception);
+      if (store_complete_valid)
+        $display("[ST_COMPLETE] t=%0t tag=%0d exc=%0b",
+                 $time, store_complete_tag, store_complete_exception);
+      if (squash_valid)
+        $display("[LSU_SQUASH] t=%0t rob=%0d", $time, squash_rob_idx);
+    end
+  end
+`endif
 
 endmodule

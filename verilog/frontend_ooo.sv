@@ -54,16 +54,17 @@ module frontend_ooo #(
   logic [31:0] pc;
   logic        pc_advance;
   logic        fetch_ready;
-  logic        bpu_redirect;
-  logic [31:0] bpu_redirect_pc;
+  logic        bpu_redirect_comb;
+  logic        bpu_redirect_q;
+  logic [31:0] bpu_redirect_pc_q;
 
   pc_unit u_pc (
     .clk            (clk),
     .reset          (reset),
     .advance        (pc_advance),
     .stall          (1'b0),
-    .redirect_valid (redirect_valid || bpu_redirect),
-    .redirect_pc    (redirect_valid ? redirect_pc : bpu_redirect_pc),
+    .redirect_valid (redirect_valid || bpu_redirect_q),
+    .redirect_pc    (redirect_valid ? redirect_pc : bpu_redirect_pc_q),
     .pc             (pc)
   );
 
@@ -85,22 +86,37 @@ module frontend_ooo #(
 
   assign all_full = (fill_ptr == W);
   // BPU 预测 taken 时，本条分支指令已经在本拍被接收进 slot；下一拍 PC
-  // 必须切到预测目标，而不是继续顺序取 fall-through。
-  assign bpu_redirect = resp_valid && resp_ready && !redirect_valid &&
-                        (dec_is_branch || dec_is_jal || dec_is_jalr) &&
-                        bpu_taken;
-  assign bpu_redirect_pc = bpu_target;
-  assign fetch_valid = backend_ready && !redirect_valid && !bpu_redirect &&
+  // 必须切到预测目标。重定向寄存一拍，避免
+  // bpu_redirect -> icache.flush -> fetch_resp_valid -> bpu_redirect 组合环。
+  assign bpu_redirect_comb = resp_valid && resp_ready && !redirect_valid &&
+                             !bpu_redirect_q &&
+                             (dec_is_branch || dec_is_jal || dec_is_jalr) &&
+                             bpu_taken;
+  assign fetch_valid = backend_ready && !redirect_valid &&
+                       !bpu_redirect_comb && !bpu_redirect_q &&
                        (fill_ptr < W) && !reset;
   assign pc_advance  = fetch_valid && fetch_ready;
-  assign resp_ready  = backend_ready && !redirect_valid && (fill_ptr < W);
+  assign resp_ready  = backend_ready && !redirect_valid &&
+                       !bpu_redirect_q && (fill_ptr < W);
+
+  always_ff @(posedge clk) begin
+    if (reset || redirect_valid) begin
+      bpu_redirect_q    <= 1'b0;
+      bpu_redirect_pc_q <= 32'b0;
+    end else if (bpu_redirect_comb) begin
+      bpu_redirect_q    <= 1'b1;
+      bpu_redirect_pc_q <= bpu_target;
+    end else begin
+      bpu_redirect_q    <= 1'b0;
+    end
+  end
 
   icache_pipe #(
     .INDEX_BITS (`CPU_ICACHE_INDEX_BITS)
   ) u_icache (
     .clk               (clk),
     .reset             (reset),
-    .flush             (redirect_valid || bpu_redirect),
+    .flush             (redirect_valid || bpu_redirect_q),
     .fetch_valid       (fetch_valid),
     .fetch_pc          (pc),
     .fetch_ready       (fetch_ready),

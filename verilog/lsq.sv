@@ -25,6 +25,7 @@ module lsq #(
   input  logic [W*`CPU_ROB_TAG_W-1:0]  alloc_rob,
   input  logic [W-1:0]                 alloc_is_store,
   output logic                         alloc_ready,
+  input  logic                         alloc_fire,
 
   // issue fill
   input  logic                         fill_valid,
@@ -40,9 +41,12 @@ module lsq #(
   input  logic [W-1:0]                 commit_is_load,
   input  logic [W*`CPU_LSQ_IDX_W-1:0]  commit_id,
 
-  // squash
+  // dispatch sequence: lane i is seq_base + i
+  input  logic [31:0]                  seq_base,
+
+  // squash: keep seq == squash_seq, drop seq > squash_seq
   input  logic                         squash_valid,
-  input  logic [`CPU_ROB_TAG_W-1:0]    squash_rob_idx,
+  input  logic [31:0]                  squash_seq,
 
   // store drain
   output logic                         drain_valid,
@@ -67,13 +71,12 @@ module lsq #(
   logic [D-1:0]    valid;
   logic [D-1:0]    is_store;
   logic [D*RW-1:0] rob;
-  logic [D*16-1:0] seq;
+  logic [D*32-1:0] seq;
   logic [D-1:0]    addr_known;
   logic [D*32-1:0] addr;
   logic [D*32-1:0] wdata;
   logic [D*4-1:0]  wstrb;
   logic [D-1:0]    committed;
-  logic [15:0]     seq_counter;
   logic [7:0]      n_alloc;
 
   integer i, lane;
@@ -122,23 +125,18 @@ module lsq #(
 
   // ---- squash -------------------------------------------------------------
   logic [D-1:0] squash_mask;
-  logic [RW-1:0] rob_diff;
 
   always_comb begin
     squash_mask = '0;
-    rob_diff = '0;
     for (i = 0; i < D; i = i + 1) begin
-      if (valid[i] && !committed[i]) begin
-        rob_diff = (rob[i*RW +: RW] - squash_rob_idx) & ((1 << RW) - 1);
-        if (squash_valid && (rob_diff != '0) &&
-            (rob_diff < (`CPU_ROB_DEPTH/2)))
-          squash_mask[i] = 1'b1;
-      end
+      if (valid[i] && !committed[i] && squash_valid &&
+          (seq[i*32 +: 32] > squash_seq))
+        squash_mask[i] = 1'b1;
     end
   end
 
   // ---- store drain selection ---------------------------------------------
-  logic [15:0] best_seq;
+  logic [31:0] best_seq;
   logic [`CPU_LSQ_IDX_W-1:0] best_id;
   logic        found;
 
@@ -148,14 +146,14 @@ module lsq #(
     drain_addr  = 32'b0;
     drain_wdata = 32'b0;
     drain_wstrb = 4'b0;
-    best_seq    = 16'hffff;
+    best_seq    = 32'hffff_ffff;
     best_id     = '0;
     found       = 1'b0;
     for (i = 0; i < D; i = i + 1) begin
       if (valid[i] && is_store[i] && committed[i]) begin
-        if (!found || (seq[i*16 +: 16] < best_seq)) begin
+        if (!found || (seq[i*32 +: 32] < best_seq)) begin
           found       = 1'b1;
-          best_seq    = seq[i*16 +: 16];
+          best_seq    = seq[i*32 +: 32];
           best_id     = i[LW-1:0];
         end
       end
@@ -170,14 +168,14 @@ module lsq #(
   end
 
   // ---- load ordering query ------------------------------------------------
-  logic [15:0] load_seq;
+  logic [31:0] load_seq;
 
   always_comb begin
     query_blocked = 1'b0;
-    load_seq = seq[query_id*16 +: 16];
+    load_seq = seq[query_id*32 +: 32];
     if (query_valid) begin
       for (i = 0; i < D; i = i + 1) begin
-        if (valid[i] && is_store[i] && (seq[i*16 +: 16] < load_seq)) begin
+        if (valid[i] && is_store[i] && (seq[i*32 +: 32] < load_seq)) begin
           if (!addr_known[i])
             query_blocked = 1'b1;
           else if ((addr[i*32 +: 32] & ~32'h3) == (query_addr & ~32'h3))
@@ -203,7 +201,6 @@ module lsq #(
       valid       <= '0;
       addr_known  <= '0;
       committed   <= '0;
-      seq_counter <= '0;
     end else begin
       // squash
       for (i = 0; i < D; i = i + 1) begin
@@ -244,20 +241,49 @@ module lsq #(
       end
 
       // allocation (last, so a freed id can be reused immediately)
-      if (alloc_ready) begin
+      if (alloc_ready && alloc_fire) begin
         for (lane = 0; lane < W; lane = lane + 1) begin
           if (alloc_valid[lane]) begin
             valid[alloc_id[lane*LW +: LW]]      <= 1'b1;
             is_store[alloc_id[lane*LW +: LW]]   <= alloc_is_store[lane];
             rob[alloc_id[lane*LW +: LW]*RW +: RW] <= alloc_rob[lane*RW +: RW];
-            seq[alloc_id[lane*LW +: LW]*16 +: 16] <= seq_counter + lane;
+            seq[alloc_id[lane*LW +: LW]*32 +: 32] <= seq_base + lane;
             addr_known[alloc_id[lane*LW +: LW]] <= 1'b0;
             committed[alloc_id[lane*LW +: LW]]  <= 1'b0;
           end
         end
-        seq_counter <= seq_counter + n_alloc;
       end
     end
   end
+
+`ifdef LOCAL_TRACE
+  always_ff @(posedge clk) begin
+    if (!reset) begin
+      if (alloc_ready && alloc_fire) begin
+        for (lane = 0; lane < W; lane = lane + 1)
+          if (alloc_valid[lane])
+            $display("[LSQ_ALLOC] t=%0t id=%0d rob=%0d seq=%0d store=%0b",
+                     $time, alloc_id[lane*LW +: LW],
+                     alloc_rob[lane*RW +: RW], seq_base + lane,
+                     alloc_is_store[lane]);
+      end
+      if (squash_valid)
+        $display("[LSQ_SQUASH] t=%0t seq=%0d mask=%08b", $time,
+                 squash_seq, squash_mask);
+      if (|commit_valid) begin
+        for (lane = 0; lane < W; lane = lane + 1)
+          if (commit_valid[lane])
+            $display("[LSQ_COMMIT] t=%0t id=%0d st=%0b ld=%0b", $time,
+                     commit_id[lane*LW +: LW], commit_is_store[lane],
+                     commit_is_load[lane]);
+      end
+      if (drain_valid)
+        $display("[LSQ_DRAIN] t=%0t id=%0d addr=%08x", $time,
+                 drain_id, drain_addr);
+      if (drain_done && drain_valid)
+        $display("[LSQ_DRAIN_DONE] t=%0t id=%0d", $time, drain_id);
+    end
+  end
+`endif
 
 endmodule
