@@ -236,6 +236,7 @@ module rob #(
   // ---- 空闲/忙碌掩码（恢复用） --------------------------------------------
   logic [`CPU_PRF_SIZE-1:0] free_mask_c;
   logic [`CPU_PRF_SIZE-1:0] busy_mask_c;
+  logic [`CPU_PRF_SIZE-1:0] done_now_mask;
   logic [LW-1:0]            lsq_ptr_c;
   logic [32*PW-1:0]         recover_rat_c;
   integer i_mask, i_reg, i_mask_idx;
@@ -304,6 +305,7 @@ module rob #(
   always_comb begin
     cdb_hit = 1'b0;
     cdb_idx = '0;
+    done_now_mask = '0;
     for (i_cmp = 0; i_cmp < DEPTH; i_cmp = i_cmp + 1) begin
       i_cmp_idx = (head + i_cmp) & MASK;
       if (entry_valid[i_cmp_idx] && (entry_dest_tag[i_cmp_idx] == cdb_tag)) begin
@@ -311,6 +313,8 @@ module rob #(
         cdb_idx = i_cmp_idx;
       end
     end
+    if (cdb_valid && cdb_hit && (entry_dest_tag[cdb_idx] != '0))
+      done_now_mask[entry_dest_tag[cdb_idx]] = 1'b1;
 
     for (i_clane = 0; i_clane < W; i_clane = i_clane + 1) begin
       comp_hit[i_clane] = 1'b0;
@@ -324,6 +328,9 @@ module rob #(
             comp_idx[i_clane] = i_cmp_idx;
           end
         end
+        if (comp_hit[i_clane] &&
+            (entry_dest_tag[comp_idx[i_clane]] != '0))
+          done_now_mask[entry_dest_tag[comp_idx[i_clane]]] = 1'b1;
       end
     end
   end
@@ -378,7 +385,7 @@ module rob #(
         count             <= br_age_i + 1;
         recover_valid     <= 1'b1;
         recover_free_mask <= free_mask_c;
-        recover_busy_mask <= busy_mask_c;
+        recover_busy_mask <= busy_mask_c & ~done_now_mask;
         recover_lsq_ptr   <= lsq_ptr_c;
         recover_rat       <= recover_rat_c;
         redirect_valid    <= 1'b1;
@@ -439,5 +446,24 @@ module rob #(
       end
     end
   end
+
+`ifdef LOCAL_TRACE
+  always_ff @(posedge clk) begin
+    if (!reset) begin
+      if (|commit_valid)
+        $display("[COMMIT] t=%0t pc=%08x inst=%08x tag=%0d",
+                 $time, commit_pc[31:0], commit_inst[31:0],
+                 commit_tag[PW-1:0]);
+      if (flush_young)
+        $display("[ROB_FLUSH] t=%0t br_idx=%0d br_age=%0d recover=%0b redirect=%08x squash=%0b",
+                 $time, br_idx, br_age_i, recover_valid,
+                 br_update_taken ? br_update_target : (entry_pc[br_idx] + 32'd4),
+                 squash_valid);
+      if (recover_valid)
+        $display("[ROB_RECOVER] t=%0t free=%016x busy=%016x", $time,
+                 recover_free_mask, recover_busy_mask);
+    end
+  end
+`endif
 
 endmodule

@@ -302,7 +302,10 @@ module rename #(
       for (i_ff = 0; i_ff < 32; i_ff = i_ff + 1)
         rat[i_ff] <= recover_rat[i_ff*PW +: PW];
       free_vec   <= recover_free_mask & ~{{(PRF-1){1'b0}}, 1'b1};
-      busy       <= recover_busy_mask & ~{{(PRF-1){1'b0}}, 1'b1};
+      // 恢复与 CDB/complete 可能同拍：本拍已经唤醒的 tag 不能被恢复掩码
+      // 重新置 busy，否则消费者会等一个永远不会再发的广播。
+      busy       <= recover_busy_mask & ~wake_mask &
+                    ~{{(PRF-1){1'b0}}, 1'b1};
       free_count <= recover_count;
       lsq_ptr    <= recover_lsq_ptr;
     end else begin
