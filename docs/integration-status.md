@@ -1,3 +1,45 @@
+# 集成状态（P1 完成，P2 进行中）
+
+## P2 当前结果（2026-10-21，commit `4cf171e`）
+
+- **W=1 correctness：19/19 PASS**；**W=2 correctness：19/19 PASS**（`MAX_CYCLES=50,000,000`）。
+- 单元测试：`sh test/run_all.sh` → **ALL PASS**（frontend W=1/W=2 已适配
+  双 bank I$ 和 wake mask）。
+- `tools/config_gen.py --check`：up to date（默认值已切到 P2 双发射配置）。
+- perf（官方 OoO filelist，W=2）：IPC geomean **0.5493**。
+- synth（ASAP7，2 ns 目标）：opt **24,247.741 µm² / 57.11 MHz**；
+  diagnose 25,027.742 µm² / 53.93 MHz。
+- **未达到课程阶段门槛**：阶段 1 需要 9,000 µm²、IPC 0.6000、300 MHz；
+  当前三项都未满足。阶段 2 的 18,000 µm² 也未满足（24.2k）。
+- 双发射、双 bank 取指、双 CDB、流水化 load/store、store-to-load forwarding、
+  取指侧 BPU 预测均已接入；D-Cache 原型因阻塞式 miss 反而降低 IPC，已回退。
+
+### P2 关键改动
+
+1. 前端改为双 bank I-Cache（pc/pc+4 各一个 refill 口），fetch 请求 FIFO
+   解耦取指与 rename；取指侧 BPU 预测消除 taken 分支的一拍气泡。
+2. IQ 支持每拍两条发射；第二 ALU、两条 CDB；wake 改为 PRF 掩码，支持
+   同拍多条完成。
+3. load/store 改为流水化：多笔在途 load、按序响应；store 流水 drain；
+   同地址整字 store-to-load forwarding；store 在 issue 时发送给 LSQ。
+4. mem_subsystem/axi_mem_if 支持多笔在途读、流水写和 I$ 双 refill 客户。
+5. 分支解析改为 issue 当拍组合发送 `br_update`，ROB redirect 也改为组合
+   输出，缩短恢复路径。
+
+### 复现命令
+
+```sh
+python3 tools/config_gen.py --check
+make build JOBS=4
+make test MAX_CYCLES=50000000
+make perf MAX_CYCLES=50000000
+make synth MODE=opt
+# W=1 档：用 +define+CPU_ISSUE_WIDTH=1 的 Verilator wrapper
+sh test/run_all.sh
+```
+
+---
+
 # P1 集成状态（2026-10-18）
 
 ## 最终结果：P1 PASS

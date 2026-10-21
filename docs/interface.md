@@ -250,3 +250,45 @@ Stub 是接口与真实模块完全一致、行为简化/脚本化的假模块�
 
 边界语义按 RISC-V M 扩展：除零时商为 `0xffff_ffff`、余数为被除数；
 `signed INT_MIN / -1` 时商为 `INT_MIN`、余数为 0。
+
+
+---
+
+## P2 内部接口变更（乙内部，对甲/顶层 AXI 不变）
+
+P2 把 LSU 与 mem_subsystem 之间的单事务 `data_mem` 口拆成三个流水接口，
+并给 I-Cache 增加第二个 refill 口；顶层 `student_top` 的 AXI4-Lite 端口
+保持不变。
+
+### load 流（LSU → mem_subsystem）
+
+| 字段 | 位宽 | 说明 |
+| --- | ---: | --- |
+| `ld_req_valid` | 1 | 请求有效，直到 `ld_req_ready` |
+| `ld_req_addr` | 32 | 读地址 |
+| `ld_req_ready` | 1 | 本拍可接收 |
+| `ld_resp_valid` | 1 | 按请求顺序返回 |
+| `ld_resp_rdata` | 32 | 读数据 |
+
+LSU 内部最多 8 笔在途 load；响应按发请求顺序返回，LSU 用元数据 FIFO 配对。
+
+### store 流（LSU → mem_subsystem）
+
+| 字段 | 位宽 | 说明 |
+| --- | ---: | --- |
+| `st_req_valid` / `st_req_ready` | 1 / 1 | 写请求握手 |
+| `st_req_addr` | 32 | 写地址 |
+| `st_req_wdata` / `st_req_wstrb` | 32 / 4 | 写数据/掩码 |
+| `st_resp_valid` | 1 | 写完成（按请求顺序，用于释放 LSQ） |
+
+store 在 commit 后由 LSQ 按序 drain；写响应不必在提交路径上等待。
+
+### I-Cache 双 refill（甲 ↔ mem_subsystem）
+
+`if_refill` 与 `if_refill1` 两套 `valid/addr/resp_valid/rdata`，分别服务
+双 bank I$ 的 pc 和 pc+4 取指流；两者都是单未完成事务协议。
+
+### 兼容口
+
+`mem_subsystem` 仍保留 P1 的 `data_req_* / data_resp_*` 单事务口，供
+`test/mem_subsystem_test` 使用；官方顶层不连接该口。

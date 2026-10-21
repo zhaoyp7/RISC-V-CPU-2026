@@ -1,4 +1,4 @@
-# RISC-V CPU 2026 — 协作者交接（P1 完成，P2 待开始）
+# RISC-V CPU 2026 — 协作者交接（P2 进行中）
 
 > 这是**已跟踪**的协作文档，`git pull` 即可获得。
 > 本地完整版 `prompt.md` 被 `.gitignore` 忽略，不会随 git 同步；本文件是
@@ -49,33 +49,33 @@ make test MAX_CYCLES=50000000
 
 ---
 
-## 1. 当前状态
+## 1. 当前状态（2026-10-21）
 
-- 分支：`feat/p1-integration`
-- P1 功能最终提交：`0d6e07f`（tag `p1-ooo-final`）
-- `main` 已同步包含 P1
-- tag：`p0-baseline`、`p1-ooo`、`p1-ooo-official`、`p1-ooo-final`
-- 官方 `verilog/filelist.f` 已切换到 OoO 顶层
-  `student_top_ooo.sv`（模块名仍是 `student_top`）
-- 基线 `core.sv`/`icache.sv`/`student_top.sv` 保留但不在 filelist，可回滚
+- 分支：`main`
+- P1 功能 tag：`p1-ooo-final`（`0d6e07f`）
+- P2 当前提交：`4cf171e`（双发射 + 双取指 + 流水访存）
+- 官方 `verilog/filelist.f` 使用 OoO 顶层 `student_top_ooo.sv`
+  （模块名仍是 `student_top`）
+- 基线 `core.sv`/`icache.sv`/`student_top.sv` 保留但不在 filelist
 
 ### 已验证
 
-- 官方 W=1 correctness：**19/19 PASS**（`MAX_CYCLES=50,000,000`）
-- 官方 W=2 smoke：**7/7 PASS**（不是 W=2 全量 19/19）
-- 全部单元测试通过
-- 官方 `make build` / `make test MAX_CYCLES=50000000` 通过
-- 当前课程分数估算：**约 85/100**（正确性满分，性能未达阶段门槛）
+- 官方 W=1 correctness：**19/19 PASS**
+- 官方 W=2 correctness：**19/19 PASS**（`MAX_CYCLES=50,000,000`）
+- `sh test/run_all.sh`：**ALL PASS**
+- `python3 tools/config_gen.py --check`：up to date
+- 当前课程分数估算：仍约 **85/100**（性能/面积/频率未达阶段门槛）
 
-### 当前性能/面积
+### 当前性能/面积（W=2，commit `4cf171e`）
 
-| 指标 | 当前值 | 阶段 1 门槛 |
-| --- | ---: | ---: |
-| IPC GEOMEAN | **0.1689** | ≥ 0.6000 |
-| 面积（opt） | **17,204.6 µm²** | ≤ 9,000 µm² |
-| 频率 | **64.48 MHz** | ≥ 300 MHz |
+| 指标 | 当前值 | 阶段 1 门槛 | 阶段 2 门槛 |
+| --- | ---: | ---: | ---: |
+| IPC GEOMEAN | **0.5493** | ≥ 0.6000 | ≥ 0.8450 |
+| 面积（opt） | **24,247.7 µm²** | ≤ 9,000 µm² | ≤ 18,000 µm² |
+| 频率 | **57.11 MHz** | ≥ 300 MHz | ≥ 300 MHz |
 
-perf 明细和 synth breakdown 见 `docs/integration-status.md`。
+W=1 档 IPC 为 0.5040。perf 明细、参数敏感度和 synth breakdown 见
+`docs/perf-log.md` 与 `docs/integration-status.md`。
 
 ---
 
@@ -85,38 +85,45 @@ perf 明细和 synth breakdown 见 `docs/integration-status.md`。
 
 | 参数 | 当前值 |
 | --- | ---: |
-| `CPU_ISSUE_WIDTH` | 1 |
+| `CPU_ISSUE_WIDTH` | 2 |
 | `CPU_ROB_DEPTH` | 32 |
 | `CPU_PRF_SIZE` | 64 |
 | `CPU_RS_DEPTH` | 8 |
-| `CPU_CDB_NUM` | 1 |
+| `CPU_CDB_NUM` | 2 |
 | `CPU_LSQ_DEPTH` | 8 |
-| I-Cache | 4 KB，直接映射，1 字/行 |
-| BTB / BHT | 64 项 / 256 项 2-bit |
-| D-Cache | **未实现**，仅参数预留 |
+| I-Cache | 双 bank，每 bank 2 KB 直接映射，1 字/行 |
+| BTB / BHT | 64 项 / 256 项 2-bit（单 BPU 双读口） |
+| D-Cache | **未实现**（原型已验证不适合当前阻塞式方案，已回退） |
 
 ### 已实现
 
 - RV32IM；乱序发射/乱序完成/按序提交
 - 精确分支恢复、RAT replay、ROB 恢复、统一 32-bit dispatch seq squash
-- I-Cache 流水线、BTB + 2-bit BHT、预测 taken 重定向
+- 双 bank I-Cache、fetch FIFO、取指侧 BPU 预测（消除 taken 气泡）
+- 双发射 IQ、第二 ALU、两条 CDB、wake 掩码（同拍多条完成）
 - PRF/IQ/CDB/ALU/多周期 divider/LSU/LSQ
-- AXI4-Lite + `mem_subsystem`，I-Cache refill 和数据访存共享单事务通道
+- 流水化 load/store、多笔在途 load、按序响应、store-to-load forwarding
+- `mem_subsystem` + `axi_mem_if` 多笔在途读/流水写、I$ 双 refill 客户
 
 ### 关键限制
 
-1. **单发射**：1 ALU、1 LSU、1 CDB；`CPU_ISSUE_WIDTH=1`
-2. W=2 只是前端双 slot + 后端整组吸收，**不是双发射**
-3. 无 D-Cache：load/store 直接走 AXI，I-Cache refill 与数据访存互相阻塞
-4. 一次只有一个 load 在途；无 store-to-load forwarding
-5. BPU 仅 BTB + 2-bit BHT；`bpu_gshare.sv` 原型未接入
-6. 关键路径 ROB → backend，64.48 MHz；面积 17.2k，阶段 1 需 ≤9k
+1. 取指仍限制吞吐：每 bank 每拍一条，分支误预测恢复约 6–7 拍
+2. 无低延迟 D-Cache：towers 等 pointer chasing 直接暴露 10 拍内存延迟
+3. BPU 仍是 BTB + 2-bit BHT；gshare/RAS 未接入
+4. 关键路径 `ROB → backend`，57.11 MHz；面积 24.2k，阶段 1/2 均未达
+5. 双发射只在 ALU lane 生效；mem/div/branch 仍单端口
 
 ---
 
-## 3. 下一步：P2
+## 3. 下一步：P2 收尾 / P3
 
-P2 目标：**双发射 + D-Cache + 预测升级**，对应课程阶段 1：
+当前 P2 功能已打通但未达门槛。优先级：
+1. 降低分支误预测代价（RAS/gshare、恢复流水化）；
+2. 非阻塞 D-Cache 或低延迟 load 通路（towers/median）；
+3. 频率流水化（ROB → backend、IQ select、I$ tag/BPU）；
+4. 面积收缩（ROB/PRF/IQ、单 BPU 已做，双 I$ 与双 ALU 是主要开销）。
+
+以下为原始 P2 目标（课程阶段 1）：
 
 - W=1 与 W=2 都 **19/19 PASS**
 - IPC ≥ **0.6000**
