@@ -5,6 +5,9 @@
 - **W=1 correctness：19/19 PASS**；**W=2 correctness：19/19 PASS**（`MAX_CYCLES=50,000,000`）。
 - 单元测试：`sh test/run_all.sh` → **ALL PASS**（frontend W=1/W=2 已适配
   双 bank I$ 和 wake mask）。
+- 已知：`test/lsu_test`、`test/mem_subsystem_test`、`test/backend_test` 仍是
+  P1 单事务接口的旧测试，尚未适配 P2 的流水 load/store 与双 CDB；它们不在
+  `run_all.sh` 中。下一步需要同步更新。
 - `tools/config_gen.py --check`：up to date（默认值已切到 P2 双发射配置）。
 - perf（官方 OoO filelist，W=2）：IPC geomean **0.5507**；W=1 为 0.5017。
 - synth（ASAP7，2 ns 目标）：opt **24,288.346 µm² / 56.08 MHz**；
