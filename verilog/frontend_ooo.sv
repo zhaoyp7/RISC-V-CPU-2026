@@ -99,7 +99,8 @@ module frontend_ooo #(
   logic fetch_fire;
   logic use2;
 
-  assign use2 = (pc_q[2] == 1'b0) && !p0_taken;
+  // 两个 bank 是独立 Cache，不要求 8B 对齐；任意 pc/pc+4 都可成对取指。
+  assign use2 = !p0_taken;
 
   // ---- decoded-uop FIFO --------------------------------------------------
   logic [FDEPTH-1:0]               fq_valid;

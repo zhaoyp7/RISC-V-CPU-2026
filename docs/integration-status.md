@@ -6,11 +6,11 @@
 - 单元测试：`sh test/run_all.sh` → **ALL PASS**（frontend W=1/W=2 已适配
   双 bank I$ 和 wake mask）。
 - `tools/config_gen.py --check`：up to date（默认值已切到 P2 双发射配置）。
-- perf（官方 OoO filelist，W=2）：IPC geomean **0.5493**。
-- synth（ASAP7，2 ns 目标）：opt **24,247.741 µm² / 57.11 MHz**；
-  diagnose 25,027.742 µm² / 53.93 MHz。
+- perf（官方 OoO filelist，W=2）：IPC geomean **0.5507**；W=1 为 0.5017。
+- synth（ASAP7，2 ns 目标）：opt **24,288.346 µm² / 56.08 MHz**；
+  diagnose 25,025.438 µm² / 53.93 MHz。
 - **未达到课程阶段门槛**：阶段 1 需要 9,000 µm²、IPC 0.6000、300 MHz；
-  当前三项都未满足。阶段 2 的 18,000 µm² 也未满足（24.2k）。
+  当前三项都未满足。阶段 2 的 18,000 µm² 也未满足（24.3k）。
 - 双发射、双 bank 取指、双 CDB、流水化 load/store、store-to-load forwarding、
   取指侧 BPU 预测均已接入；D-Cache 原型因阻塞式 miss 反而降低 IPC，已回退。
 

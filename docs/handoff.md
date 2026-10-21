@@ -70,11 +70,11 @@ make test MAX_CYCLES=50000000
 
 | 指标 | 当前值 | 阶段 1 门槛 | 阶段 2 门槛 |
 | --- | ---: | ---: | ---: |
-| IPC GEOMEAN | **0.5493** | ≥ 0.6000 | ≥ 0.8450 |
-| 面积（opt） | **24,247.7 µm²** | ≤ 9,000 µm² | ≤ 18,000 µm² |
-| 频率 | **57.11 MHz** | ≥ 300 MHz | ≥ 300 MHz |
+| IPC GEOMEAN | **0.5507** | ≥ 0.6000 | ≥ 0.8450 |
+| 面积（opt） | **24,288.3 µm²** | ≤ 9,000 µm² | ≤ 18,000 µm² |
+| 频率 | **56.08 MHz** | ≥ 300 MHz | ≥ 300 MHz |
 
-W=1 档 IPC 为 0.5040。perf 明细、参数敏感度和 synth breakdown 见
+W=1 档 IPC 为 0.5017。perf 明细、参数敏感度和 synth breakdown 见
 `docs/perf-log.md` 与 `docs/integration-status.md`。
 
 ---
