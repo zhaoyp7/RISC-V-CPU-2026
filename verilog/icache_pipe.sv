@@ -24,6 +24,7 @@ module icache_pipe #(
   input  logic        clk,
   input  logic        reset,
   input  logic        flush,          // 重定向/冲刷，单拍有效，最高优先级
+  input  logic        discard,        // 只清年轻项，不压制当前 resp
 
   // 前端取指请求
   input  logic        fetch_valid,
@@ -218,6 +219,12 @@ module icache_pipe #(
       refill_pc     <= 32'b0;
       refill_index  <= '0;
       refill_tag    <= '0;
+    end else if (discard && (state == ST_NORMAL)) begin
+      // 预测 taken：s2 的当前响应已被消费，s1/buf 里是顺序年轻项。
+      s1_valid      <= 1'b0;
+      s2_valid      <= 1'b0;
+      buf_valid     <= 1'b0;
+      pending_valid <= 1'b0;
     end else if (flush) begin
       s1_valid      <= 1'b0;
       s2_valid      <= 1'b0;

@@ -1,15 +1,15 @@
 // -----------------------------------------------------------------------------
-// lsq.sv — load/store queue v1
+// lsq.sv — load/store queue v2
 //
 // 表项按 rename 分配的 lsq_id 索引（CPU_LSQ_DEPTH 项）。职责：
 //   - dispatch 时按 lsq_id 占用表项，满/复用冲突时反压；
 //   - issue 时填入地址/写数据/写掩码；
-//   - commit：load 立即释放；store 标记 committed，等待写内存完成；
-//   - store drain：按分配顺序选最老的已提交 store 写内存，完成后释放；
-//   - load 排序：查询更老 store 的地址是否已知、是否同字地址且尚未写出。
-//
-// P1 采用保守策略：load 只需等更老 store 地址已知；若同字地址，则等它
-// 真正写完成。不同字地址的 store 不阻塞 load。
+//   - commit：load 立即释放；store 标记 committed；
+//   - store drain：最老的已提交且未发送的 store 进入写流；drain_fire 表示
+//     已被内存接收；写响应（按序）返回后释放表项；
+//   - load 排序：更老 store 地址未知则阻塞；同字地址则等它真正写完成；
+//   - squash 按 dispatch seq 清除年轻表项。已发送的 store 必然已提交，
+//     不会被 squash。
 // -----------------------------------------------------------------------------
 
 module lsq #(
@@ -54,11 +54,12 @@ module lsq #(
   output logic [31:0]                  drain_addr,
   output logic [31:0]                  drain_wdata,
   output logic [3:0]                   drain_wstrb,
-  input  logic                         drain_done,
+  input  logic                         drain_fire,
+  input  logic                         store_resp_valid,
 
-  // load ordering query
+  // load ordering query (speculative, before fill)
   input  logic                         query_valid,
-  input  logic [`CPU_LSQ_IDX_W-1:0]    query_id,
+  input  logic [31:0]                  query_seq,
   input  logic [31:0]                  query_addr,
   output logic                         query_blocked,
 
@@ -67,6 +68,8 @@ module lsq #(
 
   localparam integer LW = `CPU_LSQ_IDX_W;
   localparam integer RW = `CPU_ROB_TAG_W;
+  localparam integer QW = (D > 1) ? $clog2(D) : 1;
+  localparam integer FN = (D > 1) ? $clog2(D + 1) : 2;
 
   logic [D-1:0]    valid;
   logic [D-1:0]    is_store;
@@ -77,17 +80,22 @@ module lsq #(
   logic [D*32-1:0] wdata;
   logic [D*4-1:0]  wstrb;
   logic [D-1:0]    committed;
-  logic [7:0]      n_alloc;
+  logic [D-1:0]    sent;
+
+  // sent FIFO：记录已发往内存但尚未收到写响应的 store id
+  logic [D*LW-1:0] sent_fifo;
+  logic [QW-1:0]   sent_head, sent_tail;
+  logic [FN-1:0]   sent_count;
 
   integer i, lane;
   integer i_commit, lane_commit;
   integer i_free, lane_free;
-  integer i_squash, i_drain, i_query;
-  integer i_count, lane_count;
+  integer i_squash, i_drain, i_query, i_count, lane_count;
   logic [`CPU_LSQ_IDX_W-1:0] id;
 
   // ---- allocation ---------------------------------------------------------
   logic [D-1:0] free_by_commit;
+  logic [D-1:0] free_by_resp;
   logic [D-1:0] free_mask;
   logic [D-1:0] alloc_used;
   logic         alloc_ok;
@@ -106,12 +114,18 @@ module lsq #(
     end
   end
 
+  // 写响应释放表项（按序 FIFO 头部）
+  always_comb begin
+    free_by_resp = '0;
+    if (store_resp_valid && (sent_count != 0))
+      free_by_resp[sent_fifo[sent_head*LW +: LW]] = 1'b1;
+  end
+
   always_comb begin
     free_mask = '0;
     for (i_free = 0; i_free < D; i_free = i_free + 1)
       free_mask[i_free] = !valid[i_free] || free_by_commit[i_free] ||
-                          (drain_done && drain_valid &&
-                           (drain_id == i_free[LW-1:0]));
+                          free_by_resp[i_free];
 
     alloc_ok = 1'b1;
     alloc_used = '0;
@@ -154,7 +168,8 @@ module lsq #(
     best_id     = '0;
     found       = 1'b0;
     for (i_drain = 0; i_drain < D; i_drain = i_drain + 1) begin
-      if (valid[i_drain] && is_store[i_drain] && committed[i_drain]) begin
+      if (valid[i_drain] && is_store[i_drain] && committed[i_drain] &&
+          !sent[i_drain]) begin
         if (!found || (seq[i_drain*32 +: 32] < best_seq)) begin
           found       = 1'b1;
           best_seq    = seq[i_drain*32 +: 32];
@@ -172,14 +187,11 @@ module lsq #(
   end
 
   // ---- load ordering query ------------------------------------------------
-  logic [31:0] load_seq;
-
   always_comb begin
     query_blocked = 1'b0;
-    load_seq = seq[query_id*32 +: 32];
     for (i_query = 0; i_query < D; i_query = i_query + 1) begin
       if (query_valid && valid[i_query] && is_store[i_query] &&
-          (seq[i_query*32 +: 32] < load_seq)) begin
+          (seq[i_query*32 +: 32] < query_seq)) begin
         if (!addr_known[i_query])
           query_blocked = 1'b1;
         else if ((addr[i_query*32 +: 32] & ~32'h3) ==
@@ -192,19 +204,20 @@ module lsq #(
   // ---- count --------------------------------------------------------------
   always_comb begin
     count = '0;
-    n_alloc = '0;
     for (i_count = 0; i_count < D; i_count = i_count + 1)
       if (valid[i_count]) count = count + 1'b1;
-    for (lane_count = 0; lane_count < W; lane_count = lane_count + 1)
-      if (alloc_valid[lane_count]) n_alloc = n_alloc + 1'b1;
   end
 
   // ---- sequential ---------------------------------------------------------
   always_ff @(posedge clk) begin
     if (reset) begin
-      valid       <= '0;
-      addr_known  <= '0;
-      committed   <= '0;
+      valid     <= '0;
+      addr_known<= '0;
+      committed <= '0;
+      sent      <= '0;
+      sent_head <= '0;
+      sent_tail <= '0;
+      sent_count<= '0;
     end else begin
       // squash
       for (i = 0; i < D; i = i + 1) begin
@@ -212,6 +225,7 @@ module lsq #(
           valid[i]      <= 1'b0;
           addr_known[i] <= 1'b0;
           committed[i]  <= 1'b0;
+          sent[i]       <= 1'b0;
         end
       end
 
@@ -231,18 +245,32 @@ module lsq #(
             valid[commit_id[lane*LW +: LW]]      <= 1'b0;
             addr_known[commit_id[lane*LW +: LW]] <= 1'b0;
             committed[commit_id[lane*LW +: LW]]  <= 1'b0;
+            sent[commit_id[lane*LW +: LW]]       <= 1'b0;
           end else if (commit_is_store[lane]) begin
             committed[commit_id[lane*LW +: LW]] <= 1'b1;
           end
         end
       end
 
-      // store write completion
-      if (drain_done && drain_valid) begin
-        valid[drain_id]      <= 1'b0;
-        addr_known[drain_id] <= 1'b0;
-        committed[drain_id]  <= 1'b0;
+      // store drain accepted by memory
+      if (drain_valid && drain_fire) begin
+        sent[drain_id] <= 1'b1;
+        sent_fifo[sent_tail*LW +: LW] <= drain_id;
+        sent_tail  <= (sent_tail == D - 1) ? '0 : sent_tail + 1'b1;
       end
+
+      // store write response: free entry
+      if (store_resp_valid && (sent_count != 0)) begin
+        valid[sent_fifo[sent_head*LW +: LW]]      <= 1'b0;
+        addr_known[sent_fifo[sent_head*LW +: LW]] <= 1'b0;
+        committed[sent_fifo[sent_head*LW +: LW]]  <= 1'b0;
+        sent[sent_fifo[sent_head*LW +: LW]]       <= 1'b0;
+        sent_head  <= (sent_head == D - 1) ? '0 : sent_head + 1'b1;
+      end
+
+      sent_count <= sent_count +
+                    ((drain_valid && drain_fire) ? 1'b1 : 1'b0) -
+                    ((store_resp_valid && (sent_count != 0)) ? 1'b1 : 1'b0);
 
       // allocation (last, so a freed id can be reused immediately)
       if (alloc_ready && alloc_fire) begin
@@ -254,40 +282,11 @@ module lsq #(
             seq[alloc_id[lane*LW +: LW]*32 +: 32] <= seq_base + lane;
             addr_known[alloc_id[lane*LW +: LW]] <= 1'b0;
             committed[alloc_id[lane*LW +: LW]]  <= 1'b0;
+            sent[alloc_id[lane*LW +: LW]]       <= 1'b0;
           end
         end
       end
     end
   end
-
-`ifdef LOCAL_TRACE
-  always_ff @(posedge clk) begin
-    if (!reset) begin
-      if (alloc_ready && alloc_fire) begin
-        for (lane = 0; lane < W; lane = lane + 1)
-          if (alloc_valid[lane])
-            $display("[LSQ_ALLOC] t=%0t id=%0d rob=%0d seq=%0d store=%0b",
-                     $time, alloc_id[lane*LW +: LW],
-                     alloc_rob[lane*RW +: RW], seq_base + lane,
-                     alloc_is_store[lane]);
-      end
-      if (squash_valid)
-        $display("[LSQ_SQUASH] t=%0t seq=%0d mask=%08b", $time,
-                 squash_seq, squash_mask);
-      if (|commit_valid) begin
-        for (lane = 0; lane < W; lane = lane + 1)
-          if (commit_valid[lane])
-            $display("[LSQ_COMMIT] t=%0t id=%0d st=%0b ld=%0b", $time,
-                     commit_id[lane*LW +: LW], commit_is_store[lane],
-                     commit_is_load[lane]);
-      end
-      if (drain_valid)
-        $display("[LSQ_DRAIN] t=%0t id=%0d addr=%08x", $time,
-                 drain_id, drain_addr);
-      if (drain_done && drain_valid)
-        $display("[LSQ_DRAIN_DONE] t=%0t id=%0d", $time, drain_id);
-    end
-  end
-`endif
 
 endmodule

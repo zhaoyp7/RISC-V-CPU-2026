@@ -25,14 +25,20 @@ module backend_ooo #(
   output logic [`CPU_BR_UPDATE_W-1:0]    br_update,
   output logic                           backend_ready,
 
-  // data_mem（接 mem_subsystem）
-  output logic        data_req_valid,
-  output logic        data_req_we,
-  output logic [31:0] data_req_addr,
-  output logic [31:0] data_req_wdata,
-  output logic [3:0]  data_req_wstrb,
-  input  logic        data_resp_valid,
-  input  logic [31:0] data_resp_rdata
+  // pipelined load interface (to mem_subsystem)
+  output logic        ld_req_valid,
+  output logic [31:0] ld_req_addr,
+  input  logic        ld_req_ready,
+  input  logic        ld_resp_valid,
+  input  logic [31:0] ld_resp_rdata,
+
+  // pipelined store interface (to mem_subsystem)
+  output logic        st_req_valid,
+  output logic [31:0] st_req_addr,
+  output logic [31:0] st_req_wdata,
+  output logic [3:0]  st_req_wstrb,
+  input  logic        st_req_ready,
+  input  logic        st_resp_valid
 );
 
   localparam integer PW = `CPU_PRF_IDX_W;
@@ -234,8 +240,18 @@ module backend_ooo #(
   end
 
   logic [31:0] issue_src1, issue_src2;
-  assign issue_src1 = prf_rdata[0 +: 32];
-  assign issue_src2 = prf_rdata[32 +: 32];
+  logic        cdb_bypass1, cdb_bypass2;
+
+  assign cdb_bypass1 = cdb_out[`CPU_CDB_VALID_OFF] &&
+                       (cdb_out[`CPU_CDB_TAG_OFF +: PW] == i_src1_tag);
+  assign cdb_bypass2 = cdb_out[`CPU_CDB_VALID_OFF] &&
+                       (cdb_out[`CPU_CDB_TAG_OFF +: PW] == i_src2_tag);
+
+  // 同拍 CDB 旁路：IQ 可以在结果广播的当拍选中消费者，PRF 里还是旧值。
+  assign issue_src1 = cdb_bypass1 ? cdb_out[`CPU_CDB_VALUE_OFF +: 32] :
+                                    prf_rdata[0 +: 32];
+  assign issue_src2 = cdb_bypass2 ? cdb_out[`CPU_CDB_VALUE_OFF +: 32] :
+                                    prf_rdata[32 +: 32];
 
   always_comb begin
     for (i = 0; i < R; i = i + 1) begin
@@ -330,10 +346,19 @@ module backend_ooo #(
   logic [PW-1:0] br_tag_q;
   logic [31:0]  br_seq_q;
 
-  logic        be_complete_valid_q;
-  logic [PW-1:0] be_complete_tag_q;
-  logic        be_complete_exc_q;
-  logic [31:0]  be_complete_seq_q;
+  // 无值完成（store/branch/非写回 ALU/非法）先进入小 FIFO，避免同一拍
+  // 多个来源互相覆盖，也允许连续 store 每拍完成。
+  localparam integer CF_DEPTH = 4;
+  logic [CF_DEPTH-1:0]      cf_discard;
+  logic [CF_DEPTH*PW-1:0]   cf_tag;
+  logic [CF_DEPTH-1:0]      cf_exc;
+  logic [CF_DEPTH*32-1:0]   cf_seq;
+  logic [2:0]               cf_head, cf_tail, cf_count;
+  logic                     cf_push, cf_pop, cf_allow;
+  logic [PW-1:0]            cf_tag_in;
+  logic                     cf_exc_in;
+  logic [31:0]              cf_seq_in;
+  logic                     noval_issue, noval_expected;
 
   // 需要 ALU 产生 CDB 值的 uop
   logic needs_alu_result;
@@ -342,6 +367,11 @@ module backend_ooo #(
   logic alu_issue_ready;
   assign alu_issue_ready = !needs_alu_result ||
                            !alu_valid_q || cdb_src_ready[0];
+
+  assign noval_expected = i_is_store ||
+                          (!i_is_load && !i_is_div &&
+                           (i_illegal || !i_reg_we));
+  assign cf_allow = (cf_count < CF_DEPTH) || cf_pop;
 
   // divider
   logic        div_start, div_busy, div_done;
@@ -413,22 +443,28 @@ module backend_ooo #(
     .store_complete_valid (lsu_store_valid),
     .store_complete_tag   (lsu_store_tag),
     .store_complete_exception (lsu_store_exc),
-    .data_req_valid       (data_req_valid),
-    .data_req_we          (data_req_we),
-    .data_req_addr        (data_req_addr),
-    .data_req_wdata       (data_req_wdata),
-    .data_req_wstrb       (data_req_wstrb),
-    .data_resp_valid      (data_resp_valid),
-    .data_resp_rdata      (data_resp_rdata),
+    .ld_req_valid         (ld_req_valid),
+    .ld_req_addr          (ld_req_addr),
+    .ld_req_ready         (ld_req_ready),
+    .ld_resp_valid        (ld_resp_valid),
+    .ld_resp_rdata        (ld_resp_rdata),
+    .st_req_valid         (st_req_valid),
+    .st_req_addr          (st_req_addr),
+    .st_req_wdata         (st_req_wdata),
+    .st_req_wstrb         (st_req_wstrb),
+    .st_req_ready         (st_req_ready),
+    .st_resp_valid        (st_resp_valid),
     .busy                 (lsu_busy)
   );
 
   // ---------------------------------------------------------------------------
   // issue 路由
   // ---------------------------------------------------------------------------
-  assign issue_ready = i_is_mem ? lsu_issue_ready :
-                       i_is_div ? div_issue_ready :
-                                  alu_issue_ready;
+  logic issue_ready_base;
+  assign issue_ready_base = i_is_mem ? lsu_issue_ready :
+                            i_is_div ? div_issue_ready :
+                                       alu_issue_ready;
+  assign issue_ready = issue_ready_base && (!noval_expected || cf_allow);
 
   logic alu_issue, div_issue;
   assign alu_issue = iq_out_valid && issue_ready && !i_is_mem && !i_is_div;
@@ -532,7 +568,6 @@ module backend_ooo #(
       alu_valid_q  <= 1'b0;
       div_valid_q  <= 1'b0;
       br_valid_q   <= 1'b0;
-      be_complete_valid_q <= 1'b0;
       div_tag_pending <= '0;
       div_op_q <= '0;
       div_exc_pending <= 1'b0;
@@ -546,9 +581,6 @@ module backend_ooo #(
         div_valid_q <= 1'b0;
       if (sq_valid && br_valid_q && (br_seq_q > squash_seq))
         br_valid_q <= 1'b0;
-      if (sq_valid && be_complete_valid_q &&
-          (be_complete_seq_q > squash_seq))
-        be_complete_valid_q <= 1'b0;
       if (sq_valid && div_busy &&
           (div_pending_seq > squash_seq))
         div_discard <= 1'b1;
@@ -588,7 +620,6 @@ module backend_ooo #(
 
       // 分支更新 / 无值完成
       br_valid_q <= 1'b0;
-      be_complete_valid_q <= 1'b0;
       if (alu_issue && i_is_branch_any) begin
         br_valid_q  <= 1'b1;
         br_pc_q     <= i_pc;
@@ -598,28 +629,70 @@ module backend_ooo #(
         br_tag_q    <= i_dest;
         br_seq_q    <= issue_seq;
       end
-      if (alu_issue && (i_illegal || (!i_reg_we && !i_is_mem))) begin
-        be_complete_valid_q <= 1'b1;
-        be_complete_tag_q   <= i_dest;
-        be_complete_exc_q   <= i_illegal;
-        be_complete_seq_q   <= issue_seq;
-      end
     end
   end
 
   // ---------------------------------------------------------------------------
   // complete / br_update 打包
   // ---------------------------------------------------------------------------
+  // ---- complete FIFO ------------------------------------------------------
+  // 在 issue 当拍就压入，避免“上一拍 store complete”与“本拍新 issue”
+  // 同时产生两个 complete 源。单发射保证每拍最多一个。
+  assign noval_issue = iq_out_valid && issue_ready &&
+                       (i_is_store ||
+                        (!i_is_load && !i_is_div &&
+                         (i_illegal || !i_reg_we)));
+  assign cf_push = noval_issue;
+  assign cf_pop  = (cf_count != 0);
+
+  assign cf_tag_in = i_dest;
+  assign cf_exc_in = i_illegal;
+  assign cf_seq_in = issue_seq;
+
   always_comb begin
     complete = '0;
-    if (lsu_store_valid) begin
+    if ((cf_count != 0) && !cf_discard[cf_head] &&
+        !(sq_valid && (cf_seq[cf_head*32 +: 32] > squash_seq))) begin
       complete[`CPU_COMPLETE_VALID_OFF] = 1'b1;
-      complete[`CPU_COMPLETE_TAG_OFF +: PW] = lsu_store_tag;
-      complete[`CPU_COMPLETE_EXCEPTION_OFF] = lsu_store_exc;
-    end else if (be_complete_valid_q) begin
-      complete[`CPU_COMPLETE_VALID_OFF] = 1'b1;
-      complete[`CPU_COMPLETE_TAG_OFF +: PW] = be_complete_tag_q;
-      complete[`CPU_COMPLETE_EXCEPTION_OFF] = be_complete_exc_q;
+      complete[`CPU_COMPLETE_TAG_OFF +: PW] = cf_tag[cf_head*PW +: PW];
+      complete[`CPU_COMPLETE_EXCEPTION_OFF] = cf_exc[cf_head];
+    end
+  end
+
+  always_ff @(posedge clk) begin
+    if (reset) begin
+      cf_discard <= '0;
+      cf_head    <= '0;
+      cf_tail    <= '0;
+      cf_count   <= '0;
+    end else begin
+      if (cf_push) begin
+        cf_discard[cf_tail]       <= sq_valid && (cf_seq_in > squash_seq);
+        cf_tag[cf_tail*PW +: PW]  <= cf_tag_in;
+        cf_exc[cf_tail]           <= cf_exc_in;
+        cf_seq[cf_tail*32 +: 32]  <= cf_seq_in;
+        cf_tail <= (cf_tail == CF_DEPTH - 1) ? '0 : cf_tail + 1'b1;
+      end
+      if (cf_pop)
+        cf_head <= (cf_head == CF_DEPTH - 1) ? '0 : cf_head + 1'b1;
+
+      if (sq_valid) begin
+        for (i = 0; i < CF_DEPTH; i = i + 1)
+          if (cf_seq[i*32 +: 32] > squash_seq)
+            cf_discard[i] <= 1'b1;
+      end
+
+      cf_count <= cf_count + (cf_push ? 1'b1 : 1'b0) -
+                             (cf_pop  ? 1'b1 : 1'b0);
+`ifdef LOCAL_TRACE
+      if (cf_push)
+        $display("[CF_PUSH] t=%0t tag=%0d exc=%0b seq=%0d disc=%0b cnt=%0d",
+                 $time, cf_tag_in, cf_exc_in, cf_seq_in,
+                 sq_valid && (cf_seq_in > squash_seq), cf_count);
+      if (cf_pop)
+        $display("[CF_POP] t=%0t head=%0d tag=%0d cnt=%0d", $time,
+                 cf_head, cf_tag[cf_head*PW +: PW], cf_count);
+`endif
     end
   end
 
@@ -673,7 +746,7 @@ module backend_ooo #(
                  $time, i_dest, i_rob, wb_value);
       if (div_done)
         $display("[DIV_DONE] t=%0t discard=%0b tag=%0d rob=%0d",
-                 $time, div_discard, div_tag_pending, div_pending_rob);
+                 $time, div_discard, div_tag_pending, div_pending_seq);
     end
   end
 `endif

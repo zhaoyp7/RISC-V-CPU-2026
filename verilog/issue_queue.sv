@@ -133,6 +133,17 @@ module issue_queue #(
     end
   end
 
+  // ---- 同拍 CDB 旁路匹配 --------------------------------------------------
+  function automatic logic tag_hit(input logic [PW-1:0] tag);
+    integer w;
+    begin
+      tag_hit = 1'b0;
+      for (w = 0; w < R; w = w + 1)
+        if (wake_valid[w] && (wake_tag[w*PW +: PW] == tag))
+          tag_hit = 1'b1;
+    end
+  endfunction
+
   // ---- 发射选择：最老的 ready 表项 ---------------------------------------
   logic [D-1:0] cand;
   logic [D-1:0] chosen;
@@ -144,8 +155,11 @@ module issue_queue #(
 
   always_comb begin
     cand = '0;
+    // 源在本拍 CDB 上广播时可直接发射（后端 PRF 读口做同拍旁路）。
     for (i = 0; i < D; i = i + 1)
-      cand[i] = valid[i] && !squash_mask[i] && src1_ready[i] && src2_ready[i];
+      cand[i] = valid[i] && !squash_mask[i] &&
+                (src1_ready[i] || tag_hit(src1_tag[i*PW +: PW])) &&
+                (src2_ready[i] || tag_hit(src2_tag[i*PW +: PW]));
 
     chosen = '0;
     for (lane = 0; lane < IW; lane = lane + 1) begin
@@ -180,17 +194,6 @@ module issue_queue #(
       end
     end
   end
-
-  // ---- 同拍 CDB 旁路匹配 --------------------------------------------------
-  function automatic logic tag_hit(input logic [PW-1:0] tag);
-    integer w;
-    begin
-      tag_hit = 1'b0;
-      for (w = 0; w < R; w = w + 1)
-        if (wake_valid[w] && (wake_tag[w*PW +: PW] == tag))
-          tag_hit = 1'b1;
-    end
-  endfunction
 
   // ---- 时序 ----------------------------------------------------------------
 

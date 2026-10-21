@@ -53,14 +53,20 @@ module student_top (
   logic        if_refill_resp_valid;
   logic [31:0] if_refill_rdata;
 
-  // data memory
-  logic        data_req_valid;
-  logic        data_req_we;
-  logic [31:0] data_req_addr;
-  logic [31:0] data_req_wdata;
-  logic [3:0]  data_req_wstrb;
-  logic        data_resp_valid;
-  logic [31:0] data_resp_rdata;
+  // pipelined load interface
+  logic        ld_req_valid;
+  logic [31:0] ld_req_addr;
+  logic        ld_req_ready;
+  logic        ld_resp_valid;
+  logic [31:0] ld_resp_rdata;
+
+  // pipelined store interface
+  logic        st_req_valid;
+  logic [31:0] st_req_addr;
+  logic [31:0] st_req_wdata;
+  logic [3:0]  st_req_wstrb;
+  logic        st_req_ready;
+  logic        st_resp_valid;
 
   core_ooo u_core (
     .clk               (clock),
@@ -89,13 +95,17 @@ module student_top (
     .complete       (complete),
     .br_update      (br_update),
     .backend_ready  (backend_ready),
-    .data_req_valid (data_req_valid),
-    .data_req_we    (data_req_we),
-    .data_req_addr  (data_req_addr),
-    .data_req_wdata (data_req_wdata),
-    .data_req_wstrb (data_req_wstrb),
-    .data_resp_valid(data_resp_valid),
-    .data_resp_rdata(data_resp_rdata)
+    .ld_req_valid   (ld_req_valid),
+    .ld_req_addr    (ld_req_addr),
+    .ld_req_ready   (ld_req_ready),
+    .ld_resp_valid  (ld_resp_valid),
+    .ld_resp_rdata  (ld_resp_rdata),
+    .st_req_valid   (st_req_valid),
+    .st_req_addr    (st_req_addr),
+    .st_req_wdata   (st_req_wdata),
+    .st_req_wstrb   (st_req_wstrb),
+    .st_req_ready   (st_req_ready),
+    .st_resp_valid  (st_resp_valid)
   );
 
   mem_subsystem u_mem (
@@ -105,13 +115,24 @@ module student_top (
     .if_req_addr     (if_refill_addr),
     .if_resp_valid   (if_refill_resp_valid),
     .if_resp_rdata   (if_refill_rdata),
-    .data_req_valid  (data_req_valid),
-    .data_req_we     (data_req_we),
-    .data_req_addr   (data_req_addr),
-    .data_req_wdata  (data_req_wdata),
-    .data_req_wstrb  (data_req_wstrb),
-    .data_resp_valid (data_resp_valid),
-    .data_resp_rdata (data_resp_rdata),
+    .ld_req_valid    (ld_req_valid),
+    .ld_req_addr     (ld_req_addr),
+    .ld_req_ready    (ld_req_ready),
+    .ld_resp_valid   (ld_resp_valid),
+    .ld_resp_rdata   (ld_resp_rdata),
+    .st_req_valid    (st_req_valid),
+    .st_req_addr     (st_req_addr),
+    .st_req_wdata    (st_req_wdata),
+    .st_req_wstrb    (st_req_wstrb),
+    .st_req_ready    (st_req_ready),
+    .st_resp_valid   (st_resp_valid),
+    .data_req_valid  (1'b0),
+    .data_req_we     (1'b0),
+    .data_req_addr   (32'b0),
+    .data_req_wdata  (32'b0),
+    .data_req_wstrb  (4'b0),
+    .data_resp_valid (),
+    .data_resp_rdata (),
     .araddr          (araddr),
     .arvalid         (arvalid),
     .arready         (arready),

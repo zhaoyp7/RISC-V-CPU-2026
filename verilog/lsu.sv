@@ -1,19 +1,20 @@
 // -----------------------------------------------------------------------------
-// lsu.sv — load/store 执行单元 v1
+// lsu.sv — load/store 执行单元 v2（流水化）
 //
-// 职责：
-//   - 接收 IQ 发射的一条 load/store uop，计算地址、写掩码；
-//   - store：填入 LSQ，发 complete（不写内存，等 commit 后由 LSQ drain）；
-//   - load：等更老 store 地址已知/同地址 store 写完后，发 data_mem 读；
-//     响应按 mem_size/mem_unsigned 格式化，经 CDB 写回；
-//   - 与 mem_subsystem 的 data_mem 单未完成事务握手；
-//   - squash 丢弃年轻 load；已发出的读响应到达后静默丢弃。
-//
-// P1 串行化 load：同一时刻最多一个 load 在等待/读内存/结果待广播。
+// load：
+//   - 从 IQ 接收一条 load，地址消歧通过后立即发到 mem_subsystem；
+//   - 最多 LDQ_DEPTH 笔在途，元数据按序入队；响应按序返回并格式化；
+//   - 结果进入结果 FIFO，经 CDB 写回；
+//   - squash 按 seq 标记丢弃；已发出的请求等响应到达后静默丢弃。
+// store：
+//   - issue 时填 LSQ 并立即发 complete（提交前不写内存）；
+//   - commit 后由 LSQ 按序 drain 到 store 流；写响应返回后释放 LSQ 表项；
+//   - 写请求/响应都是流水线，不再一次只等一个 store。
 // -----------------------------------------------------------------------------
 
 module lsu #(
-  parameter integer W = `CPU_ISSUE_WIDTH
+  parameter integer W         = `CPU_ISSUE_WIDTH,
+  parameter integer LDQ_DEPTH = 8
 ) (
   input  logic clk,
   input  logic reset,
@@ -58,14 +59,20 @@ module lsu #(
   output logic [`CPU_PRF_IDX_W-1:0]    store_complete_tag,
   output logic                         store_complete_exception,
 
-  // data memory
-  output logic                         data_req_valid,
-  output logic                         data_req_we,
-  output logic [31:0]                  data_req_addr,
-  output logic [31:0]                  data_req_wdata,
-  output logic [3:0]                   data_req_wstrb,
-  input  logic                         data_resp_valid,
-  input  logic [31:0]                  data_resp_rdata,
+  // pipelined load memory interface
+  output logic                         ld_req_valid,
+  output logic [31:0]                  ld_req_addr,
+  input  logic                         ld_req_ready,
+  input  logic                         ld_resp_valid,
+  input  logic [31:0]                  ld_resp_rdata,
+
+  // pipelined store memory interface
+  output logic                         st_req_valid,
+  output logic [31:0]                  st_req_addr,
+  output logic [31:0]                  st_req_wdata,
+  output logic [3:0]                   st_req_wstrb,
+  input  logic                         st_req_ready,
+  input  logic                         st_resp_valid,
 
   output logic                         busy
 );
@@ -74,6 +81,7 @@ module lsu #(
   localparam integer LW = `CPU_LSQ_IDX_W;
   localparam integer RW = `CPU_ROB_TAG_W;
   localparam integer DW = `CPU_DISPATCH_W;
+  localparam integer MDW = (LDQ_DEPTH > 1) ? $clog2(LDQ_DEPTH) : 1;
 
   // ---- issue uop 解包 ------------------------------------------------------
   logic [31:0] issue_pc, issue_imm, issue_inst;
@@ -135,72 +143,72 @@ module lsu #(
     end
   endfunction
 
-  // ---- load 状态 ----------------------------------------------------------
-  logic        load_active;
-  logic        load_waiting;
-  logic        load_inflight;
-  logic        load_squashed;
-  logic [31:0] load_seq;
-  logic        load_illegal;
-  logic [LW-1:0] load_id;
-  logic [RW-1:0] load_rob;
-  logic [PW-1:0] load_tag;
-  logic [31:0]   load_addr;
-  logic [1:0]    load_size;
-  logic          load_unsigned;
+  // ---- load 元数据 / 结果队列索引 ----------------------------------------
+  logic [MDW-1:0]              md_head, md_tail;
+  logic [MDW:0]                ld_count;
+  logic [LDQ_DEPTH-1:0]        md_valid;
+  logic [LDQ_DEPTH*PW-1:0]     md_tag;
+  logic [LDQ_DEPTH*32-1:0]     md_seq;
+  logic [LDQ_DEPTH*LW-1:0]     md_lsq;
+  logic [LDQ_DEPTH*2-1:0]      md_off;
+  logic [LDQ_DEPTH*2-1:0]      md_size;
+  logic [LDQ_DEPTH-1:0]        md_unsigned;
+  logic [LDQ_DEPTH-1:0]        md_discard;
 
-  logic          query_valid;
-  logic          query_blocked;
+  logic [MDW-1:0]              rq_head, rq_tail;
+  logic [MDW:0]                rq_count;
+  logic [LDQ_DEPTH-1:0]        rq_valid;
+  logic [LDQ_DEPTH*PW-1:0]     rq_tag;
+  logic [LDQ_DEPTH*32-1:0]     rq_value;
+  logic [LDQ_DEPTH*32-1:0]     rq_seq;
+  logic [LDQ_DEPTH-1:0]        rq_exc;
+  logic [LDQ_DEPTH-1:0]        rq_discard;
 
-  assign query_valid = load_active && load_waiting;
-
-  logic load_squash_now;
-  assign load_squash_now = squash_valid && load_active &&
-                           (load_seq > squash_seq);
-
-  // ---- data_mem 状态 ------------------------------------------------------
-  logic        mem_busy;
-  logic        mem_owner_store;
-  logic [31:0] mem_addr, mem_wdata;
-  logic [3:0]  mem_wstrb;
-
-  logic        store_drain_valid;
-  logic [LW-1:0] store_drain_id;
-  logic [31:0] store_drain_addr, store_drain_wdata;
-  logic [3:0]  store_drain_wstrb;
-  logic        drain_done;
-
-  assign drain_done = mem_busy && mem_owner_store && data_resp_valid;
-
-  assign busy = load_active || mem_busy || store_drain_valid;
+  // ---- LSQ 查询 -----------------------------------------------------------
+  logic lsq_query_blocked;
+  logic query_blocked;
+  assign query_blocked = issue_is_load && !issue_illegal && lsq_query_blocked;
 
   // ---- issue 握手 ---------------------------------------------------------
-  logic load_issue, store_issue;
+  logic ld_space;
+  logic illegal_slot_ok;
 
-  assign load_issue  = issue_valid && issue_ready && issue_is_load;
-  assign store_issue = issue_valid && issue_ready && issue_is_store;
+  assign ld_space = (ld_count < LDQ_DEPTH);
 
   always_comb begin
     issue_ready = 1'b1;
-    if (issue_is_load)
-      issue_ready = !load_active && !load_result_valid;
+    if (issue_is_load) begin
+      if (issue_illegal) begin
+        // 非法 load 走结果队列，不能和已有响应同拍压入。
+        issue_ready = illegal_slot_ok;
+      end else begin
+        issue_ready = !query_blocked && ld_space && ld_req_ready;
+      end
+    end
   end
 
-  // ---- LSQ 接口 -----------------------------------------------------------
-  logic        fill_valid;
-  logic [LW-1:0] fill_id;
-  logic [31:0] fill_addr, fill_wdata;
-  logic [3:0]  fill_wstrb;
-  logic        fill_is_store;
-  logic [7:0]  lsq_count;
+  logic load_issue, store_issue;
+  assign load_issue  = issue_valid && issue_ready && issue_is_load;
+  assign store_issue = issue_valid && issue_ready && issue_is_store;
 
-  assign fill_valid    = load_issue || store_issue;
-  assign fill_id       = issue_lsq;
-  assign fill_addr     = issue_addr;
-  assign fill_wdata    = issue_wdata;
-  // Illegal stores must not modify memory: fill a zero write mask.
-  assign fill_wstrb    = issue_illegal ? 4'b0 : issue_wstrb;
-  assign fill_is_store = issue_is_store;
+  assign ld_req_valid = load_issue && !issue_illegal;
+  assign ld_req_addr  = issue_addr;
+
+  // ---- store 流 -----------------------------------------------------------
+  logic        drain_valid;
+  logic [LW-1:0] drain_id;
+  logic [31:0] drain_addr, drain_wdata;
+  logic [3:0]  drain_wstrb;
+  logic        drain_fire;
+
+  assign st_req_valid = drain_valid;
+  assign st_req_addr  = drain_addr;
+  assign st_req_wdata = drain_wdata;
+  assign st_req_wstrb = drain_wstrb;
+  assign drain_fire   = drain_valid && st_req_ready;
+
+  // ---- LSQ ----------------------------------------------------------------
+  logic [7:0] lsq_count;
 
   lsq #(.W(W)) u_lsq (
     .clk             (clk),
@@ -213,189 +221,149 @@ module lsu #(
     .alloc_fire      (alloc_fire),
     .seq_base        (seq_base),
     .squash_seq      (squash_seq),
-    .fill_valid      (fill_valid),
-    .fill_id         (fill_id),
-    .fill_addr       (fill_addr),
-    .fill_wdata      (fill_wdata),
-    .fill_wstrb      (fill_wstrb),
-    .fill_is_store   (fill_is_store),
+    .fill_valid      (load_issue || store_issue),
+    .fill_id         (issue_lsq),
+    .fill_addr       (issue_addr),
+    .fill_wdata      (issue_wdata),
+    .fill_wstrb      (issue_illegal ? 4'b0 : issue_wstrb),
+    .fill_is_store   (issue_is_store),
     .commit_valid    (commit_valid),
     .commit_is_store (commit_is_store),
     .commit_is_load  (commit_is_load),
     .commit_id       (commit_id),
     .squash_valid    (squash_valid),
-    .drain_valid     (store_drain_valid),
-    .drain_id        (store_drain_id),
-    .drain_addr      (store_drain_addr),
-    .drain_wdata     (store_drain_wdata),
-    .drain_wstrb     (store_drain_wstrb),
-    .drain_done      (drain_done),
-    .query_valid     (query_valid),
-    .query_id        (load_id),
-    .query_addr      (load_addr),
-    .query_blocked   (query_blocked),
+    .drain_valid     (drain_valid),
+    .drain_id        (drain_id),
+    .drain_addr      (drain_addr),
+    .drain_wdata     (drain_wdata),
+    .drain_wstrb     (drain_wstrb),
+    .drain_fire      (drain_fire),
+    .store_resp_valid(st_resp_valid),
+    .query_valid     (issue_is_load && !issue_illegal),
+    .query_seq       (issue_seq),
+    .query_addr      (issue_addr),
+    .query_blocked   (lsq_query_blocked),
     .count           (lsq_count)
   );
 
-  // ---- data_mem 握手 ------------------------------------------------------
-  assign data_req_valid = mem_busy;
-  assign data_req_we    = mem_owner_store;
-  assign data_req_addr  = mem_addr;
-  assign data_req_wdata = mem_wdata;
-  assign data_req_wstrb = mem_wstrb;
+  // ---- 本拍结果入队条件 ---------------------------------------------------
+  logic md_resp_fire;
+  logic md_resp_keep;
+  logic rq_push;
+  logic rq_pop;
 
-  // ---- 结果寄存器 ---------------------------------------------------------
-  logic                         load_result_valid_q;
-  logic [PW-1:0]                load_result_tag_q;
-  logic [31:0]                  load_result_value_q;
-  logic                         load_result_exception_q;
+  assign md_resp_fire = ld_resp_valid && (ld_count != 0);
+  assign md_resp_keep = md_resp_fire && !md_discard[md_head] &&
+                        !(squash_valid &&
+                          (md_seq[md_head*32 +: 32] > squash_seq));
+  assign rq_push = md_resp_keep || (load_issue && issue_illegal);
+  assign rq_pop  = (rq_count != 0) &&
+                   (rq_discard[rq_head] || load_result_ready);
+
+  // 非法 load 与已有响应同拍会需要两个结果写口，直接延后一拍。
+  // （load issue 需要 issue_valid，响应同拍只会发生在该 load 已入 IQ 后）
+  assign illegal_slot_ok = !md_resp_fire;
+
+  // ---- 结果输出 -----------------------------------------------------------
+  assign load_result_valid     = (rq_count != 0) && !rq_discard[rq_head] &&
+                                 !(squash_valid &&
+                                   (rq_seq[rq_head*32 +: 32] > squash_seq));
+  assign load_result_tag       = rq_tag[rq_head*PW +: PW];
+  assign load_result_value     = rq_value[rq_head*32 +: 32];
+  assign load_result_exception = rq_exc[rq_head];
+
+  // ---- store complete -----------------------------------------------------
   logic                         store_complete_valid_q;
   logic [PW-1:0]                store_complete_tag_q;
-  logic [31:0]                  store_complete_seq_q;
-  logic                         store_complete_exception_q;
+  logic                         store_complete_exc_q;
 
-  assign load_result_valid     = load_result_valid_q;
-  assign load_result_tag       = load_result_tag_q;
-  assign load_result_value     = load_result_value_q;
-  assign load_result_exception = load_result_exception_q;
-  assign store_complete_valid  = store_complete_valid_q;
-  assign store_complete_tag    = store_complete_tag_q;
-  assign store_complete_exception = store_complete_exception_q;
+  assign store_complete_valid     = store_complete_valid_q;
+  assign store_complete_tag       = store_complete_tag_q;
+  assign store_complete_exception = store_complete_exc_q;
+
+  assign busy = (ld_count != 0) || (rq_count != 0) || (lsq_count != 0);
 
   // ---- 时序 ---------------------------------------------------------------
+  integer i;
+
   always_ff @(posedge clk) begin
     if (reset) begin
-      load_active            <= 1'b0;
-      load_waiting           <= 1'b0;
-      load_inflight          <= 1'b0;
-      load_squashed          <= 1'b0;
-      load_illegal           <= 1'b0;
-      mem_busy               <= 1'b0;
-      mem_owner_store        <= 1'b0;
-      load_result_valid_q    <= 1'b0;
+      md_valid      <= '0;
+      md_discard    <= '0;
+      md_head       <= '0;
+      md_tail       <= '0;
+      ld_count      <= '0;
+      rq_valid      <= '0;
+      rq_discard    <= '0;
+      rq_head       <= '0;
+      rq_tail       <= '0;
+      rq_count      <= '0;
       store_complete_valid_q <= 1'b0;
     end else begin
-      // 结果握手：CDB 吸收后清除；默认先清，再用本拍新响应覆盖。
-      if (load_result_valid_q && load_result_ready)
-        load_result_valid_q <= 1'b0;
       store_complete_valid_q <= 1'b0;
 
-      // squash：等待中的 load 直接取消；已在内存管线中的等响应后丢弃。
-      // store 的 complete 脉冲若属于年轻路径也必须撤销。
-      if (squash_valid && store_complete_valid_q &&
-          (store_complete_seq_q > squash_seq))
-        store_complete_valid_q <= 1'b0;
-      if (load_squash_now) begin
-        if (!load_inflight || !mem_busy || mem_owner_store) begin
-          // 请求尚未真正发出（或当前 mem 事务属于 store）：直接取消。
-          load_active   <= 1'b0;
-          load_waiting  <= 1'b0;
-          load_inflight <= 1'b0;
-          load_squashed <= 1'b0;
-        end else begin
-          // 读请求已在途：等响应返回后丢弃。
-          load_squashed <= 1'b1;
-        end
-      end else if (load_squashed && !mem_busy) begin
-        // squash 时恰好还未启动请求：清理，避免永久占住 LSU。
-        load_active   <= 1'b0;
-        load_waiting  <= 1'b0;
-        load_inflight <= 1'b0;
-        load_squashed <= 1'b0;
-      end else if (load_active && load_waiting && !query_blocked) begin
-        // 更老 store 约束满足，下一拍发起读请求。
-        load_waiting  <= 1'b0;
-        load_inflight <= 1'b1;
+      // ---- load issue：入元数据队列 --------------------------------------
+      if (load_issue && !issue_illegal) begin
+        md_valid[md_tail]         <= 1'b1;
+        md_tag[md_tail*PW +: PW]  <= issue_dest;
+        md_seq[md_tail*32 +: 32]  <= issue_seq;
+        md_lsq[md_tail*LW +: LW]  <= issue_lsq;
+        md_off[md_tail*2 +: 2]    <= issue_addr[1:0];
+        md_size[md_tail*2 +: 2]   <= issue_mem_size;
+        md_unsigned[md_tail]      <= issue_mem_unsigned;
+        md_discard[md_tail]       <= 1'b0;
+        md_tail <= (md_tail == LDQ_DEPTH - 1) ? '0 : md_tail + 1'b1;
       end
 
-      // 发射 load / store
-      if (load_issue) begin
-        if (issue_illegal) begin
-          // 非法 load 不访问内存，直接产生异常结果；LSQ 表项仍保留到
-          // commit 时按 load 释放。
-          load_result_valid_q     <= 1'b1;
-          load_result_tag_q       <= issue_dest;
-          load_result_value_q     <= 32'b0;
-          load_result_exception_q <= 1'b1;
-        end else begin
-          load_active   <= 1'b1;
-          load_waiting  <= 1'b1;
-          load_inflight <= 1'b0;
-          load_squashed <= 1'b0;
-          load_illegal  <= 1'b0;
-          load_id       <= issue_lsq;
-          load_rob      <= issue_rob;
-          load_seq      <= issue_seq;
-          load_tag      <= issue_dest;
-          load_addr     <= issue_addr;
-          load_size     <= issue_mem_size;
-          load_unsigned <= issue_mem_unsigned;
+      // ---- load response：出队、格式化、入结果队列 ------------------------
+      if (md_resp_fire)
+        md_head <= (md_head == LDQ_DEPTH - 1) ? '0 : md_head + 1'b1;
+
+      if (rq_push) begin
+        rq_valid[rq_tail]          <= 1'b1;
+        rq_tag[rq_tail*PW +: PW]   <= load_issue && issue_illegal ? issue_dest :
+                                      md_tag[md_head*PW +: PW];
+        rq_value[rq_tail*32 +: 32] <= load_issue && issue_illegal ? 32'b0 :
+            format_load(ld_resp_rdata, md_size[md_head*2 +: 2],
+                        md_off[md_head*2 +: 2], md_unsigned[md_head]);
+        rq_seq[rq_tail*32 +: 32]   <= load_issue && issue_illegal ? issue_seq :
+                                      md_seq[md_head*32 +: 32];
+        rq_exc[rq_tail]            <= load_issue && issue_illegal;
+        rq_discard[rq_tail]        <= squash_valid &&
+                                      ((load_issue && issue_illegal ?
+                                        issue_seq : md_seq[md_head*32 +: 32])
+                                       > squash_seq);
+        rq_tail <= (rq_tail == LDQ_DEPTH - 1) ? '0 : rq_tail + 1'b1;
+      end
+
+      // ---- 结果队列出队 ---------------------------------------------------
+      if (rq_pop)
+        rq_head <= (rq_head == LDQ_DEPTH - 1) ? '0 : rq_head + 1'b1;
+
+      // ---- squash：标记年轻条目 ------------------------------------------
+      if (squash_valid) begin
+        for (i = 0; i < LDQ_DEPTH; i = i + 1) begin
+          if (md_valid[i] && (md_seq[i*32 +: 32] > squash_seq))
+            md_discard[i] <= 1'b1;
+          if (rq_valid[i] && (rq_seq[i*32 +: 32] > squash_seq))
+            rq_discard[i] <= 1'b1;
         end
       end
 
+      // ---- 计数 -----------------------------------------------------------
+      ld_count <= ld_count +
+                  ((load_issue && !issue_illegal) ? 1'b1 : 1'b0) -
+                  (md_resp_fire ? 1'b1 : 1'b0);
+      rq_count <= rq_count + (rq_push ? 1'b1 : 1'b0) -
+                             (rq_pop  ? 1'b1 : 1'b0);
+
+      // ---- store complete -------------------------------------------------
       if (store_issue) begin
-        store_complete_valid_q     <= 1'b1;
-        store_complete_tag_q       <= issue_dest;
-        store_complete_seq_q       <= issue_seq;
-        store_complete_exception_q <= issue_illegal;
-      end
-
-      // data_mem 请求启动：store drain 优先，其次 load。
-      if (!mem_busy) begin
-        if (store_drain_valid) begin
-          mem_busy        <= 1'b1;
-          mem_owner_store <= 1'b1;
-          mem_addr        <= store_drain_addr;
-          mem_wdata       <= store_drain_wdata;
-          mem_wstrb       <= store_drain_wstrb;
-        end else if (load_active && load_inflight && !load_squashed &&
-                     !load_squash_now) begin
-          mem_busy        <= 1'b1;
-          mem_owner_store <= 1'b0;
-          mem_addr        <= load_addr;
-          mem_wdata       <= 32'b0;
-          mem_wstrb       <= 4'b0;
-        end
-      end
-
-      // data_mem 响应
-      if (mem_busy && data_resp_valid) begin
-        mem_busy <= 1'b0;
-        if (!mem_owner_store) begin
-          if (!load_squashed && !load_squash_now) begin
-            load_result_valid_q     <= 1'b1;
-            load_result_tag_q       <= load_tag;
-            load_result_value_q     <= format_load(data_resp_rdata, load_size,
-                                                   load_addr[1:0], load_unsigned);
-            load_result_exception_q <= 1'b0;
-          end
-          load_active   <= 1'b0;
-          load_waiting  <= 1'b0;
-          load_inflight <= 1'b0;
-          load_squashed <= 1'b0;
-        end
+        store_complete_valid_q <= !(squash_valid && (issue_seq > squash_seq));
+        store_complete_tag_q   <= issue_dest;
+        store_complete_exc_q   <= issue_illegal;
       end
     end
   end
-
-`ifdef LOCAL_TRACE
-  always_ff @(posedge clk) begin
-    if (!reset) begin
-      if (issue_valid && issue_ready)
-        $display("[LSU_ISSUE] t=%0t pc=%08x ld=%0b st=%0b lsq=%0d rob=%0d addr=%08x",
-                 $time, issue_pc, issue_is_load, issue_is_store, issue_lsq,
-                 issue_rob, issue_addr);
-      if (load_result_valid)
-        $display("[LOAD_RES] t=%0t tag=%0d val=%08x exc=%0b",
-                 $time, load_result_tag, load_result_value,
-                 load_result_exception);
-      if (store_complete_valid)
-        $display("[ST_COMPLETE] t=%0t tag=%0d exc=%0b",
-                 $time, store_complete_tag, store_complete_exception);
-      if (squash_valid)
-        $display("[LSU_SQUASH] t=%0t rob=%0d", $time, squash_rob_idx);
-    end
-  end
-`endif
 
 endmodule

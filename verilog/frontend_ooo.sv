@@ -3,20 +3,22 @@
 //
 // 组成：
 //   pc_unit + icache_pipe + decoder + bpu
-//   + W 项 decoded-uop 输出缓冲（吸收 rename 反压）
+//   + W 项 decoded-uop 输出 + 小型 fetch FIFO（吸收 rename/后端反压）
 //
-// P1 W=1：每拍取一条、填满 1 个 slot 后送出。
-// P2 预研 W=2：I-Cache 仍每拍取一条，但用 2 个 slot 成组送给 rename/ROB，
-// 用于验证双 lane 重命名/提交；还没有实现双宽 I-Cache 取指。
+// P2：I-Cache 仍每拍取一条，但用 FIFO 解耦取指与 rename。这样 W=1 可以
+// 连续每拍送出一条，W=2 也能在 FIFO 有积压时成组送出两条。
+// 预测 taken 的分支是 FIFO 中最年轻的项（取指在下一拍被切断），不会把
+// 错误路径送进 FIFO。
 //
 // 控制：
-//   - backend_ready=0 时冻结取指与输出；
-//   - ROB 的 redirect_valid/redirect_pc 冲刷 I-Cache、清空 slot、切 PC；
-//   - br_update 每拍更新 BPU（upd_is_uncond 由 ROB 根据对应表项给出）。
+//   - backend_ready=0 时冻结取指；
+//   - ROB redirect 清空 FIFO 并切 PC；
+//   - bpu_redirect_q 只切 PC / 冲刷 I-Cache 流水，FIFO 中已有指令继续送。
 // -----------------------------------------------------------------------------
 
 module frontend_ooo #(
-  parameter integer W = `CPU_ISSUE_WIDTH
+  parameter integer W     = `CPU_ISSUE_WIDTH,
+  parameter integer FDEPTH = 8
 ) (
   input  logic        clk,
   input  logic        reset,
@@ -49,34 +51,34 @@ module frontend_ooo #(
 );
 
   localparam integer PW = `CPU_PRF_IDX_W;
+  localparam integer FW = (FDEPTH > 1) ? $clog2(FDEPTH) : 1;
+  localparam integer FCW = FW + 1;
 
   // ---- PC ----------------------------------------------------------------
   logic [31:0] pc;
   logic        pc_advance;
   logic        fetch_ready;
   logic        bpu_redirect_comb;
-  logic        bpu_redirect_q;
-  logic [31:0] bpu_redirect_pc_q;
 
   pc_unit u_pc (
     .clk            (clk),
     .reset          (reset),
     .advance        (pc_advance),
     .stall          (1'b0),
-    .redirect_valid (redirect_valid || bpu_redirect_q),
-    .redirect_pc    (redirect_valid ? redirect_pc : bpu_redirect_pc_q),
+    .redirect_valid (redirect_valid || bpu_redirect_comb),
+    .redirect_pc    (redirect_valid ? redirect_pc : bpu_target),
     .pc             (pc)
   );
 
   assign pc_out = pc;
 
-  // ---- decoded-uop slot 缓冲 ---------------------------------------------
-  logic [W-1:0]                 slot_valid;
-  logic [`CPU_DECODE_W-1:0]     slot_uop   [0:W-1];
-  logic                         slot_pred_taken  [0:W-1];
-  logic [31:0]                  slot_pred_target [0:W-1];
-  logic [2:0]                   fill_ptr;
-  logic                         all_full;
+  // ---- fetch FIFO --------------------------------------------------------
+  logic [FDEPTH-1:0]              fq_valid;
+  logic [FDEPTH*`CPU_DECODE_W-1:0] fq_uop;
+  logic [FDEPTH-1:0]              fq_pred_taken;
+  logic [FDEPTH*32-1:0]           fq_pred_target;
+  logic [FW-1:0]                  fq_head, fq_tail;
+  logic [FCW-1:0]                 fq_count;
 
   logic        fetch_valid;
   logic        resp_valid;
@@ -84,39 +86,32 @@ module frontend_ooo #(
   logic [31:0] resp_inst;
   logic        resp_ready;
 
-  assign all_full = (fill_ptr == W);
-  // BPU 预测 taken 时，本条分支指令已经在本拍被接收进 slot；下一拍 PC
-  // 必须切到预测目标。重定向寄存一拍，避免
-  // bpu_redirect -> icache.flush -> fetch_resp_valid -> bpu_redirect 组合环。
+  logic        pop_fire;
+  logic [FCW-1:0] pop_n;
+  logic        fq_has_space;
+
+  assign pop_n     = (fq_count >= W) ? W[FCW-1:0] : fq_count;
+  assign pop_fire  = (fq_count != 0) && rename_ready;
+  assign fq_has_space = (fq_count < FDEPTH) || pop_fire;
+
+  // BPU 预测 taken：分支响应当拍切断顺序取指，并用组合重定向切 PC。
+  // I-Cache 用 discard（只清 s1/s2 的年轻项，不压制当前 resp）而不是 flush，
+  // 避免 bpu_redirect -> flush -> resp 的组合环，同时省掉一拍重定向气泡。
   assign bpu_redirect_comb = resp_valid && resp_ready && !redirect_valid &&
-                             !bpu_redirect_q &&
                              (dec_is_branch || dec_is_jal || dec_is_jalr) &&
                              bpu_taken;
   assign fetch_valid = backend_ready && !redirect_valid &&
-                       !bpu_redirect_comb && !bpu_redirect_q &&
-                       (fill_ptr < W) && !reset;
+                       !bpu_redirect_comb && fq_has_space && !reset;
   assign pc_advance  = fetch_valid && fetch_ready;
-  assign resp_ready  = backend_ready && !redirect_valid &&
-                       !bpu_redirect_q && (fill_ptr < W);
-
-  always_ff @(posedge clk) begin
-    if (reset || redirect_valid) begin
-      bpu_redirect_q    <= 1'b0;
-      bpu_redirect_pc_q <= 32'b0;
-    end else if (bpu_redirect_comb) begin
-      bpu_redirect_q    <= 1'b1;
-      bpu_redirect_pc_q <= bpu_target;
-    end else begin
-      bpu_redirect_q    <= 1'b0;
-    end
-  end
+  assign resp_ready  = backend_ready && !redirect_valid && fq_has_space;
 
   icache_pipe #(
     .INDEX_BITS (`CPU_ICACHE_INDEX_BITS)
   ) u_icache (
     .clk               (clk),
     .reset             (reset),
-    .flush             (redirect_valid || bpu_redirect_q),
+    .flush             (redirect_valid),
+    .discard           (bpu_redirect_comb),
     .fetch_valid       (fetch_valid),
     .fetch_pc          (pc),
     .fetch_ready       (fetch_ready),
@@ -182,100 +177,74 @@ module frontend_ooo #(
     .upd_is_uncond   (br_update_uncond)
   );
 
-  // ---- 输出 --------------------------------------------------------------
+  // ---- 输出：FIFO 头部最多 W 条 ------------------------------------------
   integer i_out;
   always_comb begin
     dec_valid       = '0;
     dec_uop         = '0;
     dec_pred_taken  = '0;
     dec_pred_target = '0;
-
     for (i_out = 0; i_out < W; i_out = i_out + 1) begin
-      dec_valid[i_out] = all_full;
-      dec_uop[i_out*`CPU_DECODE_W + `CPU_DISPATCH_PC_OFF +: 32] =
-          slot_uop[i_out][`CPU_DISPATCH_PC_OFF +: 32];
-      dec_uop[i_out*`CPU_DECODE_W + `CPU_DISPATCH_INST_OFF +: 32] =
-          slot_uop[i_out][`CPU_DISPATCH_INST_OFF +: 32];
-      dec_uop[i_out*`CPU_DECODE_W + `CPU_DISPATCH_IMM_OFF +: 32] =
-          slot_uop[i_out][`CPU_DISPATCH_IMM_OFF +: 32];
-      dec_uop[i_out*`CPU_DECODE_W + `CPU_DISPATCH_RD_OFF +: 5] =
-          slot_uop[i_out][`CPU_DISPATCH_RD_OFF +: 5];
-      dec_uop[i_out*`CPU_DECODE_W + `CPU_DISPATCH_REG_WE_OFF] =
-          slot_uop[i_out][`CPU_DISPATCH_REG_WE_OFF];
-      dec_uop[i_out*`CPU_DECODE_W + `CPU_DISPATCH_ALU_OP_OFF +: 5] =
-          slot_uop[i_out][`CPU_DISPATCH_ALU_OP_OFF +: 5];
-      dec_uop[i_out*`CPU_DECODE_W + `CPU_DISPATCH_A_SEL_OFF +: 2] =
-          slot_uop[i_out][`CPU_DISPATCH_A_SEL_OFF +: 2];
-      dec_uop[i_out*`CPU_DECODE_W + `CPU_DISPATCH_B_SEL_OFF] =
-          slot_uop[i_out][`CPU_DISPATCH_B_SEL_OFF];
-      dec_uop[i_out*`CPU_DECODE_W + `CPU_DISPATCH_WB_SEL_OFF +: 2] =
-          slot_uop[i_out][`CPU_DISPATCH_WB_SEL_OFF +: 2];
-      dec_uop[i_out*`CPU_DECODE_W + `CPU_DISPATCH_IS_BRANCH_OFF] =
-          slot_uop[i_out][`CPU_DISPATCH_IS_BRANCH_OFF];
-      dec_uop[i_out*`CPU_DECODE_W + `CPU_DISPATCH_IS_JAL_OFF] =
-          slot_uop[i_out][`CPU_DISPATCH_IS_JAL_OFF];
-      dec_uop[i_out*`CPU_DECODE_W + `CPU_DISPATCH_IS_JALR_OFF] =
-          slot_uop[i_out][`CPU_DISPATCH_IS_JALR_OFF];
-      dec_uop[i_out*`CPU_DECODE_W + `CPU_DISPATCH_IS_LOAD_OFF] =
-          slot_uop[i_out][`CPU_DISPATCH_IS_LOAD_OFF];
-      dec_uop[i_out*`CPU_DECODE_W + `CPU_DISPATCH_IS_STORE_OFF] =
-          slot_uop[i_out][`CPU_DISPATCH_IS_STORE_OFF];
-      dec_uop[i_out*`CPU_DECODE_W + `CPU_DISPATCH_ILLEGAL_OFF] =
-          slot_uop[i_out][`CPU_DISPATCH_ILLEGAL_OFF];
-      dec_uop[i_out*`CPU_DECODE_W + `CPU_DISPATCH_MEM_SIZE_OFF +: 2] =
-          slot_uop[i_out][`CPU_DISPATCH_MEM_SIZE_OFF +: 2];
-      dec_uop[i_out*`CPU_DECODE_W + `CPU_DISPATCH_MEM_UNSIGNED_OFF] =
-          slot_uop[i_out][`CPU_DISPATCH_MEM_UNSIGNED_OFF];
-      dec_uop[i_out*`CPU_DECODE_W + `CPU_DECODE_RS1_OFF +: 5] =
-          slot_uop[i_out][`CPU_DECODE_RS1_OFF +: 5];
-      dec_uop[i_out*`CPU_DECODE_W + `CPU_DECODE_RS2_OFF +: 5] =
-          slot_uop[i_out][`CPU_DECODE_RS2_OFF +: 5];
-      dec_pred_taken[i_out] = slot_pred_taken[i_out];
-      dec_pred_target[i_out*32 +: 32] = slot_pred_target[i_out];
+      if (i_out < fq_count) begin
+        dec_valid[i_out] = fq_valid[(fq_head + i_out) % FDEPTH];
+        dec_uop[i_out*`CPU_DECODE_W +: `CPU_DECODE_W] =
+            fq_uop[((fq_head + i_out) % FDEPTH)*`CPU_DECODE_W +: `CPU_DECODE_W];
+        dec_pred_taken[i_out]  = fq_pred_taken[(fq_head + i_out) % FDEPTH];
+        dec_pred_target[i_out*32 +: 32] =
+            fq_pred_target[((fq_head + i_out) % FDEPTH)*32 +: 32];
+      end
     end
   end
 
-  // ---- slot 写入/释放 ----------------------------------------------------
+  // ---- FIFO 时序 ---------------------------------------------------------
   integer i_slot;
   always_ff @(posedge clk) begin
     if (reset || redirect_valid) begin
-      slot_valid <= '0;
-      fill_ptr   <= '0;
+      fq_valid <= '0;
+      fq_head  <= '0;
+      fq_tail  <= '0;
+      fq_count <= '0;
     end else begin
+      // push 译码结果
       if (resp_valid && resp_ready) begin
-        for (i_slot = 0; i_slot < W; i_slot = i_slot + 1) begin
-          if (i_slot == fill_ptr) begin
-            slot_valid[i_slot] <= 1'b1;
-            slot_uop[i_slot][`CPU_DISPATCH_PC_OFF +: 32]      <= resp_pc;
-            slot_uop[i_slot][`CPU_DISPATCH_INST_OFF +: 32]    <= resp_inst;
-            slot_uop[i_slot][`CPU_DISPATCH_IMM_OFF +: 32]     <= dec_imm;
-            slot_uop[i_slot][`CPU_DISPATCH_RD_OFF +: 5]       <= dec_rd;
-            slot_uop[i_slot][`CPU_DISPATCH_REG_WE_OFF]        <= dec_reg_we;
-            slot_uop[i_slot][`CPU_DISPATCH_ALU_OP_OFF +: 5]   <= dec_alu_op;
-            slot_uop[i_slot][`CPU_DISPATCH_A_SEL_OFF +: 2]    <= dec_a_sel;
-            slot_uop[i_slot][`CPU_DISPATCH_B_SEL_OFF]         <= dec_b_sel;
-            slot_uop[i_slot][`CPU_DISPATCH_WB_SEL_OFF +: 2]   <= dec_wb_sel;
-            slot_uop[i_slot][`CPU_DISPATCH_IS_BRANCH_OFF]     <= dec_is_branch;
-            slot_uop[i_slot][`CPU_DISPATCH_IS_JAL_OFF]        <= dec_is_jal;
-            slot_uop[i_slot][`CPU_DISPATCH_IS_JALR_OFF]       <= dec_is_jalr;
-            slot_uop[i_slot][`CPU_DISPATCH_IS_LOAD_OFF]       <= dec_is_load;
-            slot_uop[i_slot][`CPU_DISPATCH_IS_STORE_OFF]      <= dec_is_store;
-            slot_uop[i_slot][`CPU_DISPATCH_ILLEGAL_OFF]       <= dec_illegal;
-            slot_uop[i_slot][`CPU_DISPATCH_MEM_SIZE_OFF +: 2] <= dec_mem_size;
-            slot_uop[i_slot][`CPU_DISPATCH_MEM_UNSIGNED_OFF]  <= dec_mem_unsigned;
-            slot_uop[i_slot][`CPU_DECODE_RS1_OFF +: 5]        <= dec_rs1;
-            slot_uop[i_slot][`CPU_DECODE_RS2_OFF +: 5]        <= dec_rs2;
-            slot_pred_taken[i_slot]  <= bpu_taken;
-            slot_pred_target[i_slot] <= bpu_target;
-          end
-        end
-        fill_ptr <= fill_ptr + 1'b1;
+        fq_valid[fq_tail] <= 1'b1;
+        fq_uop[fq_tail*`CPU_DECODE_W + `CPU_DISPATCH_PC_OFF +: 32]    <= resp_pc;
+        fq_uop[fq_tail*`CPU_DECODE_W + `CPU_DISPATCH_INST_OFF +: 32]  <= resp_inst;
+        fq_uop[fq_tail*`CPU_DECODE_W + `CPU_DISPATCH_IMM_OFF +: 32]   <= dec_imm;
+        fq_uop[fq_tail*`CPU_DECODE_W + `CPU_DISPATCH_RD_OFF +: 5]     <= dec_rd;
+        fq_uop[fq_tail*`CPU_DECODE_W + `CPU_DISPATCH_REG_WE_OFF]      <= dec_reg_we;
+        fq_uop[fq_tail*`CPU_DECODE_W + `CPU_DISPATCH_ALU_OP_OFF +: 5] <= dec_alu_op;
+        fq_uop[fq_tail*`CPU_DECODE_W + `CPU_DISPATCH_A_SEL_OFF +: 2]  <= dec_a_sel;
+        fq_uop[fq_tail*`CPU_DECODE_W + `CPU_DISPATCH_B_SEL_OFF]       <= dec_b_sel;
+        fq_uop[fq_tail*`CPU_DECODE_W + `CPU_DISPATCH_WB_SEL_OFF +: 2] <= dec_wb_sel;
+        fq_uop[fq_tail*`CPU_DECODE_W + `CPU_DISPATCH_IS_BRANCH_OFF]   <= dec_is_branch;
+        fq_uop[fq_tail*`CPU_DECODE_W + `CPU_DISPATCH_IS_JAL_OFF]      <= dec_is_jal;
+        fq_uop[fq_tail*`CPU_DECODE_W + `CPU_DISPATCH_IS_JALR_OFF]     <= dec_is_jalr;
+        fq_uop[fq_tail*`CPU_DECODE_W + `CPU_DISPATCH_IS_LOAD_OFF]     <= dec_is_load;
+        fq_uop[fq_tail*`CPU_DECODE_W + `CPU_DISPATCH_IS_STORE_OFF]    <= dec_is_store;
+        fq_uop[fq_tail*`CPU_DECODE_W + `CPU_DISPATCH_ILLEGAL_OFF]     <= dec_illegal;
+        fq_uop[fq_tail*`CPU_DECODE_W + `CPU_DISPATCH_MEM_SIZE_OFF +: 2] <= dec_mem_size;
+        fq_uop[fq_tail*`CPU_DECODE_W + `CPU_DISPATCH_MEM_UNSIGNED_OFF]  <= dec_mem_unsigned;
+        fq_uop[fq_tail*`CPU_DECODE_W + `CPU_DECODE_RS1_OFF +: 5]      <= dec_rs1;
+        fq_uop[fq_tail*`CPU_DECODE_W + `CPU_DECODE_RS2_OFF +: 5]      <= dec_rs2;
+        fq_pred_taken[fq_tail]  <= bpu_taken;
+        fq_pred_target[fq_tail*32 +: 32] <= bpu_target;
+        fq_tail <= (fq_tail == FDEPTH - 1) ? '0 : fq_tail + 1'b1;
       end
 
-      if (all_full && rename_ready) begin
-        slot_valid <= '0;
-        fill_ptr   <= '0;
+      // pop：一次送 W 条（或 FIFO 里剩余的全部）
+      if (pop_fire) begin
+        for (i_slot = 0; i_slot < W; i_slot = i_slot + 1) begin
+          if (i_slot < fq_count) begin
+            fq_valid[(fq_head + i_slot) % FDEPTH] <= 1'b0;
+          end
+        end
+        fq_head  <= (fq_head + pop_n) % FDEPTH;
       end
+
+      fq_count <= fq_count +
+                  ((resp_valid && resp_ready) ? 1'b1 : 1'b0) -
+                  (pop_fire ? pop_n : '0);
     end
   end
 
