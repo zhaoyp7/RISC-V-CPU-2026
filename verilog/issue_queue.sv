@@ -40,7 +40,7 @@ module issue_queue #(
   output logic [IW-1:0]                      out_valid,
   output logic [IW*`CPU_DISPATCH_W-1:0]      out_uop,
   output logic [IW*32-1:0]                   out_seq,
-  input  logic                               out_ready,
+  input  logic [IW-1:0]                      out_ready,
 
   // status
   output logic [7:0]                         count,
@@ -222,10 +222,10 @@ module issue_queue #(
         end
       end
 
-      // 3) 发射：吸收后释放表项
-      if (out_ready) begin
-        for (lane = 0; lane < IW; lane = lane + 1)
-          if (sel_valid[lane]) valid[sel_idx[lane]] <= 1'b0;
+      // 3) 发射：按 lane 分别接收，未接收的 lane 留在队列里
+      for (lane = 0; lane < IW; lane = lane + 1) begin
+        if (out_ready[lane] && sel_valid[lane])
+          valid[sel_idx[lane]] <= 1'b0;
       end
 
       // 4) dispatch 写入（最后执行，允许复用 squash 槽）
@@ -260,7 +260,7 @@ module issue_queue #(
                  in_uop[`CPU_DISPATCH_SRC1_READY_OFF],
                  in_uop[`CPU_DISPATCH_SRC2_TAG_OFF +: PW],
                  in_uop[`CPU_DISPATCH_SRC2_READY_OFF]);
-      if (out_valid[0] && out_ready)
+      if (out_valid[0] && out_ready[0])
         $display("[IQ_POP] t=%0t pc=%08x inst=%08x rob=%0d dest=%0d",
                  $time,
                  out_uop[`CPU_DISPATCH_PC_OFF +: 32],

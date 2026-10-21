@@ -47,7 +47,7 @@ module prf #(
   always_ff @(posedge clk) begin
     if (reset) begin
       for (k = 0; k < PRF; k = k + 1)
-        regs[k] <= 32'b0;
+        regs[k] = 32'b0;
     end else begin
       for (r = 0; r < R; r = r + 1) begin
         if (we[r] && (waddr[r*PW +: PW] != '0))

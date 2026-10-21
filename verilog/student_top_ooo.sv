@@ -53,12 +53,29 @@ module student_top (
   logic        if_refill_resp_valid;
   logic [31:0] if_refill_rdata;
 
+  logic        if_refill_valid1;
+  logic [31:0] if_refill_addr1;
+  logic        if_refill_resp_valid1;
+  logic [31:0] if_refill_rdata1;
+
+  logic        unused_data_resp_valid;
+  logic [31:0] unused_data_resp_rdata;
+
   // pipelined load interface
   logic        ld_req_valid;
   logic [31:0] ld_req_addr;
   logic        ld_req_ready;
   logic        ld_resp_valid;
   logic [31:0] ld_resp_rdata;
+
+  // D-Cache <-> mem_subsystem load port
+  logic        dl_req_valid;
+  logic [31:0] dl_req_addr;
+  logic        dl_req_ready;
+  logic        dl_resp_valid;
+  logic [31:0] dl_resp_rdata;
+  logic        st_inv_valid;
+  logic [31:0] st_inv_addr;
 
   // pipelined store interface
   logic        st_req_valid;
@@ -82,7 +99,11 @@ module student_top (
     .refill_valid      (if_refill_valid),
     .refill_addr       (if_refill_addr),
     .refill_resp_valid (if_refill_resp_valid),
-    .refill_rdata      (if_refill_rdata)
+    .refill_rdata      (if_refill_rdata),
+    .refill_valid1     (if_refill_valid1),
+    .refill_addr1      (if_refill_addr1),
+    .refill_resp_valid1(if_refill_resp_valid1),
+    .refill_rdata1     (if_refill_rdata1)
   );
 
   backend_ooo u_backend (
@@ -100,6 +121,8 @@ module student_top (
     .ld_req_ready   (ld_req_ready),
     .ld_resp_valid  (ld_resp_valid),
     .ld_resp_rdata  (ld_resp_rdata),
+    .st_inv_valid   (st_inv_valid),
+    .st_inv_addr    (st_inv_addr),
     .st_req_valid   (st_req_valid),
     .st_req_addr    (st_req_addr),
     .st_req_wdata   (st_req_wdata),
@@ -115,6 +138,10 @@ module student_top (
     .if_req_addr     (if_refill_addr),
     .if_resp_valid   (if_refill_resp_valid),
     .if_resp_rdata   (if_refill_rdata),
+    .if2_req_valid   (if_refill_valid1),
+    .if2_req_addr    (if_refill_addr1),
+    .if2_resp_valid  (if_refill_resp_valid1),
+    .if2_resp_rdata  (if_refill_rdata1),
     .ld_req_valid    (ld_req_valid),
     .ld_req_addr     (ld_req_addr),
     .ld_req_ready    (ld_req_ready),
@@ -131,8 +158,8 @@ module student_top (
     .data_req_addr   (32'b0),
     .data_req_wdata  (32'b0),
     .data_req_wstrb  (4'b0),
-    .data_resp_valid (),
-    .data_resp_rdata (),
+    .data_resp_valid (unused_data_resp_valid),
+    .data_resp_rdata (unused_data_resp_rdata),
     .araddr          (araddr),
     .arvalid         (arvalid),
     .arready         (arready),

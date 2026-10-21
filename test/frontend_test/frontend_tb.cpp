@@ -38,10 +38,8 @@ uint32_t mem_word(uint32_t addr) {
 
 struct Harness {
     Vfrontend_subsystem* dut = nullptr;
-    bool     r_wait = false;
-    uint32_t r_addr = 0;
-    int      r_count = 0;
-    bool     r_drive = false;
+    struct RState { bool wait = false; uint32_t addr = 0; int count = 0; bool drive = false; };
+    RState   rs[2];
     long     cycles = 0;
     long     fails = 0;
 
@@ -56,28 +54,40 @@ struct Harness {
         dut->clk = 0;
         dut->eval();
 
-        r_drive = false;
-        if (!r_wait && dut->refill_valid) {
-            r_wait = true;
-            r_addr = (uint32_t)dut->refill_addr;
-            r_count = 1;
-        }
-        if (r_wait) {
-            if (!dut->refill_valid || (uint32_t)dut->refill_addr != r_addr) {
-                report("refill unstable", (uint32_t)dut->refill_addr, r_addr);
+        for (int ch = 0; ch < 2; ++ch) {
+            bool rv = ch == 0 ? dut->refill_valid : dut->refill_valid1;
+            uint32_t ra = ch == 0 ? (uint32_t)dut->refill_addr
+                                  : (uint32_t)dut->refill_addr1;
+            rs[ch].drive = false;
+            if (!rs[ch].wait && rv) {
+                rs[ch].wait = true;
+                rs[ch].addr = ra;
+                rs[ch].count = 1;
             }
-            if (r_count == 0) {
-                r_drive = true;
-                dut->refill_resp_valid = 1;
-                dut->refill_rdata = mem_word(r_addr);
+            if (rs[ch].wait) {
+                bool rv2 = ch == 0 ? dut->refill_valid : dut->refill_valid1;
+                uint32_t ra2 = ch == 0 ? (uint32_t)dut->refill_addr
+                                       : (uint32_t)dut->refill_addr1;
+                if (!rv2 || ra2 != rs[ch].addr)
+                    report("refill unstable", ra2, rs[ch].addr);
+                if (rs[ch].count == 0) {
+                    rs[ch].drive = true;
+                    if (ch == 0) {
+                        dut->refill_resp_valid = 1;
+                        dut->refill_rdata = mem_word(rs[ch].addr);
+                    } else {
+                        dut->refill_resp_valid1 = 1;
+                        dut->refill_rdata1 = mem_word(rs[ch].addr);
+                    }
+                } else {
+                    --rs[ch].count;
+                }
+            }
+            if (ch == 0) {
+                if (!rs[0].drive) { dut->refill_resp_valid = 0; dut->refill_rdata = 0; }
             } else {
-                --r_count;
-                dut->refill_resp_valid = 0;
-                dut->refill_rdata = 0;
+                if (!rs[1].drive) { dut->refill_resp_valid1 = 0; dut->refill_rdata1 = 0; }
             }
-        } else {
-            dut->refill_resp_valid = 0;
-            dut->refill_rdata = 0;
         }
 
         dut->eval();
@@ -85,9 +95,12 @@ struct Harness {
         dut->eval();
         dut->refill_resp_valid = 0;
         dut->refill_rdata = 0;
+        dut->refill_resp_valid1 = 0;
+        dut->refill_rdata1 = 0;
         dut->eval();
         ++cycles;
-        if (r_drive) r_wait = false;
+        for (int ch = 0; ch < 2; ++ch)
+            if (rs[ch].drive) rs[ch].wait = false;
     }
 
     void reset() {
@@ -97,7 +110,10 @@ struct Harness {
         dut->force_target = 0;
         dut->refill_resp_valid = 0;
         dut->refill_rdata = 0;
-        r_wait = false;
+        dut->refill_resp_valid1 = 0;
+        dut->refill_rdata1 = 0;
+        rs[0] = RState();
+        rs[1] = RState();
         for (int i = 0; i < 3; ++i) tick();
         dut->reset = 0;
         tick();

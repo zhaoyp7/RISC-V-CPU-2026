@@ -233,7 +233,7 @@ struct Harness {
         }
 
         uint32_t cv = 0, rd = 0, cd = 0, crw = 0, cfv = 0, cf = 0;
-        uint32_t wv = 0, wt = 0;
+        uint64_t wm = 0;
         for (int l = 0; l < W; ++l) {
             if (in.commit_valid[l]) cv |= (1u << l);
             rd  |= (uint32_t)in.commit_rd[l] << (l * 5);
@@ -243,10 +243,8 @@ struct Harness {
                 cfv |= (1u << l);
                 cf  |= in.commit_free[l] << (l * PW);
             }
-            if (in.wake_valid[l]) {
-                wv |= (1u << l);
-                wt |= in.wake_tag[l] << (l * PW);
-            }
+            if (in.wake_valid[l])
+                wm |= (1ull << in.wake_tag[l]);
         }
         dut->commit_valid = cv;
         dut->commit_rd = rd;
@@ -254,8 +252,7 @@ struct Harness {
         dut->commit_reg_we = crw;
         dut->commit_free_valid = cfv;
         dut->commit_free_tag = cf;
-        dut->wake_valid = wv;
-        dut->wake_tag = wt;
+        dut->wake_mask = wm;
         dut->recover_valid = in.recover;
         dut->recover_free_mask = in.recover_free;
         dut->recover_busy_mask = in.recover_busy;
@@ -380,7 +377,7 @@ struct Harness {
         dut->out_ready = 1;
         dut->commit_valid = 0;
         dut->commit_free_valid = 0;
-        dut->wake_valid = 0;
+        dut->wake_mask = 0;
         dut->recover_valid = 0;
         dut->clk = 0;
         dut->eval();

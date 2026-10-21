@@ -29,6 +29,12 @@ module mem_subsystem #(
   output logic        if_resp_valid,
   output logic [31:0] if_resp_rdata,
 
+  // Second I-Cache refill client (dual-fetch)
+  input  logic        if2_req_valid,
+  input  logic [31:0] if2_req_addr,
+  output logic        if2_resp_valid,
+  output logic [31:0] if2_resp_rdata,
+
   // Pipelined load client (LSU)
   input  logic        ld_req_valid,
   input  logic [31:0] ld_req_addr,
@@ -76,6 +82,7 @@ module mem_subsystem #(
   localparam logic [1:0] OW_IF  = 2'd0;
   localparam logic [1:0] OW_LD  = 2'd1;
   localparam logic [1:0] OW_LEG = 2'd2;
+  localparam logic [1:0] OW_IF2 = 2'd3;
 
   localparam integer RDQD = 16;
   localparam integer WRQD = 8;
@@ -125,20 +132,24 @@ module mem_subsystem #(
 
   // ---- 读请求仲裁 ---------------------------------------------------------
   logic        if_pending, if_wait;
+  logic        if2_pending, if2_wait;
   logic        leg_pending, leg_wait;
-  logic        sel_if, sel_ld, sel_leg;
+  logic        sel_if, sel_if2, sel_ld, sel_leg;
   logic        rd_fire;
 
   assign sel_leg = data_req_valid && !data_req_we && !leg_pending && !leg_wait;
   assign sel_if  = !sel_leg && if_req_valid && !if_pending && !if_wait;
+  assign sel_if2 = !sel_leg && !sel_if && if2_req_valid &&
+                   !if2_pending && !if2_wait;
 
   // ready 不能依赖 ld_req_valid，否则会和 LSU.issue_ready 形成组合环。
-  assign ld_req_ready = !sel_leg && !sel_if && axi_rd_ready;
+  assign ld_req_ready = !sel_leg && !sel_if && !sel_if2 && axi_rd_ready;
   assign sel_ld       = ld_req_valid && ld_req_ready;
 
-  assign axi_rd_valid = sel_leg || sel_if || sel_ld;
+  assign axi_rd_valid = sel_leg || sel_if || sel_if2 || sel_ld;
   assign axi_rd_addr  = sel_leg ? data_req_addr :
-                        (sel_if ? if_req_addr : ld_req_addr);
+                        (sel_if ? if_req_addr :
+                         (sel_if2 ? if2_req_addr : ld_req_addr));
   assign rd_fire      = axi_rd_valid && axi_rd_ready;
 
   // ---- 读 owner FIFO ------------------------------------------------------
@@ -176,18 +187,21 @@ module mem_subsystem #(
   assign wr_owner_cur = wr_owner[wr_head];
 
   always_comb begin
-    if_resp_valid   = 1'b0;
-    if_resp_rdata   = axi_rd_resp_rdata;
-    ld_resp_valid   = 1'b0;
-    ld_resp_rdata   = axi_rd_resp_rdata;
-    data_resp_valid = 1'b0;
-    data_resp_rdata = axi_rd_resp_rdata;
+    if_resp_valid    = 1'b0;
+    if_resp_rdata    = axi_rd_resp_rdata;
+    if2_resp_valid   = 1'b0;
+    if2_resp_rdata   = axi_rd_resp_rdata;
+    ld_resp_valid    = 1'b0;
+    ld_resp_rdata    = axi_rd_resp_rdata;
+    data_resp_valid  = 1'b0;
+    data_resp_rdata  = axi_rd_resp_rdata;
 
     if (axi_rd_resp_valid) begin
       case (rd_owner_cur)
-        OW_IF:  if_resp_valid   = 1'b1;
-        OW_LD:  ld_resp_valid   = 1'b1;
-        default: data_resp_valid = 1'b1;
+        OW_IF:   if_resp_valid    = 1'b1;
+        OW_IF2:  if2_resp_valid   = 1'b1;
+        OW_LD:   ld_resp_valid    = 1'b1;
+        default: data_resp_valid  = 1'b1;
       endcase
     end
 
@@ -206,6 +220,8 @@ module mem_subsystem #(
     if (reset) begin
       if_pending    <= 1'b0;
       if_wait       <= 1'b0;
+      if2_pending   <= 1'b0;
+      if2_wait      <= 1'b0;
       leg_pending   <= 1'b0;
       leg_wait      <= 1'b0;
       leg_wr_pending <= 1'b0;
@@ -219,6 +235,7 @@ module mem_subsystem #(
     end else begin
       // ---- IF 去重 -------------------------------------------------------
       if (!if_req_valid) if_wait <= 1'b0;
+      if (!if2_req_valid) if2_wait <= 1'b0;
       if (!data_req_valid) begin
         leg_wait    <= 1'b0;
         leg_wr_wait <= 1'b0;
@@ -226,9 +243,12 @@ module mem_subsystem #(
 
       // ---- 读请求入队 -----------------------------------------------------
       if (rd_fire) begin
-        rd_owner[rd_tail] <= sel_leg ? OW_LEG : (sel_if ? OW_IF : OW_LD);
+        rd_owner[rd_tail] <= sel_leg ? OW_LEG :
+                              (sel_if ? OW_IF :
+                               (sel_if2 ? OW_IF2 : OW_LD));
         rd_tail  <= (rd_tail == RDQD - 1) ? '0 : rd_tail + 1'b1;
         if (sel_if) if_pending <= 1'b1;
+        if (sel_if2) if2_pending <= 1'b1;
         if (sel_leg) leg_pending <= 1'b1;
       end
 
@@ -239,6 +259,10 @@ module mem_subsystem #(
           OW_IF: begin
             if_pending <= 1'b0;
             if_wait    <= 1'b1;
+          end
+          OW_IF2: begin
+            if2_pending <= 1'b0;
+            if2_wait    <= 1'b1;
           end
           OW_LEG: begin
             leg_pending <= 1'b0;

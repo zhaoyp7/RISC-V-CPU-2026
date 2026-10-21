@@ -39,6 +39,11 @@ module bpu #(
   output logic        predict_taken,
   output logic [31:0] predict_target,
 
+  // 第二个取指口（双宽取指），共享同一组 BTB/BHT
+  input  logic [31:0] fetch_pc2,
+  output logic        predict_taken2,
+  output logic [31:0] predict_target2,
+
   // 更新口（来自 br_update；is_uncond 由前端从 uop 译码信息补充）
   input  logic        upd_valid,
   input  logic [31:0] upd_pc,
@@ -65,6 +70,10 @@ module bpu #(
   logic [BTB_TAG_BITS-1:0]    fetch_tag;
   logic [BHT_INDEX_BITS-1:0]  fetch_bht_index;
 
+  logic [BTB_INDEX_BITS-1:0]  fetch2_btb_index;
+  logic [BTB_TAG_BITS-1:0]    fetch2_tag;
+  logic [BHT_INDEX_BITS-1:0]  fetch2_bht_index;
+
   logic [BTB_INDEX_BITS-1:0]  upd_btb_index;
   logic [BTB_TAG_BITS-1:0]    upd_tag;
   logic [BHT_INDEX_BITS-1:0]  upd_bht_index;
@@ -72,6 +81,10 @@ module bpu #(
   assign fetch_btb_index = fetch_pc[BTB_INDEX_BITS+1:2];
   assign fetch_tag       = fetch_pc[31:BTB_INDEX_BITS+2];
   assign fetch_bht_index = fetch_pc[BHT_INDEX_BITS+1:2];
+
+  assign fetch2_btb_index = fetch_pc2[BTB_INDEX_BITS+1:2];
+  assign fetch2_tag       = fetch_pc2[31:BTB_INDEX_BITS+2];
+  assign fetch2_bht_index = fetch_pc2[BHT_INDEX_BITS+1:2];
 
   assign upd_btb_index   = upd_pc[BTB_INDEX_BITS+1:2];
   assign upd_tag         = upd_pc[31:BTB_INDEX_BITS+2];
@@ -148,6 +161,53 @@ module bpu #(
 
   assign predict_taken  = btb_hit && (btb_uncond_sel || bht_sel[1]);
   assign predict_target = btb_hit ? btb_target_sel : 32'b0;
+
+  // ---- 第二个取指口的预测（相同表，独立读口） -----------------------------
+  logic        btb2_valid_sel;
+  logic [BTB_TAG_BITS-1:0] btb2_tag_sel;
+  logic [31:0] btb2_target_sel;
+  logic        btb2_uncond_sel;
+  logic [1:0]  bht2_sel;
+  logic        btb2_hit;
+
+  always_comb begin
+    btb2_valid_sel  = btb_valid[fetch2_btb_index];
+    btb2_tag_sel    = btb_tag[fetch2_btb_index];
+    btb2_target_sel = btb_target[fetch2_btb_index];
+    btb2_uncond_sel = btb_uncond[fetch2_btb_index];
+    bht2_sel        = bht[fetch2_bht_index];
+
+    if (upd_valid && (upd_btb_index == fetch2_btb_index)) begin
+      if (upd_is_uncond) begin
+        btb2_valid_sel  = 1'b1;
+        btb2_tag_sel    = upd_tag;
+        btb2_target_sel = upd_target;
+        btb2_uncond_sel = 1'b1;
+      end else if (upd_taken) begin
+        btb2_valid_sel  = 1'b1;
+        btb2_tag_sel    = upd_tag;
+        btb2_target_sel = upd_target;
+        btb2_uncond_sel = 1'b0;
+      end else if (btb2_tag_sel == upd_tag) begin
+        btb2_uncond_sel = 1'b0;
+      end
+    end
+
+    if (upd_valid && (upd_bht_index == fetch2_bht_index)) begin
+      if (upd_is_uncond) begin
+        bht2_sel = 2'b11;
+      end else if (upd_taken) begin
+        bht2_sel = upd_btb_hit ? bht_next : 2'b10;
+      end else if (upd_btb_hit) begin
+        bht2_sel = bht_next;
+      end
+    end
+
+    btb2_hit = btb2_valid_sel && (btb2_tag_sel == fetch2_tag);
+  end
+
+  assign predict_taken2  = btb2_hit && (btb2_uncond_sel || bht2_sel[1]);
+  assign predict_target2 = btb2_hit ? btb2_target_sel : 32'b0;
 
   // ---- 更新 ----------------------------------------------------------------
   // 说明：BTB 的 tag/target/uncond 与 BHT 数据阵列不做复位，只复位 valid。

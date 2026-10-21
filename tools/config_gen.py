@@ -17,15 +17,16 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUT = ROOT / "verilog" / "cpu_config.sv"
 
-# 默认值（bring-up 配置）。改这里之前先和队友对齐 division.md §0.3。
+# 默认值（P2 双发射性能配置）。改这里之前先和队友对齐 division.md §0.3。
+# W=1 仍可通过 --issue-width 1 / -DCPU_ISSUE_WIDTH=1 构建验证。
 DEFAULTS = {
-    "issue_width": 1,
+    "issue_width": 2,
     "rob": 32,
     "prf": 64,
     "rs": 8,
-    "cdb_num": 1,
+    "cdb_num": 2,
     "lsq": 8,
-    "icache_index_bits": 10,
+    "icache_index_bits": 9,
     "icache_ways": 1,
     "icache_line_bytes": 4,
     "dcache_index_bits": 10,

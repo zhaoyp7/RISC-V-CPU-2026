@@ -34,13 +34,19 @@ module core_ooo #(
   output logic        refill_valid,
   output logic [31:0] refill_addr,
   input  logic        refill_resp_valid,
-  input  logic [31:0] refill_rdata
+  input  logic [31:0] refill_rdata,
+
+  output logic        refill_valid1,
+  output logic [31:0] refill_addr1,
+  input  logic        refill_resp_valid1,
+  input  logic [31:0] refill_rdata1
 );
 
   localparam integer PW = `CPU_PRF_IDX_W;
   localparam integer RW = `CPU_ROB_TAG_W;
   localparam integer LW = `CPU_LSQ_IDX_W;
   localparam integer CW = `CPU_CDB_W;
+  localparam integer R  = `CPU_CDB_NUM;
   localparam integer MW = `CPU_COMPLETE_W;
 
   // frontend <-> rename
@@ -57,9 +63,8 @@ module core_ooo #(
   logic                       ren_ready;
   logic [W-1:0]               ren_fire;
 
-  // wake
-  logic [W-1:0]               wake_valid;
-  logic [W*PW-1:0]            wake_tag;
+  // wake（CDB + complete 汇总成物理寄存器掩码）
+  logic [`CPU_PRF_SIZE-1:0]   wake_mask;
 
   // ROB 反馈
   logic [W-1:0]               rec_valid, cm_valid, cm_reg_we, cm_free_valid;
@@ -84,16 +89,21 @@ module core_ooo #(
   logic [W*RW-1:0]            alloc_rob_idx;
 
   // cdb/complete 解包
-  logic                       cdb0_valid;
-  logic [PW-1:0]              cdb0_tag;
-  logic                       cdb0_exc;
+  logic [R-1:0]               cdb_valid;
+  logic [R*PW-1:0]            cdb_tag;
+  logic [R-1:0]               cdb_exc;
   logic [W-1:0]               comp_valid;
   logic [W*PW-1:0]            comp_tag;
   logic [W-1:0]               comp_exc;
 
-  assign cdb0_valid = cdb[`CPU_CDB_VALID_OFF];
-  assign cdb0_tag   = cdb[`CPU_CDB_TAG_OFF +: PW];
-  assign cdb0_exc   = cdb[`CPU_CDB_EXCEPTION_OFF];
+  integer ir;
+  always_comb begin
+    for (ir = 0; ir < R; ir = ir + 1) begin
+      cdb_valid[ir] = cdb[ir*CW + `CPU_CDB_VALID_OFF];
+      cdb_tag[ir*PW +: PW] = cdb[ir*CW + `CPU_CDB_TAG_OFF +: PW];
+      cdb_exc[ir] = cdb[ir*CW + `CPU_CDB_EXCEPTION_OFF];
+    end
+  end
 
   integer i;
   always_comb begin
@@ -107,21 +117,16 @@ module core_ooo #(
     end
   end
 
-  // 唤醒：cdb lane0 优先，complete 其余 lane
+  // 唤醒：本拍所有 CDB/complete 结果一次性置掩码，避免同拍多个完成互相覆盖。
   integer iw;
   always_comb begin
-    wake_valid = '0;
-    wake_tag   = '0;
-    if (cdb0_valid) begin
-      wake_valid[0] = 1'b1;
-      wake_tag[0 +: PW] = cdb0_tag;
-    end
-    for (iw = 0; iw < W; iw = iw + 1) begin
-      if (comp_valid[iw] && !(cdb0_valid && iw == 0)) begin
-        wake_valid[iw] = 1'b1;
-        wake_tag[iw*PW +: PW] = comp_tag[iw*PW +: PW];
-      end
-    end
+    wake_mask = '0;
+    for (iw = 0; iw < R; iw = iw + 1)
+      if (cdb_valid[iw])
+        wake_mask[cdb_tag[iw*PW +: PW]] = 1'b1;
+    for (iw = 0; iw < W; iw = iw + 1)
+      if (comp_valid[iw])
+        wake_mask[comp_tag[iw*PW +: PW]] = 1'b1;
   end
 
   // br_update 解包
@@ -158,7 +163,11 @@ module core_ooo #(
     .refill_valid      (refill_valid),
     .refill_addr       (refill_addr),
     .refill_resp_valid (refill_resp_valid),
-    .refill_rdata      (refill_rdata)
+    .refill_rdata      (refill_rdata),
+    .refill_valid1     (refill_valid1),
+    .refill_addr1      (refill_addr1),
+    .refill_resp_valid1(refill_resp_valid1),
+    .refill_rdata1     (refill_rdata1)
   );
 
   // ---- rename -------------------------------------------------------------
@@ -178,8 +187,7 @@ module core_ooo #(
     .commit_reg_we     (cm_reg_we),
     .commit_free_valid (cm_free_valid),
     .commit_free_tag   (cm_free),
-    .wake_valid        (wake_valid),
-    .wake_tag          (wake_tag),
+    .wake_mask         (wake_mask),
     .recover_valid     (rec_valid),
     .recover_free_mask (rec_free),
     .recover_busy_mask (rec_busy),
@@ -198,9 +206,9 @@ module core_ooo #(
     .in_pred_target     (dec_pred_target),
     .in_ready           (rob_in_ready),
     .alloc_rob_idx      (alloc_rob_idx),
-    .cdb_valid          (cdb0_valid),
-    .cdb_tag            (cdb0_tag),
-    .cdb_exception      (cdb0_exc),
+    .cdb_valid          (cdb_valid),
+    .cdb_tag            (cdb_tag),
+    .cdb_exception      (cdb_exc),
     .complete_valid     (comp_valid),
     .complete_tag       (comp_tag),
     .complete_exception (comp_exc),

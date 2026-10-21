@@ -66,6 +66,10 @@ module lsu #(
   input  logic                         ld_resp_valid,
   input  logic [31:0]                  ld_resp_rdata,
 
+  // store invalidation for the read-only D-Cache
+  output logic                         st_inv_valid,
+  output logic [31:0]                  st_inv_addr,
+
   // pipelined store memory interface
   output logic                         st_req_valid,
   output logic [31:0]                  st_req_addr,
@@ -166,8 +170,15 @@ module lsu #(
 
   // ---- LSQ 查询 -----------------------------------------------------------
   logic lsq_query_blocked;
+  logic lsq_query_fwd_valid;
+  logic [31:0] lsq_query_fwd_data;
   logic query_blocked;
+  logic ld_fwd;
+  logic [31:0] ld_fwd_data;
   assign query_blocked = issue_is_load && !issue_illegal && lsq_query_blocked;
+  assign ld_fwd        = issue_is_load && !issue_illegal &&
+                         !lsq_query_blocked && lsq_query_fwd_valid;
+  assign ld_fwd_data   = lsq_query_fwd_data;
 
   // ---- issue 握手 ---------------------------------------------------------
   logic ld_space;
@@ -181,6 +192,9 @@ module lsu #(
       if (issue_illegal) begin
         // 非法 load 走结果队列，不能和已有响应同拍压入。
         issue_ready = illegal_slot_ok;
+      end else if (ld_fwd) begin
+        // 同地址整字 store 前递：不访问内存，直接产生结果。
+        issue_ready = illegal_slot_ok;
       end else begin
         issue_ready = !query_blocked && ld_space && ld_req_ready;
       end
@@ -191,7 +205,7 @@ module lsu #(
   assign load_issue  = issue_valid && issue_ready && issue_is_load;
   assign store_issue = issue_valid && issue_ready && issue_is_store;
 
-  assign ld_req_valid = load_issue && !issue_illegal;
+  assign ld_req_valid = load_issue && !issue_illegal && !ld_fwd;
   assign ld_req_addr  = issue_addr;
 
   // ---- store 流 -----------------------------------------------------------
@@ -200,6 +214,9 @@ module lsu #(
   logic [31:0] drain_addr, drain_wdata;
   logic [3:0]  drain_wstrb;
   logic        drain_fire;
+
+  assign st_inv_valid = store_issue;
+  assign st_inv_addr  = issue_addr;
 
   assign st_req_valid = drain_valid;
   assign st_req_addr  = drain_addr;
@@ -243,6 +260,8 @@ module lsu #(
     .query_seq       (issue_seq),
     .query_addr      (issue_addr),
     .query_blocked   (lsq_query_blocked),
+    .query_fwd_valid (lsq_query_fwd_valid),
+    .query_fwd_data  (lsq_query_fwd_data),
     .count           (lsq_count)
   );
 
@@ -256,7 +275,8 @@ module lsu #(
   assign md_resp_keep = md_resp_fire && !md_discard[md_head] &&
                         !(squash_valid &&
                           (md_seq[md_head*32 +: 32] > squash_seq));
-  assign rq_push = md_resp_keep || (load_issue && issue_illegal);
+  assign rq_push = md_resp_keep ||
+                   (load_issue && (issue_illegal || ld_fwd));
   assign rq_pop  = (rq_count != 0) &&
                    (rq_discard[rq_head] || load_result_ready);
 
@@ -303,7 +323,7 @@ module lsu #(
       store_complete_valid_q <= 1'b0;
 
       // ---- load issue：入元数据队列 --------------------------------------
-      if (load_issue && !issue_illegal) begin
+      if (load_issue && !issue_illegal && !ld_fwd) begin
         md_valid[md_tail]         <= 1'b1;
         md_tag[md_tail*PW +: PW]  <= issue_dest;
         md_seq[md_tail*32 +: 32]  <= issue_seq;
@@ -321,16 +341,20 @@ module lsu #(
 
       if (rq_push) begin
         rq_valid[rq_tail]          <= 1'b1;
-        rq_tag[rq_tail*PW +: PW]   <= load_issue && issue_illegal ? issue_dest :
-                                      md_tag[md_head*PW +: PW];
-        rq_value[rq_tail*32 +: 32] <= load_issue && issue_illegal ? 32'b0 :
-            format_load(ld_resp_rdata, md_size[md_head*2 +: 2],
-                        md_off[md_head*2 +: 2], md_unsigned[md_head]);
-        rq_seq[rq_tail*32 +: 32]   <= load_issue && issue_illegal ? issue_seq :
-                                      md_seq[md_head*32 +: 32];
+        rq_tag[rq_tail*PW +: PW]   <= (load_issue && (issue_illegal || ld_fwd)) ?
+                                      issue_dest : md_tag[md_head*PW +: PW];
+        rq_value[rq_tail*32 +: 32] <=
+            (load_issue && issue_illegal) ? 32'b0 :
+            (load_issue && ld_fwd) ?
+              format_load(ld_fwd_data, issue_mem_size, issue_addr[1:0],
+                          issue_mem_unsigned) :
+              format_load(ld_resp_rdata, md_size[md_head*2 +: 2],
+                          md_off[md_head*2 +: 2], md_unsigned[md_head]);
+        rq_seq[rq_tail*32 +: 32]   <= (load_issue && (issue_illegal || ld_fwd)) ?
+                                      issue_seq : md_seq[md_head*32 +: 32];
         rq_exc[rq_tail]            <= load_issue && issue_illegal;
         rq_discard[rq_tail]        <= squash_valid &&
-                                      ((load_issue && issue_illegal ?
+                                      (((load_issue && (issue_illegal || ld_fwd)) ?
                                         issue_seq : md_seq[md_head*32 +: 32])
                                        > squash_seq);
         rq_tail <= (rq_tail == LDQ_DEPTH - 1) ? '0 : rq_tail + 1'b1;
@@ -352,7 +376,7 @@ module lsu #(
 
       // ---- 计数 -----------------------------------------------------------
       ld_count <= ld_count +
-                  ((load_issue && !issue_illegal) ? 1'b1 : 1'b0) -
+                  ((load_issue && !issue_illegal && !ld_fwd) ? 1'b1 : 1'b0) -
                   (md_resp_fire ? 1'b1 : 1'b0);
       rq_count <= rq_count + (rq_push ? 1'b1 : 1'b0) -
                              (rq_pop  ? 1'b1 : 1'b0);
@@ -365,5 +389,25 @@ module lsu #(
       end
     end
   end
+
+`ifdef LOCAL_TRACE
+  integer dbg_stalls = 0;
+  always_ff @(posedge clk) begin
+    if (!reset) begin
+      if (issue_is_load && !issue_ready && dbg_stalls < 20) begin
+        $display("[LSU_STALL] t=%0t pc=%08x ld_count=%0d rq=%0d qblk=%0b ld_rdy=%0b lsq=%0d drv=%0b",
+                 $time, issue_pc, ld_count, rq_count, lsq_query_blocked,
+                 ld_req_ready, lsq_count, drain_valid);
+        dbg_stalls <= dbg_stalls + 1;
+      end
+      if (drain_valid && drain_fire)
+        $display("[LSU_ST_SEND] t=%0t id=%0d addr=%08x", $time, drain_id, drain_addr);
+      if (st_resp_valid)
+        $display("[LSU_ST_RESP] t=%0t", $time);
+      if (ld_resp_valid)
+        $display("[LSU_LD_RESP] t=%0t head=%0d cnt=%0d", $time, md_head, ld_count);
+    end
+  end
+`endif
 
 endmodule

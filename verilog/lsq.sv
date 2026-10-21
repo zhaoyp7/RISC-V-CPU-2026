@@ -62,6 +62,8 @@ module lsq #(
   input  logic [31:0]                  query_seq,
   input  logic [31:0]                  query_addr,
   output logic                         query_blocked,
+  output logic                         query_fwd_valid,
+  output logic [31:0]                  query_fwd_data,
 
   output logic [7:0]                   count
 );
@@ -186,19 +188,37 @@ module lsq #(
     end
   end
 
-  // ---- load ordering query ------------------------------------------------
+  // ---- load ordering query + store-to-load forwarding ---------------------
+  logic        any_unknown;
+  logic        same_found, same_full;
+  logic [31:0] same_seq, same_data;
+
   always_comb begin
-    query_blocked = 1'b0;
+    any_unknown  = 1'b0;
+    same_found   = 1'b0;
+    same_full    = 1'b0;
+    same_seq     = 32'b0;
+    same_data    = 32'b0;
     for (i_query = 0; i_query < D; i_query = i_query + 1) begin
       if (query_valid && valid[i_query] && is_store[i_query] &&
           (seq[i_query*32 +: 32] < query_seq)) begin
-        if (!addr_known[i_query])
-          query_blocked = 1'b1;
-        else if ((addr[i_query*32 +: 32] & ~32'h3) ==
-                 (query_addr & ~32'h3))
-          query_blocked = 1'b1;
+        if (!addr_known[i_query]) begin
+          any_unknown = 1'b1;
+        end else if ((addr[i_query*32 +: 32] & ~32'h3) ==
+                     (query_addr & ~32'h3)) begin
+          // 取最年轻的同字 store；整字写可直接前递。
+          if (!same_found || (seq[i_query*32 +: 32] > same_seq)) begin
+            same_found = 1'b1;
+            same_seq   = seq[i_query*32 +: 32];
+            same_full  = (wstrb[i_query*4 +: 4] == 4'b1111);
+            same_data  = wdata[i_query*32 +: 32];
+          end
+        end
       end
     end
+    query_blocked   = any_unknown || (same_found && !same_full);
+    query_fwd_valid = !any_unknown && same_found && same_full;
+    query_fwd_data  = same_data;
   end
 
   // ---- count --------------------------------------------------------------
@@ -288,5 +308,19 @@ module lsq #(
       end
     end
   end
+
+`ifdef LOCAL_TRACE
+  integer dbg_q = 0;
+  always_ff @(posedge clk) begin
+    if (!reset && query_valid && query_blocked && dbg_q < 20) begin
+      for (i = 0; i < D; i = i + 1)
+        if (valid[i] && is_store[i] && (seq[i*32 +: 32] < query_seq))
+          $display("[LSQ_BLK] t=%0t qseq=%0d slot=%0d seq=%0d known=%0b addr=%08x committed=%0b sent=%0b",
+                   $time, query_seq, i, seq[i*32 +: 32], addr_known[i],
+                   addr[i*32 +: 32], committed[i], sent[i]);
+      dbg_q <= dbg_q + 1;
+    end
+  end
+`endif
 
 endmodule

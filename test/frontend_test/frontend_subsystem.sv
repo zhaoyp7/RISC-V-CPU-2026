@@ -22,6 +22,11 @@ module frontend_subsystem #(
   input  logic        refill_resp_valid,
   input  logic [31:0] refill_rdata,
 
+  output logic        refill_valid1,
+  output logic [31:0] refill_addr1,
+  input  logic        refill_resp_valid1,
+  input  logic [31:0] refill_rdata1,
+
   output logic [W-1:0]                 commit_valid,
   output logic [W*`CPU_PRF_IDX_W-1:0]  commit_tag,
   output logic [W*`CPU_LSQ_IDX_W-1:0]  commit_lsq_id,
@@ -62,8 +67,10 @@ module frontend_subsystem #(
   logic [W*RW-1:0]            alloc_rob_idx;
 
   // wake
-  logic [W-1:0]               wake_valid;
-  logic [W*PW-1:0]            wake_tag;
+  logic [`CPU_PRF_SIZE-1:0]   wake_mask;
+
+  // rob <-> rename recover RAT
+  logic [32*PW-1:0]           rec_rat;
 
   // stub -> rob
   logic                       s_cdb_valid;
@@ -113,7 +120,11 @@ module frontend_subsystem #(
     .refill_valid      (refill_valid),
     .refill_addr       (refill_addr),
     .refill_resp_valid (refill_resp_valid),
-    .refill_rdata      (refill_rdata)
+    .refill_rdata      (refill_rdata),
+    .refill_valid1     (refill_valid1),
+    .refill_addr1      (refill_addr1),
+    .refill_resp_valid1(refill_resp_valid1),
+    .refill_rdata1     (refill_rdata1)
   );
 
   rename #(.W(W)) u_rename (
@@ -132,12 +143,12 @@ module frontend_subsystem #(
     .commit_reg_we     (cm_reg_we),
     .commit_free_valid (cm_free_valid),
     .commit_free_tag   (cm_free),
-    .wake_valid        (wake_valid),
-    .wake_tag          (wake_tag),
+    .wake_mask         (wake_mask),
     .recover_valid     (rec_valid),
     .recover_free_mask (rec_free),
     .recover_busy_mask (rec_busy),
-    .recover_lsq_ptr   (rec_lsq)
+    .recover_lsq_ptr   (rec_lsq),
+    .recover_rat       (rec_rat)
   );
 
   rob #(.W(W)) u_rob (
@@ -150,9 +161,9 @@ module frontend_subsystem #(
     .in_pred_target     (dec_pred_target),
     .in_ready           (rob_in_ready),
     .alloc_rob_idx      (alloc_rob_idx),
-    .cdb_valid          (s_cdb_valid),
-    .cdb_tag            (s_cdb_tag),
-    .cdb_exception      (s_cdb_exc),
+    .cdb_valid          (rob_cdb_valid),
+    .cdb_tag            (rob_cdb_tag),
+    .cdb_exception      (rob_cdb_exc),
     .complete_valid     (s_comp_valid),
     .complete_tag       (s_comp_tag),
     .complete_exception (s_comp_exc),
@@ -179,6 +190,7 @@ module frontend_subsystem #(
     .recover_free_mask  (rec_free),
     .recover_busy_mask  (rec_busy),
     .recover_lsq_ptr    (rec_lsq),
+    .recover_rat        (rec_rat),
     .redirect_valid     (redirect_valid),
     .redirect_pc        (redirect_pc),
     .squash_valid       (sq_valid),
@@ -251,21 +263,30 @@ module frontend_subsystem #(
     end
   end
 
-  // wake：cdb 优先 lane0，其余 complete lane
+  // ROB 的 CDB 口是 R 条；单测只有一条 stub CDB，其余 lane 置 0。
+  localparam integer R = `CPU_CDB_NUM;
+  logic [R-1:0]        rob_cdb_valid;
+  logic [R*PW-1:0]     rob_cdb_tag;
+  logic [R-1:0]        rob_cdb_exc;
+  integer i_cdb;
+  always_comb begin
+    rob_cdb_valid = '0;
+    rob_cdb_tag   = '0;
+    rob_cdb_exc   = '0;
+    rob_cdb_valid[0] = s_cdb_valid;
+    rob_cdb_tag[0 +: PW] = s_cdb_tag;
+    rob_cdb_exc[0] = s_cdb_exc;
+  end
+
+  // wake：CDB + complete 汇总为掩码
   integer i_wake;
   always_comb begin
-    wake_valid = '0;
-    wake_tag   = '0;
-    if (s_cdb_valid) begin
-      wake_valid[0] = 1'b1;
-      wake_tag[0 +: PW] = s_cdb_tag;
-    end
-    for (i_wake = 0; i_wake < W; i_wake = i_wake + 1) begin
-      if (s_comp_valid[i_wake] && !(s_cdb_valid && i_wake == 0)) begin
-        wake_valid[i_wake] = 1'b1;
-        wake_tag[i_wake*PW +: PW] = s_comp_tag[i_wake*PW +: PW];
-      end
-    end
+    wake_mask = '0;
+    if (s_cdb_valid)
+      wake_mask[s_cdb_tag] = 1'b1;
+    for (i_wake = 0; i_wake < W; i_wake = i_wake + 1)
+      if (s_comp_valid[i_wake])
+        wake_mask[s_comp_tag[i_wake*PW +: PW]] = 1'b1;
   end
 
 endmodule

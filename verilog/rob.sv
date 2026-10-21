@@ -29,10 +29,10 @@ module rob #(
   output logic                         in_ready,
   output logic [W*`CPU_ROB_TAG_W-1:0]  alloc_rob_idx,
 
-  // 完成口
-  input  logic                         cdb_valid,
-  input  logic [`CPU_PRF_IDX_W-1:0]    cdb_tag,
-  input  logic                         cdb_exception,
+  // 完成口（R 条 CDB）
+  input  logic [`CPU_CDB_NUM-1:0]            cdb_valid,
+  input  logic [`CPU_CDB_NUM*`CPU_PRF_IDX_W-1:0] cdb_tag,
+  input  logic [`CPU_CDB_NUM-1:0]            cdb_exception,
   input  logic [W-1:0]                 complete_valid,
   input  logic [W*`CPU_PRF_IDX_W-1:0]  complete_tag,
   input  logic [W-1:0]                 complete_exception,
@@ -80,6 +80,7 @@ module rob #(
   localparam integer PW       = `CPU_PRF_IDX_W;
   localparam integer LW       = `CPU_LSQ_IDX_W;
   localparam integer RW       = `CPU_ROB_TAG_W;
+  localparam integer R        = `CPU_CDB_NUM;
   localparam integer MASK     = DEPTH - 1;
   localparam integer CNTW     = $clog2(DEPTH + 1);
   localparam [LW-1:0] LSQ_LAST = `CPU_LSQ_DEPTH - 1;
@@ -175,8 +176,13 @@ module rob #(
   end
 
   logic flush_young;
+  logic [31:0] redirect_pc_c;
   assign flush_young = br_update_valid && br_found && br_mispredict;
   assign br_update_uncond = br_update_valid && br_found && entry_uncond[br_idx];
+  assign redirect_valid = flush_young;
+  assign redirect_pc_c  = br_update_taken ? br_update_target :
+                          (entry_pc[br_idx] + 32'd4);
+  assign redirect_pc     = redirect_pc_c;
 
   // ---- 提交选择 ------------------------------------------------------------
   logic [W-1:0] commit_valid_int;
@@ -296,25 +302,29 @@ module rob #(
                     ((count + W) <= DEPTH);
 
   // ---- 完成搜索（组合） ----------------------------------------------------
-  logic          cdb_hit;
-  logic [RW-1:0] cdb_idx;
+  logic [R-1:0]  cdb_hit;
+  logic [RW-1:0] cdb_idx [0:R-1];
   logic [W-1:0]  comp_hit;
   logic [RW-1:0] comp_idx [0:W-1];
-  integer i_cmp, i_clane, i_cmp_idx;
+  integer i_cmp, i_clane, i_cmp_idx, r_cmp;
 
   always_comb begin
-    cdb_hit = 1'b0;
-    cdb_idx = '0;
     done_now_mask = '0;
-    for (i_cmp = 0; i_cmp < DEPTH; i_cmp = i_cmp + 1) begin
-      i_cmp_idx = (head + i_cmp) & MASK;
-      if (entry_valid[i_cmp_idx] && (entry_dest_tag[i_cmp_idx] == cdb_tag)) begin
-        cdb_hit = 1'b1;
-        cdb_idx = i_cmp_idx;
+    for (r_cmp = 0; r_cmp < R; r_cmp = r_cmp + 1) begin
+      cdb_hit[r_cmp] = 1'b0;
+      cdb_idx[r_cmp] = '0;
+      for (i_cmp = 0; i_cmp < DEPTH; i_cmp = i_cmp + 1) begin
+        i_cmp_idx = (head + i_cmp) & MASK;
+        if (entry_valid[i_cmp_idx] &&
+            (entry_dest_tag[i_cmp_idx] == cdb_tag[r_cmp*PW +: PW])) begin
+          cdb_hit[r_cmp] = 1'b1;
+          cdb_idx[r_cmp] = i_cmp_idx;
+        end
       end
+      if (cdb_valid[r_cmp] && cdb_hit[r_cmp] &&
+          (entry_dest_tag[cdb_idx[r_cmp]] != '0))
+        done_now_mask[entry_dest_tag[cdb_idx[r_cmp]]] = 1'b1;
     end
-    if (cdb_valid && cdb_hit && (entry_dest_tag[cdb_idx] != '0))
-      done_now_mask[entry_dest_tag[cdb_idx]] = 1'b1;
 
     for (i_clane = 0; i_clane < W; i_clane = i_clane + 1) begin
       comp_hit[i_clane] = 1'b0;
@@ -349,19 +359,18 @@ module rob #(
       recover_busy_mask <= '0;
       recover_lsq_ptr   <= '0;
       recover_rat       <= '0;
-      redirect_valid    <= 1'b0;
-      redirect_pc       <= 32'b0;
       squash_valid      <= 1'b0;
       squash_rob_idx    <= '0;
     end else begin
       recover_valid  <= 1'b0;
-      redirect_valid <= 1'b0;
       squash_valid   <= 1'b0;
 
-      // 完成广播
-      if (cdb_valid && cdb_hit) begin
-        entry_done[cdb_idx] <= 1'b1;
-        if (cdb_exception) entry_exception[cdb_idx] <= 1'b1;
+      // 完成广播（R 条）
+      for (r_cmp = 0; r_cmp < R; r_cmp = r_cmp + 1) begin
+        if (cdb_valid[r_cmp] && cdb_hit[r_cmp]) begin
+          entry_done[cdb_idx[r_cmp]] <= 1'b1;
+          if (cdb_exception[r_cmp]) entry_exception[cdb_idx[r_cmp]] <= 1'b1;
+        end
       end
       for (i_ff_clane = 0; i_ff_clane < W; i_ff_clane = i_ff_clane + 1) begin
         if (complete_valid[i_ff_clane] && comp_hit[i_ff_clane]) begin
@@ -388,9 +397,6 @@ module rob #(
         recover_busy_mask <= busy_mask_c & ~done_now_mask;
         recover_lsq_ptr   <= lsq_ptr_c;
         recover_rat       <= recover_rat_c;
-        redirect_valid    <= 1'b1;
-        redirect_pc       <= br_update_taken ? br_update_target :
-                             (entry_pc[br_idx] + 32'd4);
         squash_valid      <= 1'b1;
         squash_rob_idx    <= br_idx;
       end else begin
@@ -450,10 +456,13 @@ module rob #(
 `ifdef LOCAL_TRACE
   always_ff @(posedge clk) begin
     if (!reset) begin
-      if (|commit_valid)
-        $display("[COMMIT] t=%0t pc=%08x inst=%08x tag=%0d",
-                 $time, commit_pc[31:0], commit_inst[31:0],
-                 commit_tag[PW-1:0]);
+      if (|commit_valid) begin
+        for (i_ff = 0; i_ff < W; i_ff = i_ff + 1)
+          if (commit_valid[i_ff])
+            $display("[COMMIT] t=%0t pc=%08x inst=%08x tag=%0d",
+                     $time, commit_pc[i_ff*32 +: 32], commit_inst[i_ff*32 +: 32],
+                     commit_tag[i_ff*PW +: PW]);
+      end
       if (flush_young)
         $display("[ROB_FLUSH] t=%0t br_idx=%0d br_age=%0d recover=%0b redirect=%08x squash=%0b",
                  $time, br_idx, br_age_i, recover_valid,

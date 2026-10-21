@@ -47,9 +47,8 @@ module rename #(
   input  logic [W-1:0]                 commit_free_valid,
   input  logic [W*`CPU_PRF_IDX_W-1:0]  commit_free_tag,
 
-  // 写回/完成唤醒（CDB + complete 汇总，最多 W 条）
-  input  logic [W-1:0]                 wake_valid,
-  input  logic [W*`CPU_PRF_IDX_W-1:0]  wake_tag,
+  // 写回/完成唤醒（CDB + complete 汇总为掩码；同拍可有多条）
+  input  logic [`CPU_PRF_SIZE-1:0]     wake_mask,
 
   // 恢复（squash 到某分支时由 ROB 给出）
   input  logic                         recover_valid,
@@ -170,15 +169,8 @@ module rename #(
   end
 
   // ---- 唤醒掩码与有效 busy ------------------------------------------------
-  logic [PRF-1:0] wake_mask;
   logic [PRF-1:0] busy_eff;
-
-  always_comb begin
-    wake_mask = '0;
-    for (i_wake = 0; i_wake < W; i_wake = i_wake + 1)
-      if (wake_valid[i_wake]) wake_mask[wake_tag[i_wake*PW +: PW]] = 1'b1;
-    busy_eff = busy & ~wake_mask;
-  end
+  assign busy_eff = busy & ~wake_mask;
 
   // ---- 源操作数映射/就绪 + 组内依赖 + 旧映射 ------------------------------
   logic [PW-1:0] src1_tag [0:W-1];
@@ -309,9 +301,8 @@ module rename #(
       free_count <= recover_count;
       lsq_ptr    <= recover_lsq_ptr;
     end else begin
-      // 唤醒清 busy
-      for (i_ff = 0; i_ff < W; i_ff = i_ff + 1)
-        if (wake_valid[i_ff]) busy[wake_tag[i_ff*PW +: PW]] <= 1'b0;
+      // 唤醒清 busy（同拍可多条）
+      busy <= busy & ~wake_mask;
 
       // 提交：释放 tag、更新 commit RAT
       for (i_ff = 0; i_ff < W; i_ff = i_ff + 1) begin
