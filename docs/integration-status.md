@@ -1,6 +1,6 @@
 # 集成状态（P1 完成，P2 进行中）
 
-## P2 当前结果（2026-10-21，commit `4cf171e`）
+## P2 当前结果（2026-10-21，commit `a95a938`）
 
 - **W=1 correctness：19/19 PASS**；**W=2 correctness：19/19 PASS**（`MAX_CYCLES=50,000,000`）。
 - 单元测试：`sh test/run_all.sh` → **ALL PASS**（frontend W=1/W=2 已适配

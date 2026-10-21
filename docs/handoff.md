@@ -53,7 +53,7 @@ make test MAX_CYCLES=50000000
 
 - 分支：`main`
 - P1 功能 tag：`p1-ooo-final`（`0d6e07f`）
-- P2 当前提交：`4cf171e`（双发射 + 双取指 + 流水访存）
+- P2 当前提交：`a95a938`（双发射 + 双取指 + 流水访存）
 - 官方 `verilog/filelist.f` 使用 OoO 顶层 `student_top_ooo.sv`
   （模块名仍是 `student_top`）
 - 基线 `core.sv`/`icache.sv`/`student_top.sv` 保留但不在 filelist
