@@ -231,9 +231,10 @@ opt 口径（最终面积/频率）：
 ## 频率实验记录
 
 squash recovery 两级化的两版实验（Fmax +1.9% / +4.0%，IPC -1.8%）未达到
-保留阈值，对应 WIP 分支 `feat/freq-recovery`，未合并。CDB 输出打一拍的
-实验在 qsort 上暴露 complete FIFO / ROB squash 竞态并死锁，已回滚。
-完整记录见 `docs/experiments/freq-log.md`。
+保留阈值，对应 WIP 分支 `feat/freq-recovery`，未合并。CDB 输出打一拍实验
+（Fmax +3.2%、IPC -4.4%）也不保留，但暴露并修复了 complete FIFO 的
+same-cycle push/squash 覆盖 bug（`36e4302`，已合入 `main`）。完整记录见
+`docs/experiments/freq-log.md`。
 
 ## 参数扫描与 ROB16 修复（2026-10-22）
 

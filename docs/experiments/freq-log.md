@@ -44,37 +44,49 @@
 
 结论：仍低于 20% 的保留阈值；整条 `feat/freq-recovery` 分支不合并。
 
-## 实验 3：CDB 仲裁输出打一拍（已回滚）
+## 实验 3：CDB 仲裁输出打一拍（CDB 回滚，FIFO 修复保留）
 
 改动：在 `backend_ooo` 把 `u_cdb` 的 `cdb_out` 寄存后再广播，试图切断
 `u_lsu → u_cdb → u_backend` 的组合路径。
 
-结果：
+第一次结果为 **perf_qsort 死锁**，trace 定位到：
 
-- W=2 correctness：19/19 PASS
-- perf_median/multiply 正常
-- **perf_qsort 死锁**，50M cycles 超时
+- ROB 头部 branch：`PC=0x000000b0, dest=23, resolved=1, done=0`
+- `[CF_PUSH] tag=23` 之后只有 `[CF_POP]`，没有 `[COMPLETE]`
+- 同一拍一个正确路径 branch 压入 complete FIFO，另一个 branch 触发
+  squash；squash 循环用**旧表项**的 `cf_seq` 把同一个 slot 标成
+  `discard=1`，覆盖了新 push 的 discard
+- 下一拍这个正确 complete 被静默丢弃，ROB 头部永远不 done
 
-死锁定位：
+修复（`36e4302`，已合入 `main`）：
 
-- ROB 头部是一个 branch：`PC=0x000000b0, dest=23, resolved=1, done=0`
-- trace 显示 `[CF_PUSH] tag=23` 之后只有 `[CF_POP]`，没有 `[COMPLETE]`
-- 也就是 complete FIFO 项被弹出，但没有广播到 ROB；ROB 头部永远等
-  `complete`
-- 这说明 CDB 打一拍改变了完成/恢复时序，暴露了 complete FIFO 与 ROB
-  squash 之间更深层的竞态；不是简单的频率优化
+- complete FIFO 的 push 移到 squash 循环之后；同一拍 push 与 squash 落到
+  同一 slot 时，push 的新表项 discard 最后写入、以新 `cf_seq` 为准。
 
-决策：**回滚 CDB 改动，删除 `feat/freq-cdb` 分支**。不再在同一层继续
-堆寄存器。
+修复后的 CDB 实验：
+
+| 指标 | 基线 | CDB 打一拍 + FIFO 修复 |
+| --- | ---: | ---: |
+| W=2 IPC | 0.6380 | 0.6097（-4.4%） |
+| diagnose Fmax | 53.96 MHz | 55.68 MHz（+3.2%） |
+| diagnose 面积 | 25,134.9 µm² | 25,048.1 µm² |
+| 关键路径 | ROB → backend | 仍是 ROB → backend |
+
+结论：**CDB 打一拍只换来 +3.2% Fmax，却损失 4.4% IPC，不保留**。
+complete FIFO 的 same-cycle push/squash 修复是独立正确性收益，已合入
+`main`；CDB 寄存器改动已回滚。
 
 ## 当前决策
 
 - `feat/freq-recovery` 保留为 WIP 分支（commit `63a06cf`），不合并到 `main`。
-- 两次频率实验：
+- `main` 包含 `36e4302` 的 complete FIFO 修复；默认 IPC 恢复为 **0.6380**，
+  W=2 19/19、`run_all` ALL PASS。
+- 三次频率实验：
   - squash 两级化：Fmax +4.0%，IPC -1.8%，不达标；
-  - CDB 打一拍：qsort 死锁，回滚。
+  - CDB 打一拍：Fmax +3.2%，IPC -4.4%，不达标；
+  - complete FIFO 修复：正确性收益，保留。
 - 按要求触发停止条件（连续实验 Fmax 提升 <20%），下一步需要重新选方向，
-  不再盲目继续频率流水化。
+  不再盲目继续频率微流水化。
 
 ## 停止后的候选方向
 
