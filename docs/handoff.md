@@ -244,9 +244,11 @@ W=1/W=2 的 correctness 都由队友记录为 19/19；本机独立复核了 W=2 
 ## 6. 推荐阅读
 
 1. `docs/integration-status.md`：P1/P2 结果、perf/synth 数据、下一步策略
-2. `docs/plan/division.md`：P2/P3 工作包和验收标准
-3. `docs/interface.md`：八条总线冻结接口
-4. `README-ZH.md`：课程评分、工具链、命令
+2. `docs/plan/pipeline.md`：系统性流水化设计草案（当前/目标流水级、验收、风险）
+3. `docs/experiments/freq-log.md`：频率实验记录（成功/失败/回滚原因）
+4. `docs/plan/division.md`：P2/P3 工作包和验收标准
+5. `docs/interface.md`：八条总线冻结接口
+6. `README-ZH.md`：课程评分、工具链、命令
 
 一句话：**P2 功能已全绿（W=2 双发射/双取指/流水访存，IPC 0.5507）；
 下一步先做频率流水化、面积收缩和带 GHR 快照的 gshare/RAS，D-Cache 暂缓。**
