@@ -54,7 +54,9 @@ make test MAX_CYCLES=50000000
 - 分支：`main`
 - P1 功能 tag：`p1-ooo-final`（`0d6e07f`）
 - P2 RTL 提交：`a95a938`（双发射 + 双取指 + 流水访存）
-- 当前 `main`：以 `git log -1 --oneline` 为准（P2 RTL 提交为 `a95a938`）
+- 性能检查点 tag：`p2-perf-prefill`（store 地址预填 + ROB recovery 修复 +
+  LOCAL_STATS；2026-10-22 推送）
+- 当前 `main`：以 `git log -1 --oneline` 为准
 - 官方 `verilog/filelist.f` 使用 OoO 顶层 `student_top_ooo.sv`
   （模块名仍是 `student_top`）
 - 基线 `core.sv`/`icache.sv`/`student_top.sv` 保留但不在 filelist
@@ -86,6 +88,7 @@ breakdown 见 `docs/perf-log.md` 与 `docs/integration-status.md`。
 参数扫描中 **C2（ROB16/PRF48/LSQ16/1KB I$/小 BPU）IPC 0.6311、
 diagnose 20,262.8 µm²**，是当前最接近 18k 面积的可用配置；但频率仍约
 53.4 MHz，距 300 MHz 很远。默认配置仍是 ROB32/PRF64（IPC 0.6380）。
+C2 的完整参数/复现命令/注意事项见 `docs/configs/c2-area.md`。
 
 ---
 
