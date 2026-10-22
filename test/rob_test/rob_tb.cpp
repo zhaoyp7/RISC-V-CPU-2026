@@ -177,7 +177,9 @@ struct RefRob {
                      (q.size() + (size_t)W <= (size_t)DEPTH);
 
         e.n_commit = 0;
-        if (!e.flush) {
+        // rename 在 recover_valid 拍装载恢复快照并忽略 commit 反馈，
+        // ROB 必须同拍停止提交。
+        if (!e.flush && !cur_recover) {
             for (int i = 0; i < W && i < (int)q.size(); ++i) {
                 const Entry& x = q[(size_t)i];
                 if (x.done && (!x.control || x.resolved)) {
