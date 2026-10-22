@@ -229,7 +229,8 @@ make build BUILD=build/stats VERILATOR=/tmp/opencode/verilator_stats.sh JOBS=4
 1. **LSQ=16 是 ROB16 配置下恢复 IPC 的关键**：C2 比 B2 多 +0.039 IPC，
    代价是 LSQ 面积约 +1.17k。
 2. **C2 在 20.3k 面积下保持 0.631 IPC**，是当前最接近阶段 2 面积门槛的
-   可用配置；但距 18k 仍差约 2.26k，且 IPC 距 0.845 很远。
+   可用配置；但距 18k 仍差约 2.26k，且 IPC 距 0.845 很远。C2 的完整
+   实验档与复现命令见 `docs/configs/c2-area.md`。
 3. **C3 已接近 18k，但 IPC 只有 0.5917**，低于阶段 1 的 0.6；单纯压参数
    无法同时满足面积和 IPC。
 4. `ROB=32 + PRF=48` 会发生资源型死锁：32 个 ROB 在飞表项加上 32 个
