@@ -79,3 +79,52 @@ min period 17.8320 ns（目标 2 ns，WNS −15.8320 ns）。diagnose 为 25,025
    化，而不是只靠 ABC。当前 56.08 MHz（opt），距离 300 MHz 很远。
 5. **面积**：双 ALU、双 I$、ROB 和 BPU 是主要开销；当前 24.2k，阶段 1 的
    9k 和阶段 2 的 18k 都未达到。
+
+## 性能计数器（LOCAL_STATS，2026-10-22）
+
+RTL 里增加了只在仿真统计构建中生效的计数器；默认 `make build` / `make synth`
+不会生成任何计数逻辑，也没有 `$display`。统计输出走 stderr，避免污染 OJ
+stdout。
+
+构建方式（不需要改 `Makefile`）：
+
+```sh
+export REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+cat > /tmp/opencode/verilator_stats.sh <<'EOF'
+#!/bin/sh
+exec "${REPO_ROOT:?export REPO_ROOT}/cpu2026-tools-x86_64.AppImage" exec /bin/sh -c \
+  'exec "$CPU2026_APPDIR/bin/verilator" +define+LOCAL_STATS "$@"' sh "$@"
+EOF
+chmod +x /tmp/opencode/verilator_stats.sh
+
+make build BUILD=build/stats VERILATOR=/tmp/opencode/verilator_stats.sh JOBS=4
+# 每个 case 的 stderr 会包含若干 [STATS] ... 行
+```
+
+### W=2 stall 分类（统计构建，周期数与默认构建一致）
+
+| benchmark | cycles | commits | branch updates | mispredict | mispred rate | LSQ blocked cycles | LSQ blocked % | backend stall_lsu | stall_lsu % | LSQ unknown | I$ refills |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| perf_median | 14,513 | 6,961 | 3,123 | 551 | 17.6% | 3,545 | 24.4% | 3,557 | 24.5% | 3,545 | 103 |
+| perf_multiply | 20,237 | 21,722 | 6,949 | 663 | 9.5% | 0 | 0.0% | 17 | 0.1% | 0 | 106 |
+| perf_qsort | 315,417 | 139,900 | 50,325 | 10,911 | 21.7% | 73,023 | 23.2% | 73,077 | 23.2% | 73,023 | 465 |
+| perf_rsort | 369,323 | 195,719 | 13,849 | 33 | 0.2% | 184,810 | 50.0% | 184,867 | 50.1% | 184,810 | 287 |
+| perf_towers | 14,558 | 5,278 | 383 | 132 | 34.5% | 3,256 | 22.4% | 3,337 | 22.9% | 3,256 | 416 |
+| perf_vvadd | 7,119 | 4,524 | 903 | 7 | 0.8% | 3,266 | 45.9% | 3,273 | 46.0% | 3,266 | 62 |
+
+### 结论
+
+1. **load 被老 store 的未知地址长期阻塞，是当前最大的单一瓶颈**。
+   `query_blocked` 细分后 `query_unknown` 与它完全相等，`query_partial`
+   为 0：不是部分写等待，而是老 store 还没 issue、地址没有填入 LSQ。
+   rsort 50.0%、vvadd 45.9%、median 24.4%、qsort 23.2%、towers 22.4%。
+2. **分支误预测是第二瓶颈**，在 median（17.6%）、qsort（21.7%）、
+   towers（34.5%）上明显；rsort/vvadd 几乎不受影响。
+3. **I$ refill 不是主导因素**：全程只有 62–465 次，refill 等待周期远小于
+   LSQ 阻塞周期。
+4. **ROB 从未满**（`rob_full_cycles=0`，最大占用 30/32），但 IQ/skid 经常
+   被反压；根因仍是阻塞的 load 占住 IQ/LSU。
+5. **CDB 冲突存在但不主导**：qsort/rsort 约 2k 拍，其余较少。
+6. 下一步优先做 **store 地址早填 / load-store 依赖解耦**，而不是先上
+   D-Cache；否则 D$ 只能缓解 10 拍内存延迟，无法解决 LSQ 的地址未知阻塞。

@@ -887,4 +887,105 @@ module backend_ooo #(
   end
 `endif
 
+`ifdef LOCAL_STATS
+  // 仅仿真统计；默认构建/综合不会实例化这些计数器。
+  longint st_cycles, st_disp, st_issue0, st_issue1;
+  longint st_iq_empty, st_stall0, st_stall_lsu, st_stall_div;
+  longint st_stall_alu, st_stall_cf, st_stall_other;
+  longint st_stall1, st_lane1_unsup, st_lane1_buf, st_lane1_other;
+  longint st_cdb_conflict, st_cdb_lost, st_div_busy, st_lsu_busy;
+  longint st_ld_issue, st_ld_resp, st_st_issue, st_st_resp;
+  longint st_skid_cycles, st_iq_full_stall, st_backend_bubble;
+  integer st_i, st_lost;
+
+  always_ff @(posedge clk) begin
+    if (reset) begin
+      st_cycles         <= 0;
+      st_disp           <= 0;
+      st_issue0         <= 0;
+      st_issue1         <= 0;
+      st_iq_empty       <= 0;
+      st_stall0         <= 0;
+      st_stall_lsu      <= 0;
+      st_stall_div      <= 0;
+      st_stall_alu      <= 0;
+      st_stall_cf       <= 0;
+      st_stall_other    <= 0;
+      st_stall1         <= 0;
+      st_lane1_unsup    <= 0;
+      st_lane1_buf      <= 0;
+      st_lane1_other    <= 0;
+      st_cdb_conflict   <= 0;
+      st_cdb_lost       <= 0;
+      st_div_busy       <= 0;
+      st_lsu_busy       <= 0;
+      st_ld_issue       <= 0;
+      st_ld_resp        <= 0;
+      st_st_issue       <= 0;
+      st_st_resp        <= 0;
+      st_skid_cycles    <= 0;
+      st_iq_full_stall  <= 0;
+      st_backend_bubble <= 0;
+    end else begin
+      st_cycles <= st_cycles + 1;
+      if (skid_drain) st_disp <= st_disp + n_disp;
+      if (iq_out_valid[0] && issue_ready[0]) st_issue0 <= st_issue0 + 1;
+      if (iq_out_valid[1] && issue_ready[1]) st_issue1 <= st_issue1 + 1;
+      if (!iq_out_valid[0]) st_iq_empty <= st_iq_empty + 1;
+      if (!backend_ready) st_backend_bubble <= st_backend_bubble + 1;
+      if (skid_valid) st_skid_cycles <= st_skid_cycles + 1;
+      if (skid_valid && !iq_in_ready) st_iq_full_stall <= st_iq_full_stall + 1;
+      if (div_busy) st_div_busy <= st_div_busy + 1;
+      if (lsu_busy) st_lsu_busy <= st_lsu_busy + 1;
+
+      if (ld_req_valid && ld_req_ready) st_ld_issue <= st_ld_issue + 1;
+      if (ld_resp_valid) st_ld_resp <= st_ld_resp + 1;
+      if (st_req_valid && st_req_ready) st_st_issue <= st_st_issue + 1;
+      if (st_resp_valid) st_st_resp <= st_st_resp + 1;
+
+      if (iq_out_valid[0] && !issue_ready[0]) begin
+        st_stall0 <= st_stall0 + 1;
+        if (noval_expected && !cf_allow)
+          st_stall_cf <= st_stall_cf + 1;
+        else if (i_is_mem && !lsu_issue_ready)
+          st_stall_lsu <= st_stall_lsu + 1;
+        else if (i_is_div && !div_issue_ready)
+          st_stall_div <= st_stall_div + 1;
+        else if (!i_is_mem && !i_is_div && !alu_issue_ready)
+          st_stall_alu <= st_stall_alu + 1;
+        else
+          st_stall_other <= st_stall_other + 1;
+      end
+
+      if (iq_out_valid[1] && !issue_ready[1]) begin
+        st_stall1 <= st_stall1 + 1;
+        if (!j_lane_ok)
+          st_lane1_unsup <= st_lane1_unsup + 1;
+        else if (!alu1_issue_ready)
+          st_lane1_buf <= st_lane1_buf + 1;
+        else
+          st_lane1_other <= st_lane1_other + 1;
+      end
+
+      st_lost = 0;
+      for (st_i = 0; st_i < N; st_i = st_i + 1)
+        if (cdb_src_valid[st_i] && !cdb_src_ready[st_i])
+          st_lost = st_lost + 1;
+      if (st_lost != 0) begin
+        st_cdb_conflict <= st_cdb_conflict + 1;
+        st_cdb_lost     <= st_cdb_lost + st_lost;
+      end
+    end
+  end
+
+  final $fdisplay(32'h80000002,
+      "[STATS] BE cycles=%0d dispatch=%0d issue0=%0d issue1=%0d iq_empty=%0d stall0=%0d stall_lsu=%0d stall_div=%0d stall_alu=%0d stall_cf=%0d stall_other=%0d stall1=%0d lane1_unsup=%0d lane1_buf=%0d lane1_other=%0d cdb_conflict=%0d cdb_lost=%0d div_busy=%0d lsu_busy=%0d ld_issue=%0d ld_resp=%0d st_issue=%0d st_resp=%0d skid_cycles=%0d iq_full_stall=%0d backend_bubble=%0d",
+      st_cycles, st_disp, st_issue0, st_issue1, st_iq_empty, st_stall0,
+      st_stall_lsu, st_stall_div, st_stall_alu, st_stall_cf, st_stall_other,
+      st_stall1, st_lane1_unsup, st_lane1_buf, st_lane1_other,
+      st_cdb_conflict, st_cdb_lost, st_div_busy, st_lsu_busy,
+      st_ld_issue, st_ld_resp, st_st_issue, st_st_resp,
+      st_skid_cycles, st_iq_full_stall, st_backend_bubble);
+`endif
+
 endmodule

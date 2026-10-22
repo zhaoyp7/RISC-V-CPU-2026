@@ -300,4 +300,51 @@ module mem_subsystem #(
     end
   end
 
+`ifdef LOCAL_STATS
+  // 仅仿真统计；默认构建/综合不会实例化这些计数器。
+  longint st_cycles, st_if0_req, st_if1_req, st_ld_req, st_st_req;
+  longint st_rd_resp, st_wr_resp, st_axi_rd_wait, st_axi_wr_wait;
+  longint st_rd_out_sum, st_wr_out_sum;
+  integer st_max_rd_out, st_max_wr_out;
+
+  always_ff @(posedge clk) begin
+    if (reset) begin
+      st_cycles      <= 0;
+      st_if0_req     <= 0;
+      st_if1_req     <= 0;
+      st_ld_req      <= 0;
+      st_st_req      <= 0;
+      st_rd_resp     <= 0;
+      st_wr_resp     <= 0;
+      st_axi_rd_wait <= 0;
+      st_axi_wr_wait <= 0;
+      st_rd_out_sum  <= 0;
+      st_wr_out_sum  <= 0;
+      st_max_rd_out  <= 0;
+      st_max_wr_out  <= 0;
+    end else begin
+      st_cycles <= st_cycles + 1;
+      if (rd_fire && sel_if)  st_if0_req <= st_if0_req + 1;
+      if (rd_fire && sel_if2) st_if1_req <= st_if1_req + 1;
+      if (rd_fire && sel_ld)  st_ld_req <= st_ld_req + 1;
+      if (wr_fire && sel_st)  st_st_req <= st_st_req + 1;
+      if (axi_rd_resp_valid) st_rd_resp <= st_rd_resp + 1;
+      if (axi_wr_resp_valid) st_wr_resp <= st_wr_resp + 1;
+      if (axi_rd_valid && !axi_rd_ready) st_axi_rd_wait <= st_axi_rd_wait + 1;
+      if (axi_wr_valid && !axi_wr_ready) st_axi_wr_wait <= st_axi_wr_wait + 1;
+
+      st_rd_out_sum <= st_rd_out_sum + rd_count;
+      st_wr_out_sum <= st_wr_out_sum + wr_count;
+      if (rd_count > st_max_rd_out) st_max_rd_out <= rd_count;
+      if (wr_count > st_max_wr_out) st_max_wr_out <= wr_count;
+    end
+  end
+
+  final $fdisplay(32'h80000002,
+      "[STATS] MEM cycles=%0d if0_req=%0d if1_req=%0d ld_req=%0d st_req=%0d rd_resp=%0d wr_resp=%0d axi_rd_wait=%0d axi_wr_wait=%0d rd_out_sum=%0d max_rd_out=%0d wr_out_sum=%0d max_wr_out=%0d",
+      st_cycles, st_if0_req, st_if1_req, st_ld_req, st_st_req,
+      st_rd_resp, st_wr_resp, st_axi_rd_wait, st_axi_wr_wait,
+      st_rd_out_sum, st_max_rd_out, st_wr_out_sum, st_max_wr_out);
+`endif
+
 endmodule

@@ -410,4 +410,64 @@ module lsu #(
   end
 `endif
 
+`ifdef LOCAL_STATS
+  // 仅仿真统计；默认构建/综合不会实例化这些计数器。
+  longint st_cycles, st_ld_issue, st_ld_resp, st_ld_fwd, st_illegal_ld;
+  longint st_load_result_wait, st_ldq_busy, st_rq_busy, st_ldq_full;
+  longint st_mem_block, st_query_blocked, st_st_issue, st_st_drain, st_st_resp;
+  longint st_ld_out_sum, st_rq_out_sum;
+  integer st_max_ld_out, st_max_rq_out;
+
+  always_ff @(posedge clk) begin
+    if (reset) begin
+      st_cycles          <= 0;
+      st_ld_issue        <= 0;
+      st_ld_resp         <= 0;
+      st_ld_fwd          <= 0;
+      st_illegal_ld      <= 0;
+      st_load_result_wait<= 0;
+      st_ldq_busy        <= 0;
+      st_rq_busy         <= 0;
+      st_ldq_full        <= 0;
+      st_mem_block       <= 0;
+      st_query_blocked   <= 0;
+      st_st_issue        <= 0;
+      st_st_drain        <= 0;
+      st_st_resp         <= 0;
+      st_ld_out_sum      <= 0;
+      st_rq_out_sum      <= 0;
+      st_max_ld_out      <= 0;
+      st_max_rq_out      <= 0;
+    end else begin
+      st_cycles <= st_cycles + 1;
+      if (load_issue) st_ld_issue <= st_ld_issue + 1;
+      if (load_issue && ld_fwd) st_ld_fwd <= st_ld_fwd + 1;
+      if (load_issue && issue_illegal) st_illegal_ld <= st_illegal_ld + 1;
+      if (md_resp_fire) st_ld_resp <= st_ld_resp + 1;
+      if (load_result_valid && !load_result_ready)
+        st_load_result_wait <= st_load_result_wait + 1;
+      if (ld_count != 0) st_ldq_busy <= st_ldq_busy + 1;
+      if (rq_count != 0) st_rq_busy <= st_rq_busy + 1;
+      if (!ld_space) st_ldq_full <= st_ldq_full + 1;
+      if (!ld_req_ready) st_mem_block <= st_mem_block + 1;
+      if (lsq_query_blocked) st_query_blocked <= st_query_blocked + 1;
+      if (store_issue) st_st_issue <= st_st_issue + 1;
+      if (drain_fire) st_st_drain <= st_st_drain + 1;
+      if (st_resp_valid) st_st_resp <= st_st_resp + 1;
+
+      st_ld_out_sum <= st_ld_out_sum + ld_count;
+      st_rq_out_sum <= st_rq_out_sum + rq_count;
+      if (ld_count > st_max_ld_out) st_max_ld_out <= ld_count;
+      if (rq_count > st_max_rq_out) st_max_rq_out <= rq_count;
+    end
+  end
+
+  final $fdisplay(32'h80000002,
+      "[STATS] LSU cycles=%0d ld_issue=%0d ld_resp=%0d ld_fwd=%0d illegal_ld=%0d load_result_wait=%0d ldq_busy=%0d rq_busy=%0d ldq_full=%0d mem_block=%0d query_blocked=%0d st_issue=%0d st_drain=%0d st_resp=%0d ld_out_sum=%0d max_ld_out=%0d rq_out_sum=%0d max_rq_out=%0d",
+      st_cycles, st_ld_issue, st_ld_resp, st_ld_fwd, st_illegal_ld,
+      st_load_result_wait, st_ldq_busy, st_rq_busy, st_ldq_full,
+      st_mem_block, st_query_blocked, st_st_issue, st_st_drain, st_st_resp,
+      st_ld_out_sum, st_max_ld_out, st_rq_out_sum, st_max_rq_out);
+`endif
+
 endmodule

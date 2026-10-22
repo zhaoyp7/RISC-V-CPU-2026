@@ -397,4 +397,80 @@ module frontend_ooo #(
   end
 `endif
 
+`ifdef LOCAL_STATS
+  // 仅仿真统计；默认构建/综合不会实例化这些计数器。
+  longint st_cycles, st_fetch_req, st_uops, st_redirects;
+  longint st_refill0, st_refill0_wait, st_refill0_resp;
+  longint st_refill1, st_refill1_wait, st_refill1_resp;
+  longint st_stall_backend, st_stall_fq, st_stall_rq, st_stall_cache;
+  longint st_fq_occ_sum, st_fq_full;
+  integer st_max_fq;
+  logic   st_refill0_q, st_refill1_q;
+
+  always_ff @(posedge clk) begin
+    if (reset) begin
+      st_cycles         <= 0;
+      st_fetch_req      <= 0;
+      st_uops           <= 0;
+      st_redirects      <= 0;
+      st_refill0        <= 0;
+      st_refill0_wait   <= 0;
+      st_refill0_resp   <= 0;
+      st_refill1        <= 0;
+      st_refill1_wait   <= 0;
+      st_refill1_resp   <= 0;
+      st_stall_backend  <= 0;
+      st_stall_fq       <= 0;
+      st_stall_rq       <= 0;
+      st_stall_cache    <= 0;
+      st_fq_occ_sum     <= 0;
+      st_fq_full        <= 0;
+      st_max_fq         <= 0;
+      st_refill0_q      <= 1'b0;
+      st_refill1_q      <= 1'b0;
+    end else begin
+      st_cycles    <= st_cycles + 1;
+      if (fetch_fire) st_fetch_req <= st_fetch_req + 1;
+      if (resp_accept) st_uops <= st_uops + push_n;
+      if (redirect_valid) st_redirects <= st_redirects + 1;
+
+      if (refill_valid) begin
+        st_refill0_wait <= st_refill0_wait + 1;
+        if (!st_refill0_q) st_refill0 <= st_refill0 + 1;
+      end
+      if (refill_resp_valid) st_refill0_resp <= st_refill0_resp + 1;
+      st_refill0_q <= refill_valid;
+
+      if (refill_valid1) begin
+        st_refill1_wait <= st_refill1_wait + 1;
+        if (!st_refill1_q) st_refill1 <= st_refill1 + 1;
+      end
+      if (refill_resp_valid1) st_refill1_resp <= st_refill1_resp + 1;
+      st_refill1_q <= refill_valid1;
+
+      if (!backend_ready) st_stall_backend <= st_stall_backend + 1;
+      if (backend_ready && !redirect_valid) begin
+        if (!fq_space_fetch) begin
+          if (rq_count >= RDEPTH) st_stall_rq <= st_stall_rq + 1;
+          else                    st_stall_fq <= st_stall_fq + 1;
+        end else if (!fetch_ready0 || (use2 && !fetch_ready1)) begin
+          st_stall_cache <= st_stall_cache + 1;
+        end
+      end
+
+      st_fq_occ_sum <= st_fq_occ_sum + fq_count;
+      if (fq_count > st_max_fq) st_max_fq <= fq_count;
+      if (fq_count + 4 > FDEPTH + pop_n) st_fq_full <= st_fq_full + 1;
+    end
+  end
+
+  final $fdisplay(32'h80000002,
+      "[STATS] FE cycles=%0d fetch_req=%0d uops=%0d redirects=%0d refill0=%0d refill0_wait=%0d refill0_resp=%0d refill1=%0d refill1_wait=%0d refill1_resp=%0d stall_backend=%0d stall_fq=%0d stall_rq=%0d stall_cache=%0d fq_occ_sum=%0d max_fq=%0d fq_full=%0d",
+      st_cycles, st_fetch_req, st_uops, st_redirects,
+      st_refill0, st_refill0_wait, st_refill0_resp,
+      st_refill1, st_refill1_wait, st_refill1_resp,
+      st_stall_backend, st_stall_fq, st_stall_rq, st_stall_cache,
+      st_fq_occ_sum, st_max_fq, st_fq_full);
+`endif
+
 endmodule

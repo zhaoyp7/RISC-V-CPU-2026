@@ -323,4 +323,51 @@ module lsq #(
   end
 `endif
 
+`ifdef LOCAL_STATS
+  // 仅仿真统计；默认构建/综合不会实例化这些计数器。
+  longint st_cycles, st_query, st_blocked, st_unknown, st_partial, st_fwd;
+  longint st_clear, st_alloc, st_full_cycles, st_count_sum;
+  integer st_max_count;
+
+  always_ff @(posedge clk) begin
+    if (reset) begin
+      st_cycles     <= 0;
+      st_query      <= 0;
+      st_blocked    <= 0;
+      st_unknown    <= 0;
+      st_partial    <= 0;
+      st_fwd        <= 0;
+      st_clear      <= 0;
+      st_alloc      <= 0;
+      st_full_cycles<= 0;
+      st_count_sum  <= 0;
+      st_max_count  <= 0;
+    end else begin
+      st_cycles <= st_cycles + 1;
+      st_count_sum <= st_count_sum + count;
+      if (count > st_max_count) st_max_count <= count;
+      if (!alloc_ready) st_full_cycles <= st_full_cycles + 1;
+      if (alloc_ready && alloc_fire) st_alloc <= st_alloc + 1;
+
+      if (query_valid) begin
+        st_query <= st_query + 1;
+        if (any_unknown)
+          st_unknown <= st_unknown + 1;
+        else if (same_found && !same_full)
+          st_partial <= st_partial + 1;
+        else if (query_fwd_valid)
+          st_fwd <= st_fwd + 1;
+        else
+          st_clear <= st_clear + 1;
+      end
+      if (query_valid && query_blocked) st_blocked <= st_blocked + 1;
+    end
+  end
+
+  final $fdisplay(32'h80000002,
+      "[STATS] LSQ cycles=%0d queries=%0d blocked=%0d unknown=%0d partial=%0d fwd=%0d clear=%0d alloc_fire=%0d full_cycles=%0d count_sum=%0d max_count=%0d",
+      st_cycles, st_query, st_blocked, st_unknown, st_partial, st_fwd,
+      st_clear, st_alloc, st_full_cycles, st_count_sum, st_max_count);
+`endif
+
 endmodule

@@ -475,4 +475,41 @@ module rob #(
   end
 `endif
 
+`ifdef LOCAL_STATS
+  // 仅仿真统计；默认构建/综合不会实例化这些计数器。
+  longint st_cycles, st_commits, st_br_updates, st_mispredicts;
+  longint st_taken, st_rob_full, st_occ_sum;
+  integer st_max_occ;
+
+  always_ff @(posedge clk) begin
+    if (reset) begin
+      st_cycles      <= 0;
+      st_commits     <= 0;
+      st_br_updates  <= 0;
+      st_mispredicts <= 0;
+      st_taken       <= 0;
+      st_rob_full    <= 0;
+      st_occ_sum     <= 0;
+      st_max_occ     <= 0;
+    end else begin
+      st_cycles     <= st_cycles + 1;
+      st_commits    <= st_commits + n_commit;
+      st_occ_sum    <= st_occ_sum + count;
+      if (count > st_max_occ) st_max_occ <= count;
+
+      if (br_update_valid && br_found) begin
+        st_br_updates <= st_br_updates + 1;
+        if (br_update_taken) st_taken <= st_taken + 1;
+      end
+      if (flush_young) st_mispredicts <= st_mispredicts + 1;
+      if ((count + W) > DEPTH) st_rob_full <= st_rob_full + 1;
+    end
+  end
+
+  final $fdisplay(32'h80000002,
+      "[STATS] ROB cycles=%0d commits=%0d br_updates=%0d mispredicts=%0d taken=%0d rob_full_cycles=%0d occ_sum=%0d max_occ=%0d",
+      st_cycles, st_commits, st_br_updates, st_mispredicts, st_taken,
+      st_rob_full, st_occ_sum, st_max_occ);
+`endif
+
 endmodule
