@@ -197,8 +197,9 @@ diagnose 面积 breakdown：front 7,873、ROB 5,243、backend 10,770、mem 526 �
 3. **面积 24.3k → 9k/18k**：双 ALU、双 I$、ROB、BPU 是主要开销；需要
    参数收缩和端口复用。
 4. **旧单测**：`test/lsu_test`、`test/mem_subsystem_test`、
-   `test/backend_test` 仍按 P1 单事务接口编写，尚未适配 P2 端口；
-   当前 `run_all.sh` 不包含它们。
+   `test/backend_test` 已在 2026-10-22 适配 P2 端口（LSU/backend 验证双 CDB
+   与流水访存，mem_subsystem 验证 dual-IF/ld/st 客户口），并加入
+   `run_all.sh`。
 5. **接口文档**：`docs/interface.md` 已补 P2 内部 ld/st/双 refill 说明，
    但顶部冻结总线表仍主要是 P1 视角，P3 可再整理。
 

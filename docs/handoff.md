@@ -63,8 +63,8 @@ make test MAX_CYCLES=50000000
 - 官方 W=1 correctness：**19/19 PASS**
 - 官方 W=2 correctness：**19/19 PASS**（`MAX_CYCLES=50,000,000`）
 - `sh test/run_all.sh`：**ALL PASS**
-- 旧单测 `test/lsu_test`、`test/mem_subsystem_test`、`test/backend_test`
-  尚未适配 P2 新端口（不在 `run_all.sh` 内）
+- `test/lsu_test`、`test/mem_subsystem_test`、`test/backend_test` 已适配
+  P2 端口并加入 `run_all.sh`
 - `python3 tools/config_gen.py --check`：up to date
 - 当前课程分数估算：仍约 **85/100**（性能/面积/频率未达阶段门槛）
 
