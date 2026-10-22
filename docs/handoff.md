@@ -1,4 +1,4 @@
-# RISC-V CPU 2026 — 协作者交接（P2 进行中）
+# RISC-V CPU 2026 — 协作者交接（P2 功能完成，性能优化中）
 
 > 这是**已跟踪**的协作文档，`git pull` 即可获得。
 > 本地完整版 `prompt.md` 被 `.gitignore` 忽略，不会随 git 同步；本文件是
@@ -49,11 +49,12 @@ make test MAX_CYCLES=50000000
 
 ---
 
-## 1. 当前状态（2026-10-21）
+## 1. 当前状态（2026-10-22）
 
 - 分支：`main`
 - P1 功能 tag：`p1-ooo-final`（`0d6e07f`）
-- P2 当前提交：`a95a938`（双发射 + 双取指 + 流水访存）
+- P2 RTL 提交：`a95a938`（双发射 + 双取指 + 流水访存）
+- 当前 `main`：以 `git log -1 --oneline` 为准（P2 RTL 提交为 `a95a938`）
 - 官方 `verilog/filelist.f` 使用 OoO 顶层 `student_top_ooo.sv`
   （模块名仍是 `student_top`）
 - 基线 `core.sv`/`icache.sv`/`student_top.sv` 保留但不在 filelist
@@ -68,7 +69,7 @@ make test MAX_CYCLES=50000000
 - `python3 tools/config_gen.py --check`：up to date
 - 当前课程分数估算：仍约 **85/100**（性能/面积/频率未达阶段门槛）
 
-### 当前性能/面积（W=2，commit `4cf171e`）
+### 当前性能/面积（W=2，RTL commit `a95a938`）
 
 | 指标 | 当前值 | 阶段 1 门槛 | 阶段 2 门槛 |
 | --- | ---: | ---: | ---: |
@@ -112,53 +113,49 @@ W=1 档 IPC 为 0.5017。perf 明细、参数敏感度和 synth breakdown 见
 1. 取指仍限制吞吐：每 bank 每拍一条，分支误预测恢复约 6–7 拍
 2. 无低延迟 D-Cache：towers 等 pointer chasing 直接暴露 10 拍内存延迟
 3. BPU 仍是 BTB + 2-bit BHT；gshare/RAS 未接入
-4. 关键路径 `ROB → backend`，57.11 MHz；面积 24.2k，阶段 1/2 均未达
+4. 关键路径 `ROB → backend`，56.08 MHz；面积 24.3k，阶段 1/2 均未达
 5. 双发射只在 ALU lane 生效；mem/div/branch 仍单端口
 
 ---
 
-## 3. 下一步：P2 收尾 / P3
+## 3. 下一步：先频率/面积/分支预测，D-Cache 暂缓
 
-当前 P2 功能已打通但未达门槛。优先级：
-1. 降低分支误预测代价（RAS/gshare、恢复流水化）；
-2. 非阻塞 D-Cache 或低延迟 load 通路（towers/median）；
-3. 频率流水化（ROB → backend、IQ select、I$ tag/BPU）；
-4. 面积收缩（ROB/PRF/IQ、单 BPU 已做，双 I$ 与双 ALU 是主要开销）。
+2026-10-22 决策：**不要先做 D-Cache**。当前课程门槛是全有或全无：
 
-以下为原始 P2 目标（课程阶段 1）：
+| 指标 | 当前 | 阶段 1 | 阶段 2 |
+| --- | ---: | ---: | ---: |
+| IPC | 0.5507 | ≥ 0.6000 | ≥ 0.8450 |
+| 面积 | 24,288 µm² | ≤ 9,000 | ≤ 18,000 |
+| 频率 | 56.08 MHz | ≥ 300 | ≥ 300 |
 
-- W=1 与 W=2 都 **19/19 PASS**
-- IPC ≥ **0.6000**
-- 面积 ≤ **9,000 µm²**
-- 频率 ≥ **300 MHz**
-- tag：`p2-stage1`
+IPC 只差约 9%，但面积/频率差得更远；只把 IPC 提到 0.6 不会改变 85 分。
+D-Cache 会增加面积、可能拖慢 ROB→backend 关键路径，而且 P2 的 4KB
+阻塞式写直达原型已经测到 IPC 0.1543，不能直接重做。
 
-建议顺序：
+建议优先级：
 
-1. **性能计数器/瓶颈统计**：branch miss、I$/D$ miss、IQ/ROB full、
-   LSU blocked、CDB conflict、divider busy。
-2. **D-Cache + store buffer + mem_subsystem 仲裁**（最高 IPC 收益）。
-   - 直接映射、写直达 + 写缓冲；
-   - I-Cache refill / D-Cache miss / store drain 三方仲裁；
-   - 保持 LSU 上游接口尽量不变。
-3. **W=2 双发射**：双路 select、第二 ALU、CDB 仲裁/双 CDB、2 宽取指；
-   W=1 不能回归。
-4. **频率流水化**：ROB recovery、IQ select/wakeup、ALU/multiplier、
-   I-Cache/BPU 路径；目标 300 MHz。
-5. **面积参数收缩**：ROB/PRF/IQ/LSQ/I-Cache/BTB/BHT 参数扫描；
-   D-Cache 会增加面积，必须同时缩其他模块。
-6. **gshare/RAS + 2 宽取指**：接入前 ROB 表项要保存预测时 GHR 快照。
-7. **LSQ 增强**：store-to-load forwarding、non-blocking load、地址消歧。
+1. **性能计数器**：branch miss、I$/D$ miss、load latency、IQ/ROB full、
+   LSU blocked、CDB conflict、divider busy。先确认瓶颈，不要凭感觉加 D$。
+2. **频率流水化（最高优先）**：关键路径 ROB→backend；拆 ROB recovery/
+   recover_rat/busy mask、IQ select/wakeup、ALU 乘法器、I$ tag/BPU 路径。
+3. **面积参数收缩**：ROB 16/24、PRF 48、IQ 4/6、LSQ 4/6、I$ 1KB/bank、
+   BTB/BHT 缩小；用 `make perf` + `MODE=diagnose` 做参数档。
+4. **分支预测**：gshare 必须保存预测时 GHR 快照；加 RAS；配合 fetch queue。
+   这比 D-Cache 面积小，直接针对 qsort/median 的数据相关分支。
+5. **D-Cache 仅在计数器和面积预算允许时再做**：小型、非阻塞、
+   写直达 + store buffer、带 MSHR/hit-under-miss；不要重复阻塞式 4KB。
+6. **LSQ 增强**：store-to-load forwarding、non-blocking load、地址消歧。
 
-如果 9k 面积在双发射 + D-Cache 下不可达，先保证 W=1/W=2 全量功能，再决定
-是继续压面积冲 90 分，还是走阶段 2（面积 18k 已满足，但 IPC 要 0.845）。
+路线判断：阶段 1 的 9k 面积非常激进；如果频率/面积压不下去，优先评估
+阶段 2（面积 18k 更近，但 IPC 要 0.845），不要为了一个 IPC 指标盲目加
+D-Cache。当前 P2 已打 tag `p2-dual-issue`，没有 `p2-stage1`。
 
 ---
 
 ## 4. 常用命令
 
 ```sh
-# 官方 W=1
+# 默认 W=2
 make build JOBS=4
 make test MAX_CYCLES=50000000
 REPO_ROOT="$(git rev-parse --show-toplevel)"
@@ -177,23 +174,26 @@ sh test/rename_test/run.sh --quick
 RENAME_W=2 sh test/rename_test/run.sh --quick
 ```
 
-### W=2 构建
+### W=1 构建（默认已是 W=2）
+
+`cpu_config.sv` 默认 W=2，直接 `make build` 即可。W=1 用带
+`CPU_ISSUE_WIDTH=1` 的 wrapper：
 
 ```sh
 export REPO_ROOT="$(git rev-parse --show-toplevel)"
 
-cat > /tmp/opencode/verilator_w2.sh <<'EOF'
+cat > /tmp/opencode/verilator_w1.sh <<'EOF'
 #!/bin/sh
 exec "${REPO_ROOT:?export REPO_ROOT}/cpu2026-tools-x86_64.AppImage" exec /bin/sh -c \
-  'exec "$CPU2026_APPDIR/bin/verilator" +define+CPU_ISSUE_WIDTH=2 "$@"' sh "$@"
+  'exec "$CPU2026_APPDIR/bin/verilator" +define+CPU_ISSUE_WIDTH=1 "$@"' sh "$@"
 EOF
-chmod +x /tmp/opencode/verilator_w2.sh
+chmod +x /tmp/opencode/verilator_w1.sh
 
-make build FILELIST=verilog/filelist.f BUILD=build/w2 \
-  VERILATOR=/tmp/opencode/verilator_w2.sh JOBS=4
+make build FILELIST=verilog/filelist.f BUILD=build/w1 \
+  VERILATOR=/tmp/opencode/verilator_w1.sh JOBS=4
 ```
 
-W=2 全量 19/19 还没跑；P2 必须补上。
+W=1/W=2 的 correctness 都由队友记录为 19/19；本机独立复核了 W=2 19/19。
 
 ---
 
@@ -227,16 +227,16 @@ W=2 全量 19/19 还没跑；P2 必须补上。
 - `make synth MODE=diagnose`：面积 breakdown
 - `make synth MODE=opt`：最终面积/频率
 - 报告在 `build/synth/<mode>/report.txt`
-- 当前 `docs/perf-log.md` 还是旧模板，P2 第一件事应填入 P1 真实数据
+- `docs/perf-log.md` 已记录 P1/P2 perf、面积、频率和参数敏感度
 
 ---
 
 ## 6. 推荐阅读
 
-1. `docs/integration-status.md`：P1 结果、perf/synth 数据、修复根因
+1. `docs/integration-status.md`：P1/P2 结果、perf/synth 数据、下一步策略
 2. `docs/plan/division.md`：P2/P3 工作包和验收标准
 3. `docs/interface.md`：八条总线冻结接口
 4. `README-ZH.md`：课程评分、工具链、命令
 
-一句话：**P1 已全绿，当前是单发射乱序核心；P2 先做 D-Cache 和 W=2 双发射，
-再解决 300 MHz 频率与 9k 面积。**
+一句话：**P2 功能已全绿（W=2 双发射/双取指/流水访存，IPC 0.5507）；
+下一步先做频率流水化、面积收缩和带 GHR 快照的 gshare/RAS，D-Cache 暂缓。**

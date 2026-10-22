@@ -16,6 +16,10 @@
 min period 17.8320 ns（目标 2 ns，WNS −15.8320 ns）。diagnose 为 25,025.438 µm²、
 53.93 MHz、18.5430 ns。
 
+> **2026-10-22 策略**：先做频率流水化、面积参数收缩和分支预测
+> （gshare 需 GHR 快照 + RAS）；D-Cache 暂缓，只有在计数器证明 load
+> stall 主导且面积预算允许时再做小型非阻塞 D$。
+
 ## 分 benchmark（W=2，最终）
 
 | benchmark | instructions | cycles | IPC |

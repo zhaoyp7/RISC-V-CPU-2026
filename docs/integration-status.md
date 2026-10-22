@@ -1,6 +1,6 @@
-# 集成状态（P1 完成，P2 进行中）
+# 集成状态（P1 完成，P2 进入性能优化）
 
-## P2 当前结果（2026-10-21，commit `a95a938`）
+## P2 当前结果（RTL `a95a938`，2026-10-22）
 
 - **W=1 correctness：19/19 PASS**；**W=2 correctness：19/19 PASS**（`MAX_CYCLES=50,000,000`）。
 - 单元测试：`sh test/run_all.sh` → **ALL PASS**（frontend W=1/W=2 已适配
@@ -29,15 +29,34 @@
 5. 分支解析改为 issue 当拍组合发送 `br_update`，ROB redirect 也改为组合
    输出，缩短恢复路径。
 
+### 下一步策略（2026-10-22）
+
+**先频率/面积/分支预测，D-Cache 暂缓。**
+
+- 当前 IPC 0.5507，距离阶段 1 只差约 9%；但面积 24.3k（阶段 1 ≤9k、
+  阶段 2 ≤18k）和频率 56.08 MHz（≥300 MHz）差得更远。只把 IPC 提到 0.6
+  不会改变 85 分，因为门槛是全有或全无。
+- P2 的 4KB 阻塞式写直达 D-Cache 原型 IPC 只有 0.1543，已回退；直接重做
+  风险高，且会增加面积、拖慢 ROB→backend 关键路径。
+- 优先顺序：
+  1. 性能计数器/停顿分类（branch/I$/D$/IQ/ROB/LSU/CDB/divider）；
+  2. 频率流水化：ROB recovery、IQ select/wakeup、ALU 乘法器、
+     I$ tag/BPU 路径；
+  3. 面积参数收缩：ROB/PRF/IQ/LSQ/I$/BTB/BHT；
+  4. 分支预测：gshare 保存预测时 GHR 快照 + RAS；
+  5. D-Cache 仅在计数器证明 load stall 主导且面积预算允许时再做，
+     采用小型、非阻塞、写直达 + store buffer 的形态。
+
 ### 复现命令
 
 ```sh
 python3 tools/config_gen.py --check
 make build JOBS=4
-make test MAX_CYCLES=50000000
+make test MAX_CYCLES=50000000          # 本机约 45 s
 make perf MAX_CYCLES=50000000
-make synth MODE=opt
-# W=1 档：用 +define+CPU_ISSUE_WIDTH=1 的 Verilator wrapper
+make synth MODE=diagnose               # 本机约 716 s
+make synth MODE=opt                    # 本机约 25 min
+# W=1 档：默认是 W=2，用 +define+CPU_ISSUE_WIDTH=1 的 wrapper
 sh test/run_all.sh
 ```
 

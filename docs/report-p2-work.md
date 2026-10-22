@@ -188,19 +188,26 @@ diagnose 面积 breakdown：front 7,873、ROB 5,243、backend 10,770、mem 526 �
 
 ## 7. 未完成/下一步
 
-1. **IPC 0.5507 → 0.6000**：主要损失在 qsort/median 的数据相关分支误预测
-   （约 6–7 拍恢复气泡）和 towers 的 pointer-chasing load 延迟。
-   - 优先级：精确 GHR 快照的 gshare、RAS、非阻塞低延迟 D-Cache；
-   - 也可把 branch 恢复、IQ select、ROB recovery 再流水化。
-2. **频率 56 → 300 MHz**：关键路径 `ROB → backend`，需要结构性流水，
-   不是 ABC 能解决的。
-3. **面积 24.3k → 9k/18k**：双 ALU、双 I$、ROB、BPU 是主要开销；需要
-   参数收缩和端口复用。
-4. **旧单测**：`test/lsu_test`、`test/mem_subsystem_test`、
-   `test/backend_test` 已在 2026-10-22 适配 P2 端口（LSU/backend 验证双 CDB
-   与流水访存，mem_subsystem 验证 dual-IF/ld/st 客户口），并加入
-   `run_all.sh`。
-5. **接口文档**：`docs/interface.md` 已补 P2 内部 ld/st/双 refill 说明，
+> **2026-10-22 策略更新：先频率/面积/分支预测，D-Cache 暂缓。**
+> 当前 IPC 0.5507 距离阶段 1 只差约 9%，但面积 24.3k、频率 56.08 MHz
+> 距离门槛更远；只提 IPC 不会改变 85 分。P2 的 4KB 阻塞式写直达
+> D-Cache 原型 IPC 仅 0.1543，已回退，不能直接重做。
+
+1. **性能计数器/停顿分类**：branch miss、I$/D$ miss、load latency、
+   IQ/ROB full、LSU blocked、CDB conflict、divider busy。先确认瓶颈。
+2. **频率 56 → 300 MHz（最高优先）**：关键路径 `ROB → backend`；拆
+   ROB recovery/recover_rat/busy mask、IQ select/wakeup、ALU 乘法器、
+   I$ tag/BPU 路径，做结构性流水。
+3. **面积 24.3k → 9k/18k**：ROB/PRF/IQ/LSQ/I$/BTB/BHT 参数收缩；
+   双 ALU、双 I$、ROB、BPU 是主要开销。阶段 1 的 9k 很激进，需评估
+   是否转向阶段 2（面积 18k、IPC 0.845、300 MHz）。
+4. **分支预测**：gshare 接入前必须在 ROB 表项保存预测时 GHR 快照；
+   加 RAS，配合 2 宽取指/fetch queue。这比 D-Cache 面积小，直接针对
+   qsort/median 的数据相关分支。
+5. **D-Cache（暂缓）**：只在计数器证明 load stall 主导且面积预算允许时
+   再做；采用小型、非阻塞、写直达 + store buffer / MSHR 形态，不要重复
+   阻塞式 4KB 方案。
+6. **接口文档**：`docs/interface.md` 已补 P2 内部 ld/st/双 refill 说明，
    但顶部冻结总线表仍主要是 P1 视角，P3 可再整理。
 
 ## 8. 复现入口
