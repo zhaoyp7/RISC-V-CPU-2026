@@ -800,13 +800,6 @@ module backend_ooo #(
       cf_tail    <= '0;
       cf_count   <= '0;
     end else begin
-      if (cf_push) begin
-        cf_discard[cf_tail]       <= sq_valid && (cf_seq_in > squash_seq);
-        cf_tag[cf_tail*PW +: PW]  <= cf_tag_in;
-        cf_exc[cf_tail]           <= cf_exc_in;
-        cf_seq[cf_tail*32 +: 32]  <= cf_seq_in;
-        cf_tail <= (cf_tail == CF_DEPTH - 1) ? '0 : cf_tail + 1'b1;
-      end
       if (cf_pop)
         cf_head <= (cf_head == CF_DEPTH - 1) ? '0 : cf_head + 1'b1;
 
@@ -814,6 +807,16 @@ module backend_ooo #(
         for (i = 0; i < CF_DEPTH; i = i + 1)
           if (cf_seq[i*32 +: 32] > squash_seq)
             cf_discard[i] <= 1'b1;
+      end
+
+      // push 必须放在 squash 循环之后：同一拍 push 与 squash 落到同一
+      // slot 时，旧表项的 squash 结果不能覆盖新表项的 discard。
+      if (cf_push) begin
+        cf_discard[cf_tail]       <= sq_valid && (cf_seq_in > squash_seq);
+        cf_tag[cf_tail*PW +: PW]  <= cf_tag_in;
+        cf_exc[cf_tail]           <= cf_exc_in;
+        cf_seq[cf_tail*32 +: 32]  <= cf_seq_in;
+        cf_tail <= (cf_tail == CF_DEPTH - 1) ? '0 : cf_tail + 1'b1;
       end
 
       cf_count <= cf_count + (cf_push ? 1'b1 : 1'b0) -
@@ -824,8 +827,11 @@ module backend_ooo #(
                  $time, cf_tag_in, cf_exc_in, cf_seq_in,
                  sq_valid && (cf_seq_in > squash_seq), cf_count);
       if (cf_pop)
-        $display("[CF_POP] t=%0t head=%0d tag=%0d cnt=%0d", $time,
-                 cf_head, cf_tag[cf_head*PW +: PW], cf_count);
+        $display("[CF_POP] t=%0t head=%0d tag=%0d cnt=%0d disc=%0b sqv=%0b seq=%0d sqseq=%0d compv=%0b",
+                 $time, cf_head, cf_tag[cf_head*PW +: PW], cf_count,
+                 cf_discard[cf_head], sq_valid,
+                 cf_seq[cf_head*32 +: 32], squash_seq,
+                 complete[`CPU_COMPLETE_VALID_OFF]);
 `endif
     end
   end
