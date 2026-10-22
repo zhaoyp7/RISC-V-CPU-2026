@@ -17,6 +17,11 @@
   **25,134.890 µm² / 53.96 MHz**，面积仅 +109.5 µm²，opt 待重测。
 - **未达到课程阶段门槛**：阶段 1 需要 9,000 µm²、IPC 0.6000、300 MHz；
   IPC 已过 0.6，但面积/频率仍差很远；阶段 2 的 18,000 µm² 也未满足。
+- 2026-10-22 修复 ROB16 恢复竞态（`ab00273`）：恢复拍停止提交，避免
+  rename 装载快照时丢失 ROB crat/free 更新。ROB16 配置现已 19/19 PASS。
+- 参数扫描：C2（ROB16/PRF48/LSQ16/1KB I$/BTB32/BHT128）IPC 0.6311，
+  diagnose 20,262.8 µm² / 53.44 MHz；C3（RS4/512B I$/BTB16/BHT64）
+  IPC 0.5917，预计面积接近 18k。面积与 IPC 仍无法同时满足阶段 2。
 - 双发射、双 bank 取指、双 CDB、流水化 load/store、store-to-load forwarding、
   取指侧 BPU 预测均已接入；D-Cache 原型因阻塞式 miss 反而降低 IPC，已回退。
 

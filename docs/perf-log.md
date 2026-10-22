@@ -195,3 +195,54 @@ make build BUILD=build/stats VERILATOR=/tmp/opencode/verilator_stats.sh JOBS=4
 新增面积主要在 `u_backend/u_lsu`（+103.4 µm²，LSQ 增加 prefill 写口和
 控制）；`u_iq` 只增加约 6.4 µm²。地址预填是一个低面积代价、高 IPC 收益
 的改动。
+
+## 参数扫描与 ROB16 修复（2026-10-22）
+
+### 扫描结果（`make perf`，同 RTL）
+
+| 配置 | ROB | PRF | RS | LSQ | I$ / bank | BTB/BHT | IPC geomean | diagnose 面积 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 默认 | 32 | 64 | 8 | 8 | 2KB | 64/256 | **0.6380** | 25,134.9 µm² |
+| A | 16 | 48 | 8 | 8 | 2KB | 64/256 | 0.5936 | 未单独综合 |
+| B2 | 16 | 48 | 8 | 8 | 1KB | 32/128 | 0.5924 | 未单独综合 |
+| C2 | 16 | 48 | 8 | 16 | 1KB | 32/128 | **0.6311** | **20,262.8 µm²** |
+| C3 | 16 | 48 | 4 | 16 | 512B | 16/64 | 0.5917 | 未单独综合（预计接近 18k） |
+
+结论：
+
+1. **LSQ=16 是 ROB16 配置下恢复 IPC 的关键**：C2 比 B2 多 +0.039 IPC，
+   代价是 LSQ 面积约 +1.17k。
+2. **C2 在 20.3k 面积下保持 0.631 IPC**，是当前最接近阶段 2 面积门槛的
+   可用配置；但距 18k 仍差约 2.26k，且 IPC 距 0.845 很远。
+3. **C3 已接近 18k，但 IPC 只有 0.5917**，低于阶段 1 的 0.6；单纯压参数
+   无法同时满足面积和 IPC。
+4. `ROB=32 + PRF=48` 会发生资源型死锁：32 个 ROB 在飞表项加上 32 个
+   架构映射需要约 64 个物理寄存器，PRF48 不足。该组合不应作为候选。
+
+### ROB16 死锁根因与修复（`ab00273`）
+
+ROB 在 `recover_valid` 那一拍仍然允许更老的表项提交。rename 此时正在
+整体装载恢复快照，会忽略 commit 反馈，导致 ROB 的 crat/free 更新与 rename
+free list 失步；ROB16 下 recovery 频繁，tag 泄漏累积后 ROB 满且头部表项
+永远不完成。
+
+修复：
+
+```systemverilog
+assign commit_valid = commit_valid_int & {W{!flush_young && !recover_valid}};
+assign commit_halt  = commit_halt_int && !flush_young && !recover_valid;
+```
+
+效果：
+
+- C2（ROB16/PRF48）从 hanoi 超时变为 **19/19 PASS**
+- 默认配置仍 19/19 PASS，IPC 0.6380 不变
+- `sh test/run_all.sh` ALL PASS（ROB 单测期望已同步更新）
+
+### 频率关键路径（C2 diagnose）
+
+- 关键路径：`u_rob → u_backend → u_lsu → u_cdb → u_iq`
+- 属于 **squash/recovery 控制路径**，不是单纯 ALU 乘法器
+- C2 diagnose：20,262.763 µm² / 53.44 MHz / 18.7129 ns
+- 下一步若继续冲频率，需要流水化 squash/recovery 或缩短 `rob_seq` 查找，
+  单纯参数收缩只能小幅改善 Fmax

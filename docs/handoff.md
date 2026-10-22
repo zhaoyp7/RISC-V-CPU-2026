@@ -82,6 +82,11 @@ P2 基线 `a95a938` 的 IPC 为 0.5507；`a56cca6` 加入 store 地址预填后
 在预填 RTL 上重测。perf 明细、参数敏感度和 synth breakdown 见
 `docs/perf-log.md` 与 `docs/integration-status.md`。
 
+2026-10-22 还修复了 ROB16 的恢复竞态（`ab00273`），现在 ROB16 配置可用。
+参数扫描中 **C2（ROB16/PRF48/LSQ16/1KB I$/小 BPU）IPC 0.6311、
+diagnose 20,262.8 µm²**，是当前最接近 18k 面积的可用配置；但频率仍约
+53.4 MHz，距 300 MHz 很远。默认配置仍是 ROB32/PRF64（IPC 0.6380）。
+
 ---
 
 ## 2. 当前架构
