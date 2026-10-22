@@ -198,8 +198,11 @@ module rob #(
     .halt         (commit_halt_int)
   );
 
-  assign commit_valid = commit_valid_int & {W{!flush_young}};
-  assign commit_halt  = commit_halt_int && !flush_young;
+  // recover_valid 拍 rename 正在整体装载恢复快照，会忽略 commit 反馈；
+  // ROB 必须同拍停止提交，否则老表项的 crat/free 更新会丢失，ROB16 下
+  // 会累积 tag 泄漏并最终死锁。
+  assign commit_valid = commit_valid_int & {W{!flush_young && !recover_valid}};
+  assign commit_halt  = commit_halt_int && !flush_young && !recover_valid;
 
   // ---- 提交总线 / rename 反馈 ---------------------------------------------
   integer i_commit, i_commit_idx;
@@ -459,9 +462,11 @@ module rob #(
       if (|commit_valid) begin
         for (i_ff = 0; i_ff < W; i_ff = i_ff + 1)
           if (commit_valid[i_ff])
-            $display("[COMMIT] t=%0t pc=%08x inst=%08x tag=%0d",
+            $display("[COMMIT] t=%0t pc=%08x inst=%08x tag=%0d we=%0b rd=%0d freev=%0b freetag=%0d",
                      $time, commit_pc[i_ff*32 +: 32], commit_inst[i_ff*32 +: 32],
-                     commit_tag[i_ff*PW +: PW]);
+                     commit_tag[i_ff*PW +: PW], commit_reg_we[i_ff],
+                     commit_rd[i_ff*5 +: 5], commit_free_valid[i_ff],
+                     commit_free_tag[i_ff*PW +: PW]);
       end
       if (flush_young)
         $display("[ROB_FLUSH] t=%0t br_idx=%0d br_age=%0d recover=%0b redirect=%08x squash=%0b",
@@ -471,6 +476,41 @@ module rob #(
       if (recover_valid)
         $display("[ROB_RECOVER] t=%0t free=%016x busy=%016x", $time,
                  recover_free_mask, recover_busy_mask);
+    end
+  end
+`endif
+
+`ifdef LOCAL_TRACE
+  // 无提交且 ROB 非空时打印头部表项，帮助定位参数化死锁。
+  integer dbg_stuck = 0;
+  integer dbg_i;
+  always_ff @(posedge clk) begin
+    if (reset) begin
+      dbg_stuck <= 0;
+    end else begin
+      if (!(|commit_valid) && (count != 0) && !flush_young)
+        dbg_stuck <= dbg_stuck + 1;
+      else
+        dbg_stuck <= 0;
+
+      if ((dbg_stuck != 0) && ((dbg_stuck % 1000) == 0)) begin
+        $display("[ROB_STUCK] t=%0t count=%0d head=%0d head_pc=%08x inst=%08x done=%0b ctrl=%0b resolved=%0b exc=%0b store=%0b load=%0b dest=%0d",
+                 $time, count, head, entry_pc[head], entry_inst[head],
+                 entry_done[head], entry_control[head], entry_resolved[head],
+                 entry_exception[head] | entry_illegal[head],
+                 entry_is_store[head], entry_is_load[head], entry_dest_tag[head]);
+        for (dbg_i = 0; dbg_i < DEPTH; dbg_i = dbg_i + 1)
+          $display("[ROB_ENTRY] idx=%0d valid=%0b done=%0b ctrl=%0b res=%0b pc=%08x inst=%08x dest=%0d store=%0b load=%0b",
+                   (head + dbg_i) & MASK, entry_valid[(head + dbg_i) & MASK],
+                   entry_done[(head + dbg_i) & MASK],
+                   entry_control[(head + dbg_i) & MASK],
+                   entry_resolved[(head + dbg_i) & MASK],
+                   entry_pc[(head + dbg_i) & MASK],
+                   entry_inst[(head + dbg_i) & MASK],
+                   entry_dest_tag[(head + dbg_i) & MASK],
+                   entry_is_store[(head + dbg_i) & MASK],
+                   entry_is_load[(head + dbg_i) & MASK]);
+      end
     end
   end
 `endif
