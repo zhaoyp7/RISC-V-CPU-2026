@@ -228,6 +228,12 @@ opt 口径（最终面积/频率）：
 | 最小周期 | 17.8320 ns | 17.6318 ns | −0.2002 ns |
 | WNS vs 2 ns | −15.8313 ns | −15.6312 ns | +0.2001 ns |
 
+## 频率实验记录
+
+squash recovery 两级化的两版实验（Fmax +1.9% / +4.0%，IPC -1.8%）未达到
+保留阈值，记录在 `docs/experiments/freq-log.md`，对应 WIP 分支
+`feat/freq-recovery`，未合并。
+
 ## 参数扫描与 ROB16 修复（2026-10-22）
 
 ### 扫描结果（`make perf`，同 RTL）
