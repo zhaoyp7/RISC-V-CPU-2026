@@ -69,15 +69,17 @@ make test MAX_CYCLES=50000000
 - `python3 tools/config_gen.py --check`：up to date
 - 当前课程分数估算：仍约 **85/100**（性能/面积/频率未达阶段门槛）
 
-### 当前性能/面积（W=2，RTL commit `a95a938`）
+### 当前性能/面积（W=2）
 
 | 指标 | 当前值 | 阶段 1 门槛 | 阶段 2 门槛 |
 | --- | ---: | ---: | ---: |
-| IPC GEOMEAN | **0.5507** | ≥ 0.6000 | ≥ 0.8450 |
-| 面积（opt） | **24,288.3 µm²** | ≤ 9,000 µm² | ≤ 18,000 µm² |
-| 频率 | **56.08 MHz** | ≥ 300 MHz | ≥ 300 MHz |
+| IPC GEOMEAN | **0.6380**（`a56cca6`） | ≥ 0.6000 | ≥ 0.8450 |
+| 面积（diagnose） | 25,134.9 µm²（opt 待重测） | ≤ 9,000 µm² | ≤ 18,000 µm² |
+| 频率（diagnose） | 53.96 MHz（opt 待重测） | ≥ 300 MHz | ≥ 300 MHz |
 
-W=1 档 IPC 为 0.5017。perf 明细、参数敏感度和 synth breakdown 见
+P2 基线 `a95a938` 的 IPC 为 0.5507；`a56cca6` 加入 store 地址预填后
+提升到 0.6380（qsort 0.5013、rsort 0.7566、vvadd 0.8477）。W=1 档尚未
+在预填 RTL 上重测。perf 明细、参数敏感度和 synth breakdown 见
 `docs/perf-log.md` 与 `docs/integration-status.md`。
 
 ---

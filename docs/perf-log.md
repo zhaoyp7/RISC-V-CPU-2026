@@ -9,8 +9,10 @@
 | --- | --- | --- | ---: | ---: | ---: | --- |
 | 2026-10-18 | `0d6e07f` | W1/32/64/8/1/8/4KB×1 | 0.1689 | 17,204.622 (opt) | 64.48 | P1 单发射 + 无 D$ |
 | 2026-10-21 | `a95a938` | W1/32/64/8/2/8/2KB×2 | 0.5017 | 未单独综合 | 未单独综合 | P2 双取指/双 ALU 的 W=1 档 |
-| 2026-10-21 | `a95a938` | W2/32/64/8/2/8/2KB×2 | 0.5507 | 24,288.346 (opt) | 56.08 | 当前默认配置 |
+| 2026-10-21 | `a95a938` | W2/32/64/8/2/8/2KB×2 | 0.5507 | 24,288.346 (opt) | 56.08 | P2 双发射基线 |
 | 2026-10-22 | `a95a938` | W2/32/64/8/2/8/2KB×2 | 0.5507 | 24,288.346 (opt) | 56.08 | 本机独立复核，与上一行一致 |
+| 2026-10-22 | `8f44fed` | W2/32/64/8/2/8/2KB×2 | 0.5507 | 未重测 | 未重测 | 仅加 LOCAL_STATS 计数器，周期数不变 |
+| 2026-10-22 | `a56cca6` | W2/32/64/8/2/8/2KB×2 | **0.6380** | 25,134.890 (diag) | 53.96 (diag) | store 地址预填；opt 待重测 |
 
 最终 opt 综合：comb 16,361.326、seq 5,648.117、SRAM 2,278.903 µm²，
 min period 17.8320 ns（目标 2 ns，WNS −15.8320 ns）。diagnose 为 25,025.438 µm²、
@@ -20,7 +22,7 @@ min period 17.8320 ns（目标 2 ns，WNS −15.8320 ns）。diagnose 为 25,025
 > （gshare 需 GHR 快照 + RAS）；D-Cache 暂缓，只有在计数器证明 load
 > stall 主导且面积预算允许时再做小型非阻塞 D$。
 
-## 分 benchmark（W=2，最终）
+## 分 benchmark（W=2，P2 基线 `a95a938`）
 
 | benchmark | instructions | cycles | IPC |
 | --- | ---: | ---: | ---: |
@@ -31,6 +33,18 @@ min period 17.8320 ns（目标 2 ns，WNS −15.8320 ns）。diagnose 为 25,025
 | perf_towers | 5,278 | 14,558 | 0.3625 |
 | perf_vvadd | 4,524 | 7,119 | 0.6355 |
 | **GEOMEAN** |  |  | **0.5507** |
+
+## 分 benchmark（W=2，store 地址预填 `a56cca6`）
+
+| benchmark | instructions | cycles | IPC | 相对基线 |
+| --- | ---: | ---: | ---: | ---: |
+| perf_median | 6,961 | 14,014 | 0.4967 | +3.6% |
+| perf_multiply | 21,722 | 20,237 | 1.0734 | 0.0% |
+| perf_qsort | 139,900 | 279,088 | 0.5013 | +13.0% |
+| perf_rsort | 195,719 | 258,690 | 0.7566 | +42.8% |
+| perf_towers | 5,278 | 13,411 | 0.3936 | +8.6% |
+| perf_vvadd | 4,524 | 5,337 | 0.8477 | +33.4% |
+| **GEOMEAN** |  |  | **0.6380** | **+15.9%** |
 
 ## 分 benchmark（W=1，最终，同 RTL 参数覆盖）
 
@@ -128,3 +142,56 @@ make build BUILD=build/stats VERILATOR=/tmp/opencode/verilator_stats.sh JOBS=4
 5. **CDB 冲突存在但不主导**：qsort/rsort 约 2k 拍，其余较少。
 6. 下一步优先做 **store 地址早填 / load-store 依赖解耦**，而不是先上
    D-Cache；否则 D$ 只能缓解 10 拍内存延迟，无法解决 LSQ 的地址未知阻塞。
+
+## store 地址预填（`a56cca6`）
+
+### 改动
+
+- `issue_queue` 增加 `addr_sent` 位和 `out_addr_only` 口。lane 0 在 store
+  的 src1（地址源）ready、src2（数据源）未 ready 时，可以先做一次
+  address-only 发射；store 本体仍留在 IQ。
+- `backend_ooo` 把 address-only store 送到 LSU，不产生 `complete`，不占用
+  complete FIFO。
+- `lsu`/`lsq` 新增 prefill 口：只写地址、`is_store`、`addr_known`，并把
+  `wstrb` 清 0；数据/写掩码等 store 真正发射时再填。
+- 修复 LSQ 表项复用时旧 `wstrb/wdata` 未清空的问题，避免 address-only
+  store 把上一位占用者的整字写误前递给 load。
+
+### 效果（W=2）
+
+| 指标 | 基线 `a95a938` | 预填 `a56cca6` |
+| --- | ---: | ---: |
+| IPC geomean | 0.5507 | **0.6380** |
+| perf_qsort | 0.4435 | 0.5013 |
+| perf_rsort | 0.5299 | 0.7566 |
+| perf_vvadd | 0.6355 | 0.8477 |
+| LSQ unknown 阻塞（rsort） | 184,810 拍 | **0** |
+| LSU stall_lsu（rsort） | 184,867 拍 | 500 拍 |
+
+### 已验证
+
+- `make test MAX_CYCLES=50000000`：19/19 PASS
+- `sh test/run_all.sh`：ALL PASS
+- 统计构建复跑 6 个 perf，周期数与默认构建一致
+
+### 剩余瓶颈
+
+- qsort 仍有 2,431 拍 LSQ `query_partial`：address-only store 的数据尚未
+  就绪，同地址 load 必须等待转发。
+- qsort/median 的分支误预测仍然明显（qsort 11,127 次）。
+- rsort/towers 的 LSQ 经常满（rsort 27.3%、towers 47.4% 的周期），说明
+  8 项 LSQ 对 store 密集负载偏小；后续可扫 LSQ=16 或在面积允许时加深。
+
+### 综合代价（diagnose）
+
+| 指标 | P2 基线 `a95a938` | 预填 `a56cca6` | 变化 |
+| --- | ---: | ---: | ---: |
+| 总面积 | 25,025.438 µm² | 25,134.890 µm² | +109.452 µm² (+0.44%) |
+| 组合 | 17,101.917 µm² | 17,209.036 µm² | +107.119 µm² |
+| 时序 | 5,644.618 µm² | 5,646.951 µm² | +2.333 µm² |
+| Fmax | 53.93 MHz | 53.96 MHz | +0.03 MHz |
+| 关键路径 | `u_rob → u_backend` | `u_rob → u_backend` | 未变 |
+
+新增面积主要在 `u_backend/u_lsu`（+103.4 µm²，LSQ 增加 prefill 写口和
+控制）；`u_iq` 只增加约 6.4 µm²。地址预填是一个低面积代价、高 IPC 收益
+的改动。

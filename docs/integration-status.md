@@ -9,11 +9,14 @@
 - 2026-10-22 本机独立复核：W=2 19/19；perf 0.5507；synth opt
   24,288.346 µm² / 56.08 MHz，与队友记录一致。
 - `tools/config_gen.py --check`：up to date（默认值已切到 P2 双发射配置）。
-- perf（官方 OoO filelist，W=2）：IPC geomean **0.5507**；W=1 为 0.5017。
-- synth（ASAP7，2 ns 目标）：opt **24,288.346 µm² / 56.08 MHz**；
-  diagnose 25,025.438 µm² / 53.93 MHz。
+- perf（官方 OoO filelist，W=2）：P2 基线 IPC geomean **0.5507**；W=1 为
+  0.5017。2026-10-22 加入 store 地址预填后，W=2 IPC 提升到 **0.6380**
+  （qsort 0.5013、rsort 0.7566、vvadd 0.8477）。
+- synth（ASAP7，2 ns 目标）：P2 基线 opt **24,288.346 µm² / 56.08 MHz**；
+  diagnose 25,025.438 µm² / 53.93 MHz。预填 RTL 的 diagnose 为
+  **25,134.890 µm² / 53.96 MHz**，面积仅 +109.5 µm²，opt 待重测。
 - **未达到课程阶段门槛**：阶段 1 需要 9,000 µm²、IPC 0.6000、300 MHz；
-  当前三项都未满足。阶段 2 的 18,000 µm² 也未满足（24.3k）。
+  IPC 已过 0.6，但面积/频率仍差很远；阶段 2 的 18,000 µm² 也未满足。
 - 双发射、双 bank 取指、双 CDB、流水化 load/store、store-to-load forwarding、
   取指侧 BPU 预测均已接入；D-Cache 原型因阻塞式 miss 反而降低 IPC，已回退。
 
