@@ -166,6 +166,7 @@ module backend_ooo #(
   // ---------------------------------------------------------------------------
   logic        iq_in_ready;
   logic [1:0]  iq_out_valid;
+  logic [1:0]  iq_out_addr_only;
   logic [2*DW-1:0] issue_uop;
   logic [2*32-1:0] issue_seq;
   logic [1:0]  issue_ready;
@@ -184,6 +185,7 @@ module backend_ooo #(
     .squash_valid   (sq_valid),
     .squash_seq     (squash_seq),
     .out_valid      (iq_out_valid),
+    .out_addr_only  (iq_out_addr_only),
     .out_uop        (issue_uop),
     .out_seq        (issue_seq),
     .out_ready      (issue_ready),
@@ -524,6 +526,7 @@ module backend_ooo #(
     .issue_seq            (issue_seq[31:0]),
     .issue_src1           (issue_src1),
     .issue_src2           (issue_src2),
+    .issue_addr_only      (addr_only_issue),
     .issue_ready          (lsu_issue_ready),
     .commit_valid         (cm_valid),
     .commit_is_store      (cm_is_store),
@@ -559,10 +562,14 @@ module backend_ooo #(
   // issue 路由
   // ---------------------------------------------------------------------------
   logic issue_ready_base;
+  logic addr_only_issue;
   assign issue_ready_base = i_is_mem ? lsu_issue_ready :
                             i_is_div ? div_issue_ready :
                                        alu_issue_ready;
-  assign issue_ready[0] = issue_ready_base && (!noval_expected || cf_allow);
+  // address-only store 不产生 complete，不占用 complete FIFO。
+  assign addr_only_issue = iq_out_valid[0] && iq_out_addr_only[0] && i_is_store;
+  assign issue_ready[0] = issue_ready_base &&
+                          (addr_only_issue || !noval_expected || cf_allow);
   // lane 1 只接收普通写回 ALU；资源独立且不产生有副作用的完成。
   assign issue_ready[1] = iq_out_valid[1] && j_lane_ok && alu1_issue_ready;
 
@@ -765,6 +772,7 @@ module backend_ooo #(
   // 在 issue 当拍就压入，避免“上一拍 store complete”与“本拍新 issue”
   // 同时产生两个 complete 源。单发射保证每拍最多一个。
   assign noval_issue = iq_out_valid[0] && issue_ready[0] &&
+                       !(iq_out_addr_only[0] && i_is_store) &&
                        (i_is_store ||
                         (!i_is_load && !i_is_div &&
                          (i_illegal || !i_reg_we)));
@@ -894,7 +902,7 @@ module backend_ooo #(
   longint st_stall_alu, st_stall_cf, st_stall_other;
   longint st_stall1, st_lane1_unsup, st_lane1_buf, st_lane1_other;
   longint st_cdb_conflict, st_cdb_lost, st_div_busy, st_lsu_busy;
-  longint st_ld_issue, st_ld_resp, st_st_issue, st_st_resp;
+  longint st_ld_issue, st_ld_resp, st_st_issue, st_st_resp, st_addr_only;
   longint st_skid_cycles, st_iq_full_stall, st_backend_bubble;
   integer st_i, st_lost;
 
@@ -923,6 +931,7 @@ module backend_ooo #(
       st_ld_resp        <= 0;
       st_st_issue       <= 0;
       st_st_resp        <= 0;
+      st_addr_only      <= 0;
       st_skid_cycles    <= 0;
       st_iq_full_stall  <= 0;
       st_backend_bubble <= 0;
@@ -938,6 +947,7 @@ module backend_ooo #(
       if (div_busy) st_div_busy <= st_div_busy + 1;
       if (lsu_busy) st_lsu_busy <= st_lsu_busy + 1;
 
+      if (addr_only_issue) st_addr_only <= st_addr_only + 1;
       if (ld_req_valid && ld_req_ready) st_ld_issue <= st_ld_issue + 1;
       if (ld_resp_valid) st_ld_resp <= st_ld_resp + 1;
       if (st_req_valid && st_req_ready) st_st_issue <= st_st_issue + 1;
@@ -979,11 +989,11 @@ module backend_ooo #(
   end
 
   final $fdisplay(32'h80000002,
-      "[STATS] BE cycles=%0d dispatch=%0d issue0=%0d issue1=%0d iq_empty=%0d stall0=%0d stall_lsu=%0d stall_div=%0d stall_alu=%0d stall_cf=%0d stall_other=%0d stall1=%0d lane1_unsup=%0d lane1_buf=%0d lane1_other=%0d cdb_conflict=%0d cdb_lost=%0d div_busy=%0d lsu_busy=%0d ld_issue=%0d ld_resp=%0d st_issue=%0d st_resp=%0d skid_cycles=%0d iq_full_stall=%0d backend_bubble=%0d",
+      "[STATS] BE cycles=%0d dispatch=%0d issue0=%0d issue1=%0d iq_empty=%0d stall0=%0d stall_lsu=%0d stall_div=%0d stall_alu=%0d stall_cf=%0d stall_other=%0d stall1=%0d lane1_unsup=%0d lane1_buf=%0d lane1_other=%0d cdb_conflict=%0d cdb_lost=%0d div_busy=%0d lsu_busy=%0d addr_only=%0d ld_issue=%0d ld_resp=%0d st_issue=%0d st_resp=%0d skid_cycles=%0d iq_full_stall=%0d backend_bubble=%0d",
       st_cycles, st_disp, st_issue0, st_issue1, st_iq_empty, st_stall0,
       st_stall_lsu, st_stall_div, st_stall_alu, st_stall_cf, st_stall_other,
       st_stall1, st_lane1_unsup, st_lane1_buf, st_lane1_other,
-      st_cdb_conflict, st_cdb_lost, st_div_busy, st_lsu_busy,
+      st_cdb_conflict, st_cdb_lost, st_div_busy, st_lsu_busy, st_addr_only,
       st_ld_issue, st_ld_resp, st_st_issue, st_st_resp,
       st_skid_cycles, st_iq_full_stall, st_backend_bubble);
 `endif

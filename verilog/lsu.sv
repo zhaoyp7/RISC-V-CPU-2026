@@ -35,6 +35,7 @@ module lsu #(
   input  logic [31:0]                  issue_seq,
   input  logic [31:0]                  issue_src1,
   input  logic [31:0]                  issue_src2,
+  input  logic                         issue_addr_only,
   output logic                         issue_ready,
 
   // commit
@@ -201,12 +202,23 @@ module lsu #(
     end
   end
 
-  logic load_issue, store_issue;
-  assign load_issue  = issue_valid && issue_ready && issue_is_load;
-  assign store_issue = issue_valid && issue_ready && issue_is_store;
+  logic load_issue, store_issue, store_addr_issue;
+  assign load_issue       = issue_valid && issue_ready && issue_is_load;
+  assign store_addr_issue = issue_valid && issue_ready && issue_is_store &&
+                            issue_addr_only;
+  assign store_issue      = issue_valid && issue_ready && issue_is_store &&
+                            !issue_addr_only;
 
   assign ld_req_valid = load_issue && !issue_illegal && !ld_fwd;
   assign ld_req_addr  = issue_addr;
+
+  // address-only：只把 store 地址写进 LSQ，不产生 complete，也不触发写。
+  logic        prefill_valid;
+  logic [LW-1:0] prefill_id;
+  logic [31:0] prefill_addr;
+  assign prefill_valid = store_addr_issue;
+  assign prefill_id    = issue_lsq;
+  assign prefill_addr  = issue_addr;
 
   // ---- store 流 -----------------------------------------------------------
   logic        drain_valid;
@@ -244,6 +256,9 @@ module lsu #(
     .fill_wdata      (issue_wdata),
     .fill_wstrb      (issue_illegal ? 4'b0 : issue_wstrb),
     .fill_is_store   (issue_is_store),
+    .prefill_valid   (prefill_valid),
+    .prefill_id      (prefill_id),
+    .prefill_addr    (prefill_addr),
     .commit_valid    (commit_valid),
     .commit_is_store (commit_is_store),
     .commit_is_load  (commit_is_load),
@@ -415,7 +430,7 @@ module lsu #(
   longint st_cycles, st_ld_issue, st_ld_resp, st_ld_fwd, st_illegal_ld;
   longint st_load_result_wait, st_ldq_busy, st_rq_busy, st_ldq_full;
   longint st_mem_block, st_query_blocked, st_st_issue, st_st_drain, st_st_resp;
-  longint st_ld_out_sum, st_rq_out_sum;
+  longint st_prefill, st_ld_out_sum, st_rq_out_sum;
   integer st_max_ld_out, st_max_rq_out;
 
   always_ff @(posedge clk) begin
@@ -434,6 +449,7 @@ module lsu #(
       st_st_issue        <= 0;
       st_st_drain        <= 0;
       st_st_resp         <= 0;
+      st_prefill         <= 0;
       st_ld_out_sum      <= 0;
       st_rq_out_sum      <= 0;
       st_max_ld_out      <= 0;
@@ -452,6 +468,7 @@ module lsu #(
       if (!ld_req_ready) st_mem_block <= st_mem_block + 1;
       if (lsq_query_blocked) st_query_blocked <= st_query_blocked + 1;
       if (store_issue) st_st_issue <= st_st_issue + 1;
+      if (store_addr_issue) st_prefill <= st_prefill + 1;
       if (drain_fire) st_st_drain <= st_st_drain + 1;
       if (st_resp_valid) st_st_resp <= st_st_resp + 1;
 
@@ -463,11 +480,11 @@ module lsu #(
   end
 
   final $fdisplay(32'h80000002,
-      "[STATS] LSU cycles=%0d ld_issue=%0d ld_resp=%0d ld_fwd=%0d illegal_ld=%0d load_result_wait=%0d ldq_busy=%0d rq_busy=%0d ldq_full=%0d mem_block=%0d query_blocked=%0d st_issue=%0d st_drain=%0d st_resp=%0d ld_out_sum=%0d max_ld_out=%0d rq_out_sum=%0d max_rq_out=%0d",
+      "[STATS] LSU cycles=%0d ld_issue=%0d ld_resp=%0d ld_fwd=%0d illegal_ld=%0d load_result_wait=%0d ldq_busy=%0d rq_busy=%0d ldq_full=%0d mem_block=%0d query_blocked=%0d prefill=%0d st_issue=%0d st_drain=%0d st_resp=%0d ld_out_sum=%0d max_ld_out=%0d rq_out_sum=%0d max_rq_out=%0d",
       st_cycles, st_ld_issue, st_ld_resp, st_ld_fwd, st_illegal_ld,
       st_load_result_wait, st_ldq_busy, st_rq_busy, st_ldq_full,
-      st_mem_block, st_query_blocked, st_st_issue, st_st_drain, st_st_resp,
-      st_ld_out_sum, st_max_ld_out, st_rq_out_sum, st_max_rq_out);
+      st_mem_block, st_query_blocked, st_prefill, st_st_issue, st_st_drain,
+      st_st_resp, st_ld_out_sum, st_max_ld_out, st_rq_out_sum, st_max_rq_out);
 `endif
 
 endmodule

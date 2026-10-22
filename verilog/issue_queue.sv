@@ -38,6 +38,7 @@ module issue_queue #(
 
   // issue
   output logic [IW-1:0]                      out_valid,
+  output logic [IW-1:0]                      out_addr_only,
   output logic [IW*`CPU_DISPATCH_W-1:0]      out_uop,
   output logic [IW*32-1:0]                   out_seq,
   input  logic [IW-1:0]                      out_ready,
@@ -52,6 +53,7 @@ module issue_queue #(
   localparam integer R   = `CPU_CDB_NUM;
 
   logic [D-1:0]       valid;
+  logic [D-1:0]       addr_sent;
   logic [D*DW-1:0]    uop;
   logic [D*PW-1:0]    src1_tag;
   logic [D*PW-1:0]    src2_tag;
@@ -145,31 +147,47 @@ module issue_queue #(
   endfunction
 
   // ---- 发射选择：最老的 ready 表项 ---------------------------------------
-  logic [D-1:0] cand;
+  // lane 0 除了普通发射，还可以对 store 做 address-only 发射：地址源 ready
+  // 但数据源尚未 ready 时，先把地址填入 LSQ，store 本体仍留在 IQ 等数据。
+  // 这样后面的 load 不会被一个地址未知的 store 长期阻塞。
+  logic [D-1:0] cand_issue;
+  logic [D-1:0] cand_prefill;
+  logic [D-1:0] cand_lane0;
   logic [D-1:0] chosen;
   logic [IW-1:0] sel_valid;
+  logic [IW-1:0] sel_addr_only;
   logic [7:0]   sel_idx [0:IW-1];
   logic [31:0]  best_seq;
   logic [7:0]   best_idx;
   logic         found;
 
   always_comb begin
-    cand = '0;
+    cand_issue   = '0;
+    cand_prefill = '0;
+    cand_lane0   = '0;
     // 源在本拍 CDB 上广播时可直接发射（后端 PRF 读口做同拍旁路）。
-    for (i = 0; i < D; i = i + 1)
-      cand[i] = valid[i] && !squash_mask[i] &&
-                (src1_ready[i] || tag_hit(src1_tag[i*PW +: PW])) &&
-                (src2_ready[i] || tag_hit(src2_tag[i*PW +: PW]));
+    for (i = 0; i < D; i = i + 1) begin
+      cand_issue[i] = valid[i] && !squash_mask[i] &&
+                      (src1_ready[i] || tag_hit(src1_tag[i*PW +: PW])) &&
+                      (src2_ready[i] || tag_hit(src2_tag[i*PW +: PW]));
+      cand_prefill[i] = valid[i] && !squash_mask[i] && !addr_sent[i] &&
+                        uop[i*DW + `CPU_DISPATCH_IS_STORE_OFF] &&
+                        (src1_ready[i] || tag_hit(src1_tag[i*PW +: PW])) &&
+                        !(src2_ready[i] || tag_hit(src2_tag[i*PW +: PW]));
+      cand_lane0[i] = cand_issue[i] || cand_prefill[i];
+    end
 
     chosen = '0;
     for (lane = 0; lane < IW; lane = lane + 1) begin
       sel_valid[lane] = 1'b0;
+      sel_addr_only[lane] = 1'b0;
       sel_idx[lane] = '0;
       best_seq = 32'hffff_ffff;
       best_idx = '0;
       found = 1'b0;
       for (i = 0; i < D; i = i + 1) begin
-        if (cand[i] && !chosen[i] && (!found || (seq[i*32 +: 32] < best_seq))) begin
+        if (((lane == 0) ? cand_lane0[i] : cand_issue[i]) &&
+            !chosen[i] && (!found || (seq[i*32 +: 32] < best_seq))) begin
           found = 1'b1;
           best_seq = seq[i*32 +: 32];
           best_idx = i[7:0];
@@ -178,6 +196,7 @@ module issue_queue #(
       if (found) begin
         sel_valid[lane] = 1'b1;
         sel_idx[lane] = best_idx;
+        sel_addr_only[lane] = cand_prefill[best_idx] && !cand_issue[best_idx];
         chosen[best_idx] = 1'b1;
       end
     end
@@ -185,6 +204,7 @@ module issue_queue #(
 
   always_comb begin
     out_valid = sel_valid;
+    out_addr_only = sel_addr_only;
     out_uop = '0;
     out_seq = '0;
     for (lane = 0; lane < IW; lane = lane + 1) begin
@@ -200,6 +220,7 @@ module issue_queue #(
   always_ff @(posedge clk) begin
     if (reset) begin
       valid      <= '0;
+      addr_sent  <= '0;
       src1_ready <= '0;
       src2_ready <= '0;
     end else begin
@@ -207,6 +228,7 @@ module issue_queue #(
       for (i = 0; i < D; i = i + 1) begin
         if (squash_mask[i]) begin
           valid[i]      <= 1'b0;
+          addr_sent[i]  <= 1'b0;
           src1_ready[i] <= 1'b0;
           src2_ready[i] <= 1'b0;
         end
@@ -222,10 +244,15 @@ module issue_queue #(
         end
       end
 
-      // 3) 发射：按 lane 分别接收，未接收的 lane 留在队列里
+      // 3) 发射：按 lane 分别接收，未接收的 lane 留在队列里。
+      //    address-only store 只标记 addr_sent，不删除表项。
       for (lane = 0; lane < IW; lane = lane + 1) begin
-        if (out_ready[lane] && sel_valid[lane])
-          valid[sel_idx[lane]] <= 1'b0;
+        if (out_ready[lane] && sel_valid[lane]) begin
+          if (sel_addr_only[lane])
+            addr_sent[sel_idx[lane]] <= 1'b1;
+          else
+            valid[sel_idx[lane]] <= 1'b0;
+        end
       end
 
       // 4) dispatch 写入（最后执行，允许复用 squash 槽）
@@ -241,6 +268,7 @@ module issue_queue #(
                                           tag_hit(in_src2_tag[lane]);
           seq[alloc_slot[lane]*32 +: 32] <= seq_base + lane;
           valid[alloc_slot[lane]] <= 1'b1;
+          addr_sent[alloc_slot[lane]] <= 1'b0;
         end
       end
     end

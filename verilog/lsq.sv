@@ -35,6 +35,11 @@ module lsq #(
   input  logic [3:0]                   fill_wstrb,
   input  logic                         fill_is_store,
 
+  // store address prefill (address known before data is ready)
+  input  logic                         prefill_valid,
+  input  logic [`CPU_LSQ_IDX_W-1:0]    prefill_id,
+  input  logic [31:0]                  prefill_addr,
+
   // commit
   input  logic [W-1:0]                 commit_valid,
   input  logic [W-1:0]                 commit_is_store,
@@ -258,6 +263,16 @@ module lsq #(
         addr_known[fill_id]         <= 1'b1;
       end
 
+      // address-only fill on issue: data/wstrb 留到 store 真正发射时再填。
+      // 必须显式清 wstrb，避免 load 查询把上一位占用者的旧掩码当成有效写。
+      if (prefill_valid && valid[prefill_id] && !squash_mask[prefill_id]) begin
+        addr[prefill_id*32 +: 32]   <= prefill_addr;
+        wdata[prefill_id*32 +: 32]  <= 32'b0;
+        wstrb[prefill_id*4 +: 4]    <= 4'b0;
+        is_store[prefill_id]        <= 1'b1;
+        addr_known[prefill_id]      <= 1'b1;
+      end
+
       // commit release / mark
       for (lane = 0; lane < W; lane = lane + 1) begin
         if (commit_valid[lane]) begin
@@ -300,6 +315,9 @@ module lsq #(
             is_store[alloc_id[lane*LW +: LW]]   <= alloc_is_store[lane];
             rob[alloc_id[lane*LW +: LW]*RW +: RW] <= alloc_rob[lane*RW +: RW];
             seq[alloc_id[lane*LW +: LW]*32 +: 32] <= seq_base + lane;
+            addr[alloc_id[lane*LW +: LW]*32 +: 32] <= 32'b0;
+            wdata[alloc_id[lane*LW +: LW]*32 +: 32] <= 32'b0;
+            wstrb[alloc_id[lane*LW +: LW]*4 +: 4]   <= 4'b0;
             addr_known[alloc_id[lane*LW +: LW]] <= 1'b0;
             committed[alloc_id[lane*LW +: LW]]  <= 1'b0;
             sent[alloc_id[lane*LW +: LW]]       <= 1'b0;
