@@ -76,17 +76,45 @@
 complete FIFO 的 same-cycle push/squash 修复是独立正确性收益，已合入
 `main`；CDB 寄存器改动已回滚。
 
+## 实验 4：IQ select / PRF read 分开（WIP，未合并）
+
+改动：在 IQ 和 backend EX 之间加一组 issue 寄存器，IQ 的 `out_ready`
+改为“寄存器可接收”，执行资源 ready 只控制寄存器排空。
+
+结果：
+
+- W=2 correctness：**13/19**，qsort/hanoi 等 6 个 case 死锁
+- perf_median/multiply 正常
+- diagnose Fmax：**70.04 MHz（+29.8%）**
+- diagnose 面积：25,532.2 µm²（+397.3）
+- 关键路径起点仍为 ROB，但路径长度从 18.19 ns 降到 14.28 ns
+
+死锁原因：
+
+- issue 寄存器把 load 提出 IQ 后，如果它被 LSQ 中更老 store 的未知地址阻塞，
+  就占住 lane0；
+- 更老 store 的 address-only prefill / 完整 issue 也走 lane0；
+- 形成循环等待。
+- 尝试了 store prefill bypass + full store bypass + complete FIFO push，
+  仍无法覆盖所有 load-store 依赖，qsort 继续死锁。
+
+结论：**这版不合并**。+29.8% Fmax 证明“IQ/PRF 分开”方向有效，但需要
+真正的 **issue replay / 非阻塞 issue queue**，而不是继续加旁路。WIP 分支
+`feat/pipeline-iq`（commit `9a7f9ff`）保留作设计参考。
+
 ## 当前决策
 
 - `feat/freq-recovery` 保留为 WIP 分支（commit `63a06cf`），不合并到 `main`。
 - `main` 包含 `36e4302` 的 complete FIFO 修复；默认 IPC 恢复为 **0.6380**，
   W=2 19/19、`run_all` ALL PASS。
-- 三次频率实验：
+- 四次频率实验：
   - squash 两级化：Fmax +4.0%，IPC -1.8%，不达标；
   - CDB 打一拍：Fmax +3.2%，IPC -4.4%，不达标；
-  - complete FIFO 修复：正确性收益，保留。
-- 按要求触发停止条件（连续实验 Fmax 提升 <20%），下一步需要重新选方向，
-  不再盲目继续频率微流水化。
+  - complete FIFO 修复：正确性收益，保留；
+  - IQ/PRF 分开：Fmax **+29.8%**，但 6 个 case 死锁，需要 replay 重构，
+    不合并。
+- IQ/PRF 分开是唯一一个 Fmax 收益超过 20% 的实验，证明方向正确；下一步
+  应设计 **issue replay / 非阻塞 issue queue**，而不是继续加局部旁路。
 
 ## 停止后的候选方向
 
