@@ -1,9 +1,9 @@
 // -----------------------------------------------------------------------------
-// lsu_tb.cpp — LSU + LSQ v1 integration test.
+// lsu_tb.cpp — LSU + LSQ v2 integration test.
 //
-// Covers: store completion + commit drain, load word/byte/half formatting,
-// load ordering behind an older store (same word blocks, different word does
-// not), squash of waiting/in-flight loads, LSQ id backpressure, and reset.
+// Covers: store complete/commit/drain, load formatting, multiple outstanding
+// loads, store-to-load forwarding, partial-store ordering, squash, LSQ id
+// backpressure and reset.
 // -----------------------------------------------------------------------------
 
 #include "Vlsu.h"
@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <deque>
 
 namespace {
 
@@ -62,26 +63,11 @@ struct Harness {
     uint32_t seq_base = 0;
     uint32_t seq_of_rob[32] = {};
 
-    void tick() {
-        dut->clk = 0;
-        dut->eval();
-        if (auto_respond && dut->data_req_valid) {
-            if (dut->data_req_we)
-                write_word(dut->data_req_addr, dut->data_req_wdata, (uint8_t)dut->data_req_wstrb);
-            uint32_t value = dut->data_req_we ? 0 : read_word(dut->data_req_addr);
-            dut->data_resp_valid = 1;
-            dut->data_resp_rdata = value;
-        } else {
-            dut->data_resp_valid = 0;
-        }
-        dut->eval();
-        dut->clk = 1;
-        dut->eval();
-        dut->data_resp_valid = 0;
-        dut->eval();
-    }
+    // Requests accepted by the memory model, waiting for a response.
+    std::deque<uint32_t> ld_pending;
+    std::deque<uint8_t>  st_pending;
 
-    uint32_t read_word(uint32_t addr) {
+    uint32_t read_word(uint32_t addr) const {
         uint32_t a = addr & 0xffff;
         return (uint32_t)mem[a] | ((uint32_t)mem[(a + 1) & 0xffff] << 8) |
                ((uint32_t)mem[(a + 2) & 0xffff] << 16) |
@@ -93,6 +79,45 @@ struct Harness {
         for (int lane = 0; lane < 4; ++lane)
             if (strb & (1u << lane))
                 mem[(a + lane) & 0xffff] = (uint8_t)(value >> (8 * lane));
+    }
+
+    void tick() {
+        dut->clk = 0;
+        dut->eval();
+
+        // Memory model: one response per cycle, in request order.
+        dut->ld_req_ready = 1;
+        dut->st_req_ready = 1;
+        const bool ld_resp = auto_respond && !ld_pending.empty();
+        const bool st_resp = auto_respond && !st_pending.empty();
+        dut->ld_resp_valid = ld_resp ? 1 : 0;
+        dut->ld_resp_rdata = ld_resp ? read_word(ld_pending.front()) : 0;
+        dut->st_resp_valid = st_resp ? 1 : 0;
+        dut->eval();
+
+        const bool ld_fire = dut->ld_req_valid && dut->ld_req_ready;
+        const bool st_fire = dut->st_req_valid && dut->st_req_ready;
+        const uint32_t ld_addr = dut->ld_req_addr;
+        const uint32_t st_addr = dut->st_req_addr;
+        const uint32_t st_data = dut->st_req_wdata;
+        const uint8_t  st_strb = (uint8_t)dut->st_req_wstrb;
+
+        dut->clk = 1;
+        dut->eval();
+
+        if (ld_fire) ld_pending.push_back(ld_addr);
+        if (st_fire) {
+            write_word(st_addr, st_data, st_strb);
+            st_pending.push_back(1);
+        }
+        if (ld_resp) ld_pending.pop_front();
+        if (st_resp) st_pending.pop_front();
+
+        dut->clk = 0;
+        dut->eval();
+        dut->ld_resp_valid = 0;
+        dut->st_resp_valid = 0;
+        dut->eval();
     }
 
     void clear_inputs() {
@@ -115,18 +140,23 @@ struct Harness {
         dut->squash_valid = 0;
         dut->squash_rob_idx = 0;
         dut->load_result_ready = 0;
-        dut->data_resp_valid = 0;
-        dut->data_resp_rdata = 0;
+        dut->ld_req_ready = 0;
+        dut->st_req_ready = 0;
+        dut->ld_resp_valid = 0;
+        dut->st_resp_valid = 0;
+        dut->ld_resp_rdata = 0;
     }
 
     void reset() {
         dut->reset = 1;
         clear_inputs();
-        for (int i = 0; i < 3; ++i) tick();
+        for (int i = 0; i < 4; ++i) tick();
         dut->reset = 0;
         tick();
         seq_base = 0;
         for (int i = 0; i < 32; ++i) seq_of_rob[i] = 0;
+        ld_pending.clear();
+        st_pending.clear();
     }
 
     void pack(const Uop& u) {
@@ -151,7 +181,7 @@ struct Harness {
         dut->alloc_fire = 1;
         dut->seq_base = seq_base;
         dut->eval();
-        bool ok = dut->alloc_ready;
+        const bool ok = dut->alloc_ready;
         tick();
         if (ok) {
             seq_of_rob[rob & 31] = seq_base;
@@ -168,6 +198,9 @@ struct Harness {
         dut->issue_src1 = src1;
         dut->issue_src2 = src2;
         dut->issue_seq = seq_of_rob[u.rob & 31];
+        // issue_ready for loads depends on ld_req_ready.
+        dut->ld_req_ready = 1;
+        dut->st_req_ready = 1;
         dut->eval();
         if (!dut->issue_ready) return false;
         tick();
@@ -185,37 +218,48 @@ struct Harness {
         clear_inputs();
     }
 
-    void squash(uint32_t rob) {
+    void squash(uint32_t boundary) {
         clear_inputs();
         dut->squash_valid = 1;
-        dut->squash_rob_idx = rob;
-        dut->squash_seq = seq_of_rob[rob & 31] - 1;
+        dut->squash_rob_idx = 0;
+        dut->squash_seq = boundary;
         tick();
         clear_inputs();
     }
 
-    void wait_store_done() {
-        for (int i = 0; i < 64; ++i) {
+    bool wait_store_quiet(const char* tag) {
+        for (int i = 0; i < 256; ++i) {
             tick();
-            if (!dut->busy && !dut->data_req_valid) return;
+            if (!dut->st_req_valid && st_pending.empty()) return true;
         }
-        expect(false, "store drain timeout");
+        expect(false, tag);
+        return false;
+    }
+
+    bool wait_idle(const char* tag) {
+        for (int i = 0; i < 256; ++i) {
+            tick();
+            if (!dut->busy && !dut->st_req_valid && st_pending.empty() &&
+                ld_pending.empty())
+                return true;
+        }
+        expect(false, tag);
+        return false;
     }
 
     bool wait_load_result(uint32_t want, uint32_t want_tag, const char* tag) {
-        for (int i = 0; i < 64; ++i) {
+        for (int i = 0; i < 128; ++i) {
             tick();
             if (dut->load_result_valid) {
-                bool ok = (dut->load_result_value == want) &&
-                          (dut->load_result_tag == want_tag) &&
-                          !dut->load_result_exception;
+                const bool ok = (dut->load_result_value == want) &&
+                                (dut->load_result_tag == want_tag) &&
+                                !dut->load_result_exception;
                 expect(ok, tag);
                 if (!ok)
                     printf("  [%s] got=%08x tag=%u exc=%u want=%08x tag=%u\n",
                            tag, (uint32_t)dut->load_result_value,
                            (uint32_t)dut->load_result_tag,
                            (uint32_t)dut->load_result_exception, want, want_tag);
-                clear_inputs();
                 dut->load_result_ready = 1;
                 tick();
                 clear_inputs();
@@ -244,7 +288,7 @@ int main(int argc, char** argv) {
     h.dut = &dut;
     h.reset();
 
-    // ---- store: issue -> complete -> commit -> drain ----------------------
+    // ---- store: complete at issue, write only after commit ----------------
     h.expect(h.alloc(0, 1, true), "store alloc");
     Uop st;
     st.dest = 2; st.is_store = 1; st.lsq = 0; st.rob = 1;
@@ -252,14 +296,14 @@ int main(int argc, char** argv) {
     h.expect(h.issue(st, 0x1000, 0xdeadbeef), "store issue");
     h.expect(dut.store_complete_valid, "store complete pulse");
     h.expect(dut.store_complete_tag == 2, "store complete tag");
-    h.expect(!dut.data_req_valid, "store does not write before commit");
-    h.tick();  // let the complete pulse pass
+    h.expect(!dut.st_req_valid, "store does not write before commit");
+    h.tick();  // consume complete pulse
     h.commit(0, true, false);
-    h.wait_store_done();
+    h.expect(h.wait_idle("store drain timeout"), "store drain idle");
     h.expect(h.read_word(0x1010) == 0xdeadbeef, "store drain data");
-    h.expect(h.alloc(0, 2, false), "store id freed");
+    h.expect(h.alloc(0, 2, true), "store id freed");
 
-    // ---- load word --------------------------------------------------------
+    // ---- load word -------------------------------------------------------
     h.reset();
     h.write_word(0x2000, 0x81234567, 0xf);
     h.expect(h.alloc(0, 1, false), "load alloc");
@@ -267,11 +311,11 @@ int main(int argc, char** argv) {
     ld.dest = 5; ld.is_load = 1; ld.lsq = 0; ld.rob = 1;
     ld.imm = 0; ld.mem_size = WORD;
     h.expect(h.issue(ld, 0x2000, 0), "load issue");
-    h.wait_load_result(0x81234567, 5, "load word");
+    h.expect(h.wait_load_result(0x81234567, 5, "load word"), "load word value");
     h.commit(0, false, true);
     h.expect(h.alloc(0, 2, false), "load id freed");
 
-    // ---- load byte / half sign and zero extension -------------------------
+    // ---- load byte / half sign and zero extension ------------------------
     h.reset();
     h.write_word(0x3000, 0x00000180, 0xf);
     struct LoadCase { uint32_t size, uns, want; const char* name; };
@@ -281,113 +325,101 @@ int main(int argc, char** argv) {
         {HALF, 0, 0x00000180u, "LH"},
         {HALF, 1, 0x00000180u, "LHU"},
     };
-    uint32_t rob = 1, id = 0;
+    uint32_t rob = 1;
     for (const LoadCase& c : cases) {
-        h.expect(h.alloc(id, rob, false), c.name);
+        h.expect(h.alloc(0, rob, false), c.name);
         Uop u;
-        u.dest = 7; u.is_load = 1; u.lsq = id; u.rob = rob;
+        u.dest = 7; u.is_load = 1; u.lsq = 0; u.rob = rob;
         u.imm = 0; u.mem_size = c.size; u.mem_uns = c.uns;
         h.expect(h.issue(u, 0x3000, 0), "load case issue");
-        h.wait_load_result(c.want, 7, c.name);
-        h.commit(id, false, true);
-        id = (id + 1) & 7;
+        h.expect(h.wait_load_result(c.want, 7, c.name), c.name);
+        h.commit(0, false, true);
         rob = (rob + 1) & 31;
     }
 
-    // ---- older same-word store blocks load until it is written -----------
+    // ---- multiple outstanding loads --------------------------------------
     h.reset();
-    h.expect(h.alloc(0, 1, true), "order store alloc");
-    Uop os;
-    os.dest = 2; os.is_store = 1; os.lsq = 0; os.rob = 1;
-    os.imm = 0; os.mem_size = WORD;
-    h.expect(h.issue(os, 0x4000, 0x11223344), "order store issue");
-    h.tick();
-    h.expect(h.alloc(1, 2, false), "order load alloc");
-    Uop ol;
-    ol.dest = 6; ol.is_load = 1; ol.lsq = 1; ol.rob = 2;
-    ol.imm = 0; ol.mem_size = WORD;
-    h.expect(h.issue(ol, 0x4000, 0), "order load issue");
+    h.write_word(0x4000, 0x11111111, 0xf);
+    h.write_word(0x4004, 0x22222222, 0xf);
+    h.expect(h.alloc(0, 1, false), "multi load 0 alloc");
+    h.expect(h.alloc(1, 2, false), "multi load 1 alloc");
+    Uop l0; l0.dest = 10; l0.is_load = 1; l0.lsq = 0; l0.rob = 1;
+    Uop l1; l1.dest = 11; l1.is_load = 1; l1.lsq = 1; l1.rob = 2;
     h.auto_respond = false;
-    for (int i = 0; i < 4; ++i) {
-        h.tick();
-        h.expect(!dut.data_req_valid, "load blocked by older same-word store");
-    }
+    h.expect(h.issue(l0, 0x4000, 0), "multi load 0 issue");
+    h.expect(h.issue(l1, 0x4004, 0), "multi load 1 issue");
+    h.expect(h.ld_pending.size() == 2, "two outstanding loads");
     h.auto_respond = true;
-    h.commit(0, true, false);
-    h.wait_store_done();
-    h.wait_load_result(0x11223344, 6, "ordered load value");
+    h.expect(h.wait_load_result(0x11111111, 10, "multi load 0 result"),
+             "multi load 0 value");
+    h.expect(h.wait_load_result(0x22222222, 11, "multi load 1 result"),
+             "multi load 1 value");
+    h.commit(0, false, true);
     h.commit(1, false, true);
 
-    // ---- different-word older store does not block -----------------------
+    // ---- full-word store-to-load forwarding ------------------------------
     h.reset();
-    h.expect(h.alloc(0, 1, true), "diff store alloc");
+    h.write_word(0x5000, 0x01020304, 0xf);
+    h.expect(h.alloc(0, 1, true), "fwd store alloc");
+    Uop fs;
+    fs.dest = 2; fs.is_store = 1; fs.lsq = 0; fs.rob = 1;
+    fs.mem_size = WORD;
+    h.expect(h.issue(fs, 0x5000, 0xcafebabe), "fwd store issue");
+    h.expect(h.alloc(1, 2, false), "fwd load alloc");
+    Uop fl;
+    fl.dest = 6; fl.is_load = 1; fl.lsq = 1; fl.rob = 2;
+    fl.mem_size = WORD;
+    h.expect(h.issue(fl, 0x5000, 0), "fwd load issue");
+    h.expect(h.wait_load_result(0xcafebabe, 6, "forwarded load"),
+             "forwarded value");
+    h.commit(1, false, true);
+    h.commit(0, true, false);
+    h.expect(h.wait_idle("fwd store drain"), "fwd store drain");
+    h.expect(h.read_word(0x5000) == 0xcafebabe, "forwarded store data");
+
+    // ---- partial older store blocks until it is written ------------------
+    h.reset();
+    h.write_word(0x6000, 0x01020304, 0xf);
+    h.expect(h.alloc(0, 1, true), "partial store alloc");
+    Uop ps;
+    ps.dest = 2; ps.is_store = 1; ps.lsq = 0; ps.rob = 1;
+    ps.mem_size = BYTE;
+    h.expect(h.issue(ps, 0x6000, 0xaa), "partial store issue");
+    h.expect(h.alloc(1, 2, false), "partial load alloc");
+    Uop pl;
+    pl.dest = 6; pl.is_load = 1; pl.lsq = 1; pl.rob = 2;
+    pl.mem_size = WORD;
+    h.expect(!h.issue(pl, 0x6000, 0), "partial store blocks load");
+    for (int i = 0; i < 4; ++i) {
+        h.tick();
+        h.expect(!dut.ld_req_valid, "blocked load not sent");
+    }
+    h.commit(0, true, false);
+    h.expect(h.wait_store_quiet("partial store drain"), "partial store drain");
+    h.expect(h.issue(pl, 0x6000, 0), "load after partial store");
+    h.expect(h.wait_load_result(0x010203aa, 6, "partial load value"),
+             "partial load value");
+    h.commit(1, false, true);
+
+    // ---- squash younger load ---------------------------------------------
+    h.reset();
+    h.expect(h.alloc(0, 1, true), "squash dummy store alloc");
     Uop ds;
     ds.dest = 2; ds.is_store = 1; ds.lsq = 0; ds.rob = 1;
-    ds.imm = 0; ds.mem_size = WORD;
-    h.expect(h.issue(ds, 0x5000, 0xaabbccdd), "diff store issue");
-    h.tick();
-    h.expect(h.alloc(1, 2, false), "diff load alloc");
-    Uop dl;
-    dl.dest = 6; dl.is_load = 1; dl.lsq = 1; dl.rob = 2;
-    dl.imm = 0; dl.mem_size = WORD;
-    h.write_word(0x6000, 0x55667788, 0xf);
-    h.expect(h.issue(dl, 0x6000, 0), "diff load issue");
-    h.wait_load_result(0x55667788, 6, "different word load");
-    h.commit(1, false, true);
-    h.commit(0, true, false);
-    h.wait_store_done();
-
-    // ---- squash waiting load ---------------------------------------------
-    h.reset();
-    h.expect(h.alloc(0, 1, true), "sq store alloc");
-    Uop qs;
-    qs.dest = 2; qs.is_store = 1; qs.lsq = 0; qs.rob = 1;
-    qs.imm = 0; qs.mem_size = WORD;
-    h.expect(h.issue(qs, 0x7000, 0x12345678), "sq store issue");
-    h.tick();
-    h.expect(h.alloc(1, 2, false), "sq load alloc");
-    Uop ql;
-    ql.dest = 7; ql.is_load = 1; ql.lsq = 1; ql.rob = 2;
-    ql.imm = 0; ql.mem_size = WORD;
-    h.expect(h.issue(ql, 0x7000, 0), "sq load issue");
+    ds.mem_size = WORD;
+    h.expect(h.issue(ds, 0x7000, 0x12345678), "squash dummy store issue");
+    h.expect(h.alloc(1, 2, false), "squash load alloc");
+    Uop sl;
+    sl.dest = 7; sl.is_load = 1; sl.lsq = 1; sl.rob = 2;
+    sl.mem_size = WORD;
     h.auto_respond = false;
+    h.expect(h.issue(sl, 0x8000, 0), "squash load issue");
     h.tick();
-    h.squash(2);
+    h.squash(0);
     h.auto_respond = true;
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < 8; ++i) {
         h.tick();
-        h.expect(!dut.load_result_valid, "squashed waiting load no result");
-    }
-    h.commit(0, true, false);
-    h.wait_store_done();
-
-    // ---- squash in-flight load -------------------------------------------
-    h.reset();
-    h.expect(h.alloc(1, 1, true), "if dummy store alloc");
-    Uop dummy_st;
-    dummy_st.is_store = 1; dummy_st.lsq = 1; dummy_st.rob = 1;
-    dummy_st.imm = 0x9000; dummy_st.mem_size = WORD;
-    h.expect(h.issue(dummy_st, 0, 0x1234), "if dummy store issue");
-    h.tick();
-    h.expect(h.alloc(0, 2, false), "if load alloc");
-    Uop il;
-    il.dest = 8; il.is_load = 1; il.lsq = 0; il.rob = 2;
-    il.imm = 0; il.mem_size = WORD;
-    h.write_word(0x8000, 0x9999aaa, 0xf);
-    h.expect(h.issue(il, 0x8000, 0), "if load issue");
-    h.auto_respond = false;
-    for (int i = 0; i < 8 && !dut.data_req_valid; ++i) h.tick();
-    h.expect(dut.data_req_valid, "in-flight load request");
-    h.clear_inputs();
-    dut.squash_valid = 1;
-    dut.squash_rob_idx = 1;
-    dut.squash_seq = h.seq_of_rob[2] - 1;
-    h.auto_respond = true;
-    h.tick();
-    h.clear_inputs();
-    for (int i = 0; i < 4; ++i) {
-        h.tick();
-        h.expect(!dut.load_result_valid, "squashed in-flight load no result");
+        h.expect(!dut.load_result_valid, "squashed load no result");
     }
 
     // ---- LSQ id backpressure ---------------------------------------------
@@ -396,16 +428,17 @@ int main(int argc, char** argv) {
     Uop bp;
     bp.is_store = 1; bp.lsq = 0; bp.rob = 1; bp.mem_size = WORD;
     h.expect(h.issue(bp, 0x9000, 0x1), "bp issue");
-    h.tick();
     h.expect(!h.alloc(0, 2, true), "duplicate lsq id rejected");
 
-    // ---- reset ------------------------------------------------------------
+    // ---- reset -----------------------------------------------------------
     h.reset();
     h.expect(!dut.load_result_valid, "reset load result");
     h.expect(!dut.store_complete_valid, "reset store complete");
+    h.expect(!dut.ld_req_valid, "reset ld request");
+    h.expect(!dut.st_req_valid, "reset st request");
 
     printf("\nchecked=%ld fails=%ld\n", h.checks, h.fails);
-    bool pass = (h.fails == 0);
+    const bool pass = (h.fails == 0);
     printf(pass ? "PASS\n" : "FAIL\n");
     return pass ? 0 : 1;
 }

@@ -12,6 +12,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <deque>
+#include <utility>
 
 #ifndef TB_W
 #define TB_W 1
@@ -20,8 +22,10 @@
 namespace {
 
 constexpr int W = TB_W;
-constexpr int IW = 1;
+constexpr int IW = 2;
+constexpr int R = 2;
 constexpr int PRF = 6;
+constexpr int CDB_W = 34 + PRF;
 constexpr int LSQ = 3;
 constexpr int ROB = 5;
 constexpr int DW = 124 + 3 * PRF + LSQ + ROB;
@@ -33,8 +37,8 @@ constexpr uint32_t B_REG = 0, B_IMM = 1;
 constexpr uint32_t WB_ALU = 0, WB_MEM = 1, WB_PC4 = 2;
 constexpr uint32_t ALU_ADD = 0, ALU_SUB = 1;
 
-constexpr int C_VALID = 0, C_TAG = 1, C_STORE = 1 + PRF,
-              C_LOAD = 2 + PRF, C_LSQ = 3 + PRF;
+constexpr int C_VALID = 0, C_TAG = 1, C_VALUE = 1 + PRF,
+              C_STORE = 1 + PRF, C_LOAD = 2 + PRF, C_LSQ = 3 + PRF;
 constexpr int S_VALID = 0, S_ROB = 1;
 constexpr int B_VALID = 0, B_PC = 1, B_TAKEN = 33, B_TARGET = 34,
               B_JALR = 66, B_TAG = 67;
@@ -114,23 +118,69 @@ struct Harness {
     long fails = 0;
     bool br_seen = false;
     uint32_t br_tag_seen = 0, br_taken_seen = 0, br_target_seen = 0;
+    uint32_t last_complete_tag = 0;
+    std::deque<uint32_t> ld_pending;
+    std::deque<uint8_t>  st_pending;
+    std::deque<std::pair<uint32_t, uint32_t>> cdb_q;
+    std::deque<uint32_t> complete_q;
+
+    void capture_events() {
+        for (int lane = 0; lane < R; ++lane) {
+            if (get_field(dut->cdb, lane * CDB_W + C_VALID, 1)) {
+                const uint32_t tag = get_field(dut->cdb, lane * CDB_W + C_TAG, PRF);
+                const uint32_t value = get_field(dut->cdb, lane * CDB_W + C_VALUE, 32);
+                cdb_q.push_back({tag, value});
+            }
+        }
+        const uint32_t comp = (uint32_t)dut->complete;
+        if (comp & 1) {
+            last_complete_tag = (comp >> 1) & 0x3f;
+            complete_q.push_back(last_complete_tag);
+        }
+        if (get_field(dut->br_update, B_VALID, 1)) {
+            br_seen = true;
+            br_tag_seen = get_field(dut->br_update, B_TAG, PRF);
+            br_taken_seen = get_field(dut->br_update, B_TAKEN, 1);
+            br_target_seen = get_field(dut->br_update, B_TARGET, 32);
+        }
+    }
 
     void tick() {
         dut->clk = 0;
         dut->eval();
-        if (auto_respond && dut->data_req_valid) {
-            if (dut->data_req_we)
-                write_word(dut->data_req_addr, dut->data_req_wdata, (uint8_t)dut->data_req_wstrb);
-            uint32_t value = dut->data_req_we ? 0 : read_word(dut->data_req_addr);
-            dut->data_resp_valid = 1;
-            dut->data_resp_rdata = value;
-        } else {
-            dut->data_resp_valid = 0;
-        }
+
+        dut->ld_req_ready = 1;
+        dut->st_req_ready = 1;
+        const bool ld_resp = auto_respond && !ld_pending.empty();
+        const bool st_resp = auto_respond && !st_pending.empty();
+        dut->ld_resp_valid = ld_resp ? 1 : 0;
+        dut->ld_resp_rdata = ld_resp ? read_word(ld_pending.front()) : 0;
+        dut->st_resp_valid = st_resp ? 1 : 0;
         dut->eval();
+
+        const bool ld_fire = dut->ld_req_valid && dut->ld_req_ready;
+        const bool st_fire = dut->st_req_valid && dut->st_req_ready;
+        const uint32_t ld_addr = dut->ld_req_addr;
+        const uint32_t st_addr = dut->st_req_addr;
+        const uint32_t st_data = dut->st_req_wdata;
+        const uint8_t st_strb = (uint8_t)dut->st_req_wstrb;
+
         dut->clk = 1;
         dut->eval();
-        dut->data_resp_valid = 0;
+        capture_events();
+
+        if (ld_fire) ld_pending.push_back(ld_addr);
+        if (st_fire) {
+            write_word(st_addr, st_data, st_strb);
+            st_pending.push_back(1);
+        }
+        if (ld_resp) ld_pending.pop_front();
+        if (st_resp) st_pending.pop_front();
+
+        dut->clk = 0;
+        dut->eval();
+        dut->ld_resp_valid = 0;
+        dut->st_resp_valid = 0;
         dut->eval();
     }
 
@@ -160,10 +210,19 @@ struct Harness {
         clear_dispatch();
         clear_commit();
         clear_squash();
-        dut->data_resp_valid = 0;
+        dut->ld_req_ready = 0;
+        dut->st_req_ready = 0;
+        dut->ld_resp_valid = 0;
+        dut->st_resp_valid = 0;
         for (int i = 0; i < 4; ++i) tick();
         dut->reset = 0;
         tick();
+        ld_pending.clear();
+        st_pending.clear();
+        cdb_q.clear();
+        complete_q.clear();
+        br_seen = false;
+        last_complete_tag = 0;
     }
 
     void pack(int lane, const Uop& u) {
@@ -235,19 +294,19 @@ struct Harness {
 
     bool wait_cdb(uint32_t& tag, uint32_t& value, int limit = 128) {
         for (int n = 0; n < limit; ++n) {
-            tick();
-            uint64_t lane = (uint64_t)dut->cdb;
-            if (get_field(dut->br_update, B_VALID, 1)) {
-                br_seen = true;
-                br_tag_seen = get_field(dut->br_update, B_TAG, PRF);
-                br_taken_seen = get_field(dut->br_update, B_TAKEN, 1);
-                br_target_seen = get_field(dut->br_update, B_TARGET, 32);
-            }
-            if (lane & 1) {
-                tag = (uint32_t)((lane >> 1) & 0x3f);
-                value = (uint32_t)((lane >> 7) & 0xffffffffu);
+            if (!cdb_q.empty()) {
+                tag = cdb_q.front().first;
+                value = cdb_q.front().second;
+                cdb_q.pop_front();
                 return true;
             }
+            tick();
+        }
+        if (!cdb_q.empty()) {
+            tag = cdb_q.front().first;
+            value = cdb_q.front().second;
+            cdb_q.pop_front();
+            return true;
         }
         return false;
     }
@@ -256,15 +315,15 @@ struct Harness {
                                   uint32_t& taken, uint32_t& target,
                                   int limit = 128) {
         for (int n = 0; n < limit; ++n) {
-            tick();
-            uint32_t comp = (uint32_t)dut->complete;
-            if (comp & 1) ctag = (comp >> 1) & 0x3f;
-            if (get_field(dut->br_update, B_VALID, 1)) {
-                btag = get_field(dut->br_update, B_TAG, PRF);
-                taken = get_field(dut->br_update, B_TAKEN, 1);
-                target = get_field(dut->br_update, B_TARGET, 32);
+            if (br_seen && !complete_q.empty()) {
+                ctag = complete_q.front();
+                complete_q.pop_front();
+                btag = br_tag_seen;
+                taken = br_taken_seen;
+                target = br_target_seen;
                 return true;
             }
+            tick();
         }
         return false;
     }
@@ -367,6 +426,8 @@ int main(int argc, char** argv) {
     br.inst = 0x00000063;  // beq x0, x0, 0x20
     br.imm = 0x20; br.is_branch = 1; br.dest = 7; br.rob = 5;
     br.src1 = 0; br.src1_ready = 1; br.src2 = 0; br.src2_ready = 1;
+    h.complete_q.clear();
+    h.br_seen = false;
     h.expect(h.dispatch_one(br), "branch dispatch");
     uint32_t ctag = 0, btag = 0, taken = 0, target = 0;
     h.expect(h.wait_complete_and_branch(ctag, btag, taken, target), "branch event");
@@ -402,9 +463,9 @@ int main(int argc, char** argv) {
     bool saw_q2 = false;
     for (int n = 0; n < 16; ++n) {
         h.tick();
-        if ((uint64_t)dut.cdb & 1) {
-            uint32_t t = (uint32_t)(((uint64_t)dut.cdb >> 1) & 0x3f);
-            if (t == 10) saw_q2 = true;
+        while (!h.cdb_q.empty()) {
+            if (h.cdb_q.front().first == 10) saw_q2 = true;
+            h.cdb_q.pop_front();
         }
     }
     h.expect(!saw_q2, "squash drops younger result");
@@ -431,10 +492,15 @@ int main(int argc, char** argv) {
         w2[1].pc = 0x804; w2[1].dest = 13; w2[1].rob = 2; w2[1].reg_we = 1;
         w2[1].imm = 7; w2[1].b_sel = B_IMM;
         h.expect(h.dispatch_group(w2), "W=2 dispatch");
-        h.expect(h.wait_cdb(tag, value), "W=2 first cdb");
-        h.expect(tag == 12, "W=2 first tag");
-        h.expect(h.wait_cdb(tag, value), "W=2 second cdb");
-        h.expect(tag == 13 && value == 7, "W=2 second value");
+        bool got12 = false, got13 = false;
+        uint32_t val12 = 0, val13 = 0;
+        for (int n = 0; n < 2; ++n) {
+            h.expect(h.wait_cdb(tag, value), "W=2 cdb");
+            if (tag == 12) { got12 = true; val12 = value; }
+            if (tag == 13) { got13 = true; val13 = value; }
+        }
+        h.expect(got12 && val12 == 0, "W=2 tag12 value");
+        h.expect(got13 && val13 == 7, "W=2 tag13 value");
     }
 
     printf("\nW=%d checked=%ld fails=%ld\n", W, h.checks, h.fails);

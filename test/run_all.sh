@@ -72,6 +72,9 @@ run "rob W=1" env ROB_W=1 sh test/rob_test/run.sh $quick --seed "$seed"
 run "rob W=2" env ROB_W=2 sh test/rob_test/run.sh $quick --seed "$seed"
 run "frontend W=1" env FRONTEND_W=1 sh test/frontend_test/run.sh
 run "frontend W=2" env FRONTEND_W=2 sh test/frontend_test/run.sh
+run "lsu v2" sh test/lsu_test/run.sh
+run "mem_subsystem v2" sh test/mem_subsystem_test/run.sh
+run "backend W=1/W=2" sh test/backend_test/run.sh
 run "core_ooo lint/check" sh test/core_skeleton_test/run.sh
 
 if [ "$do_build" -eq 1 ]; then
