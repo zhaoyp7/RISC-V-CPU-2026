@@ -78,9 +78,9 @@ make test MAX_CYCLES=50000000
 | 频率（diagnose） | 53.96 MHz（opt 待重测） | ≥ 300 MHz | ≥ 300 MHz |
 
 P2 基线 `a95a938` 的 IPC 为 0.5507；`a56cca6` 加入 store 地址预填后
-提升到 0.6380（qsort 0.5013、rsort 0.7566、vvadd 0.8477）。W=1 档尚未
-在预填 RTL 上重测。perf 明细、参数敏感度和 synth breakdown 见
-`docs/perf-log.md` 与 `docs/integration-status.md`。
+提升到 0.6380（qsort 0.5013、rsort 0.7566、vvadd 0.8477）。W=1 档已复测：
+**19/19 PASS，IPC 0.5688**（基线 0.5017）。perf 明细、参数敏感度和 synth
+breakdown 见 `docs/perf-log.md` 与 `docs/integration-status.md`。
 
 2026-10-22 还修复了 ROB16 的恢复竞态（`ab00273`），现在 ROB16 配置可用。
 参数扫描中 **C2（ROB16/PRF48/LSQ16/1KB I$/小 BPU）IPC 0.6311、

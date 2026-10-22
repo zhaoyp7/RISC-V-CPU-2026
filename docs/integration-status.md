@@ -11,7 +11,8 @@
 - `tools/config_gen.py --check`：up to date（默认值已切到 P2 双发射配置）。
 - perf（官方 OoO filelist，W=2）：P2 基线 IPC geomean **0.5507**；W=1 为
   0.5017。2026-10-22 加入 store 地址预填后，W=2 IPC 提升到 **0.6380**
-  （qsort 0.5013、rsort 0.7566、vvadd 0.8477）。
+  （qsort 0.5013、rsort 0.7566、vvadd 0.8477）；W=1 复测 19/19 PASS、
+  IPC **0.5688**。
 - synth（ASAP7，2 ns 目标）：P2 基线 opt **24,288.346 µm² / 56.08 MHz**；
   diagnose 25,025.438 µm² / 53.93 MHz。预填 RTL 的 diagnose 为
   **25,134.890 µm² / 53.96 MHz**，面积仅 +109.5 µm²，opt 待重测。
