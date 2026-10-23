@@ -107,6 +107,11 @@ complete FIFO 的 same-cycle push/squash 修复是独立正确性收益，已合
 依赖链本身也被卡住，仅预填地址不够；需要 `docs/plan/replay.md` 的
 Phase 2 retain-entry IQ/replay。
 
+Phase 2（WIP `c12ac89`）进一步让 LSQ 在 skid 捕获时分配表项，并直接从
+skid 捕获 store 做预填，仍然无法解开 qsort/hanoi/queens 死锁。结论：
+issue 所有权、skid/IQ 反压、LSQ 分配时机和 load/store 内存序需要一起
+重写，局部补丁不可行；按时间盒停止，`feat/pipeline-iq` 不合并。
+
 ## 当前决策
 
 - `feat/freq-recovery` 保留为 WIP 分支（commit `63a06cf`），不合并到 `main`。

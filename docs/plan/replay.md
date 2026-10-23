@@ -177,6 +177,25 @@ dispatch/skid 阶段就能进入 LSQ，或者为 memory uop 保留 IQ 入口。
   释放 issue/lane0 的所有权循环。
 - 结论：**Phase 1 单独不够，必须做 Phase 2 的 retain-entry IQ/replay**。
 
+**Phase 2 实测（WIP `c12ac89`）**：
+
+- 让 LSQ 在 skid 捕获时就分配表项（不等 IQ drain）；
+- 预填队列改为从 skid 直接捕获 store；
+- 仍然无法解开 qsort/hanoi/queens 死锁。
+
+最终判断：
+
+- 死锁不是单一“store 地址未知”或“IQ 容量”问题；
+- 它涉及 **issue 所有权、skid/IQ 反压、LSQ 分配时机、load/store
+  内存序** 的联合设计；
+- 继续局部补丁会不断产生新的循环等待；
+- 要做对，需要把 IQ/LSU 的接口和所有权语义一起重写，并配合专门的
+  压力测试，而不是在现有 8 项 IQ + 8 项 LSQ 上继续加旁路。
+
+**时间盒结论**：Phase 2 未在约定时间内得到 19/19，按计划停止这条
+实验线，不合并 `feat/pipeline-iq`。WIP 分支保留（`c12ac89`）供后续
+有完整时间时重做。
+
 ### Phase 2：retain-entry IQ + replay
 
 1. IQ 增加 `in_pipe`、`issue_ack`、`issue_replay`；
