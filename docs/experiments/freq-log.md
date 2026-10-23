@@ -102,6 +102,11 @@ complete FIFO 的 same-cycle push/squash 修复是独立正确性收益，已合
 真正的 **issue replay / 非阻塞 issue queue**，而不是继续加旁路。WIP 分支
 `feat/pipeline-iq`（commit `9a7f9ff`）保留作设计参考。
 
+后续又试了 Phase 1：skid store 地址预填队列 + PRF 第 5 读口
+（WIP `6971acd`），qsort/hanoi/queens 仍死锁。说明阻塞 store 的 src1
+依赖链本身也被卡住，仅预填地址不够；需要 `docs/plan/replay.md` 的
+Phase 2 retain-entry IQ/replay。
+
 ## 当前决策
 
 - `feat/freq-recovery` 保留为 WIP 分支（commit `63a06cf`），不合并到 `main`。

@@ -168,6 +168,15 @@ dispatch/skid 阶段就能进入 LSQ，或者为 memory uop 保留 IQ 入口。
 3. 跑 W=2/W=1 + qsort/hanoi 压力；
 4. 如果死锁消失，再进入 Phase 2。
 
+**Phase 1 实测（WIP `6971acd`）**：
+
+- 增加了 skid store 预填队列（4 项）+ PRF 第 5 读口；
+- skid drain 时捕获 `lsq_id/src1_tag/imm/seq`，src1 ready 后写 LSQ；
+- qsort/hanoi/queens 仍然死锁；
+- 原因：阻塞 store 的 src1 依赖链本身也被卡住；仅预填地址不足以
+  释放 issue/lane0 的所有权循环。
+- 结论：**Phase 1 单独不够，必须做 Phase 2 的 retain-entry IQ/replay**。
+
 ### Phase 2：retain-entry IQ + replay
 
 1. IQ 增加 `in_pipe`、`issue_ack`、`issue_replay`；
