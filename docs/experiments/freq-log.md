@@ -1,6 +1,6 @@
 # 频率实验记录
 
-> 最新独立频率候选见实验 15：diagnose 251.29 MHz，W2 IPC 0.5274，未跑 opt、未合入 main。
+> 最新独立频率候选见实验 16：diagnose 261.69 MHz，W2 IPC 0.5274，未跑 opt、未合入 main。
 
 > 最新主线结果见末尾实验 8：本地 main 为 17,895.8 µm² / 115.12 MHz（opt），
 > W2 IPC 0.6084；前面各实验的“未合并”描述保留为当时的历史状态。
@@ -398,3 +398,22 @@ hash一致。本轮用户明确不opt，已中断此前d81cacb的opt（130）；
 下一轮按新报告检查访存发射和squash门控，不把load/store直接放入旧a0/a1。
 基线为`build/synth/dispatch_buffer_baseline/`，详见
 [dispatch-buffer.md](dispatch-buffer.md)。
+
+## 实验 16：IQ 末端 squash 过滤（独立检查点）
+
+`feat/freq-iq-late-squash`，基于`c74d4e2`，tag `freq-iq-late-squash-20261023`。
+先预选再取消年轻项valid，payload不经squash；IQ弹出/预填也受过滤后valid控制。
+原参考模型仍先过滤再排序，验证有效输出等价。
+
+| 指标 | 双槽dispatch | IQ末端squash |
+| --- | ---: | ---: |
+| W2 / W1 IPC | 0.5274 / 0.5059 | **0.5274 / 0.5059** |
+| diagnose 面积 / MHz | 20,103.272 / 251.29 | **20,162.350 / 261.69** |
+| opt | 未运行 | **未运行** |
+
+W1/W2各19/19、run_all ALL PASS；全部correctness/perf周期与基线相同。
+IQ增强对拍1,466,671项、原185项通过，backend各502项通过。Fmax+4.14%、面积+0.29%，
+保留独立检查点；一次diagnose，未跑opt、未合main、未推送；24个输入hash一致。
+新路径是ROB分支类型→BPU同拍训练旁路→预测方向→第二路取指/I-cache地址。
+下一轮优先仅寄存BPU训练入口，保持分支恢复即时处理。详见
+[iq-late-squash.md](iq-late-squash.md)。

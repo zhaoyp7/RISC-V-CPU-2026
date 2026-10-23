@@ -162,9 +162,9 @@ module issue_queue #(
     cand_prefill = '0;
     // CDB 本拍只更新 ready，下一拍才参与选择。
     for (i = 0; i < D; i = i + 1) begin
-      cand_issue[i] = valid[i] && !squash_mask[i] &&
+      cand_issue[i] = valid[i] &&
                       src1_ready[i] && src2_ready[i];
-      cand_prefill[i] = valid[i] && !squash_mask[i] && !addr_sent[i] &&
+      cand_prefill[i] = valid[i] && !addr_sent[i] &&
                         uop[i*DW + `CPU_DISPATCH_IS_STORE_OFF] &&
                         src1_ready[i] && !src2_ready[i];
     end
@@ -259,11 +259,17 @@ module issue_queue #(
   endgenerate
 
   always_comb begin
-    out_valid = sel_valid;
-    out_addr_only = sel_addr_only;
+    out_valid = '0;
+    out_addr_only = '0;
     out_uop = '0;
     out_seq = '0;
     for (lane = 0; lane < IW; lane = lane + 1) begin
+      // 年龄选择先于取消：<= squash_seq 的候选构成最老候选的前缀，
+      // 因此只取消预选的年轻项，与先过滤再选择的有效输出相同。
+      // 数据只依赖预选；无效输出的 uop/seq 不保证为零，消费者须按 valid 写状态。
+      out_valid[lane] = sel_valid[lane] &&
+                        !(squash_valid && sel_seq[lane] > squash_seq);
+      out_addr_only[lane] = sel_addr_only[lane] && out_valid[lane];
       if (sel_valid[lane]) begin
         out_uop[lane*DW +: DW] = uop[sel_idx[lane]*DW +: DW];
         out_seq[lane*32 +: 32] = sel_seq[lane];
@@ -303,7 +309,7 @@ module issue_queue #(
       // 3) 发射：按 lane 分别接收，未接收的 lane 留在队列里。
       //    address-only store 只标记 addr_sent，不删除表项。
       for (lane = 0; lane < IW; lane = lane + 1) begin
-        if (out_ready[lane] && sel_valid[lane]) begin
+        if (out_ready[lane] && out_valid[lane]) begin
           if (sel_addr_only[lane])
             addr_sent[sel_idx[lane]] <= 1'b1;
           else

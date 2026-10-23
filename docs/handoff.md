@@ -1,27 +1,26 @@
 # RISC-V CPU 2026 — 协作者交接（P2 功能完成，性能优化中）
 
-## 当前频率实验：双槽 dispatch 弹性缓冲（独立分支）
+## 当前频率实验：IQ 末端 squash 过滤（独立分支）
 
-`feat/freq-dispatch-buffer`，tag `freq-dispatch-buffer-20261023`，基于`d81cacb`。
-增加后槽吸收反压，backend_ready只依赖寄存占用状态；两槽保存唤醒，squash清两槽。
+`feat/freq-iq-late-squash`，tag `freq-iq-late-squash-20261023`，基于`c74d4e2`。
+IQ按年龄预选，再取消年轻项valid；tag/uop数据不经squash，弹出和写状态均受valid控制。
 
-| 候选 | W2 / W1 IPC（四位） | diagnose 面积 / MHz | opt |
+| 候选 | W2 / W1 IPC | diagnose 面积 / MHz | opt |
 | --- | ---: | ---: | --- |
-| store 排空选择树 `d81cacb` | 0.5274 / 0.5059 | 19,952.559 / 240.60 | 已取消，无有效结果 |
-| 双槽 dispatch 缓冲 | **0.5274 / 0.5059** | **20,103.272 / 251.29** | **未运行** |
+| 双槽dispatch缓冲 `c74d4e2` | 0.5274 / 0.5059 | 20,103.272 / 251.29 | 未运行 |
+| IQ末端squash | **0.5274 / 0.5059** | **20,162.350 / 261.69** | **未运行** |
 
-Fmax **+4.44%**、面积 **+0.76%**；两档perf仅qsort减少55/47周期，四位IPC不变。
-W1/W2各19/19、run_all ALL PASS；backend增强测试各502项通过，覆盖满缓冲容量、
-两个源操作数的后槽唤醒、无重复完成、squash和恢复。24个报告输入hash一致。
+Fmax **+4.14%**、面积 **+0.29%**，IPC不变；两档全部correctness/perf周期与基线相同。
+W1/W2各19/19、run_all ALL PASS，IQ增强参考对拍1,466,671项、原185项通过，
+backend各502项通过。无新增流水拍数，24个报告输入hash一致，保留独立检查点。
 
-原通往前端I-cache的ready链已移出第一条路径。新瓶颈为 **ROB→IQ→PRF→LSU地址
-生成→LSQ fill捕获**，下一轮按报告检查访存发射与squash门控，暂不继续叠加前端改动。
+新瓶颈为 **squash→LSU/CDB→ROB br_update_uncond→BPU同拍训练旁路→I-cache地址**。
+下一轮优先评估只寄存BPU训练入口，保持redirect/squash即时处理，不延迟整条恢复总线。
 
-用户明确“先不要opt，继续工作”：d81cacb的opt已停止（130），部分产物在
-`build/synth/opt_cancelled_20261023/`；原main opt报告在
-`build/synth/frequency_checkpoint_baseline/`。本候选只跑一次diagnose，未合main、
-未推送；main为`bc795ae`。基线报告/仿真器在`build/synth/dispatch_buffer_baseline/`。
-详见 [dispatch缓冲实验](experiments/dispatch-buffer.md)。
+本轮只跑一次diagnose，未跑opt、未合main、未推送；main为`bc795ae`。
+此前取消的opt（130）无有效结果，产物为`build/synth/opt_cancelled_20261023/`，
+原main opt报告在`build/synth/frequency_checkpoint_baseline/`。基线报告/仿真器为
+`build/synth/iq_late_squash_baseline/`。详见 [IQ末端过滤实验](experiments/iq-late-squash.md)。
 
 ## 最新检查点：ALU 乘法器共享（2026-10-23）
 

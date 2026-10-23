@@ -508,3 +508,17 @@ W1/W2各19/19、run_all ALL PASS，backend各502项通过。IPC四位0.5274/0.50
 新最长路径为ROB→IQ→PRF→LSU地址→LSQ fill捕获，下一轮优先检查访存发射及
 squash门控位置，确保load/store所有权、重试和预填推进能力。
 详见 [dispatch缓冲实验](../experiments/dispatch-buffer.md)。
+
+## 20. IQ 末端取消检查点（2026-10-23）
+
+`feat/freq-iq-late-squash` / `freq-iq-late-squash-20261023` 基于`c74d4e2`。
+利用年轻项为年龄排序后缀的性质，先预选、再按squash过滤valid，payload不受取消
+控制；IQ和backend只按过滤后valid写状态。无新增流水拍数。
+W1/W2各19/19、run_all ALL PASS，全部correctness/perf周期不变；IQ增强1,466,671项、
+原185项通过。diagnose **20,162.350 µm² / 261.69 MHz**，频率+4.14%、面积+0.29%，
+IPC仍0.5274/0.5059。未跑opt、未合main、未推送。
+
+新瓶颈经过LSU/CDB、ROB br_update_uncond、BPU同拍训练旁路到I-cache地址端。
+下一轮优先只给BPU训练入口寄存整组字段，保留redirect/squash即时处理，验证
+连续/同索引训练与预测快照配对，不延迟整条恢复总线。
+详见 [IQ末端过滤实验](../experiments/iq-late-squash.md)。

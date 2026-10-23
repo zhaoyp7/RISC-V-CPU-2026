@@ -128,6 +128,21 @@ struct Test {
         s.ready=3;step(s); // prefill must not repeat
         s.wake_valid=1;s.wake_tag=4;step(s); // wake doesn't select before edge
         s={};s.ready=3;step(s); // full store accepted
+        // Boundary-age prefill/full candidates survive; younger candidates
+        // must be suppressed on the squash edge even with consumers ready.
+        for (int kind=0; kind<3; ++kind) {
+            reset();
+            Stim t;t.n=1;t.base=20;
+            t.bits[0]=uop(kind==0,true,kind!=0,11,12);step(t);
+            t={};t.n=1;t.base=10;
+            t.bits[0]=uop(kind==1,true,kind!=1,13,14);step(t);
+            t={};t.squash=true;t.cut=(kind==2)?9:10;
+            t.ready=(1u<<IW)-1;step(t);
+            // Once discarded, a wake must not resurrect the younger entry.
+            t={};t.wake_valid=1;t.wake_tag=12;t.ready=(1u<<IW)-1;step(t);
+            t.wake_tag=14;step(t);
+            t={};t.ready=(1u<<IW)-1;step(t);
+        }
         // Fill and free slots repeatedly with independent lane backpressure.
         // Equal seq, high seq bits, nonphysical age order, squash+dispatch,
         // registered wake and dispatch-wake bypass are checked cycle by cycle.

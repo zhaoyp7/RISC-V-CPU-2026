@@ -317,3 +317,11 @@ issue、load/store 流与 AXI 口保持原协议。请求 `query_valid && query_
 消费或 flush 与新请求握手可同拍发生，新快照优先保存。LSU 的 r 级元数据
 使用相同握手，q/r id 均从等待表选择集合排除。阻塞响应被消费后留表重试，
 只有实际读请求握手或本地结果入队才释放等待表所有者。
+
+### IQ 末端取消的无效载荷约定（频率实验）
+
+`feat/freq-iq-late-squash` 先预选最老候选，再按squash过滤独立out_valid。
+当out_valid=0时out_uop/out_seq允许保留预选数据；backend必须用out_valid控制
+接收、LSU握手及complete入队，不能依据uop内原dispatch valid位写状态。
+out_addr_only在无效时仍为0；IQ弹出/预填标记也仅在out_valid与out_ready同时
+为1时执行。有效输出的年龄、payload和握手语义保持原约定。
