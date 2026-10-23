@@ -75,20 +75,20 @@ make test MAX_CYCLES=50000000
 
 | 指标 | 当前值 | 阶段 1 门槛 | 阶段 2 门槛 |
 | --- | ---: | ---: | ---: |
-| IPC GEOMEAN | **0.7295**（LSQ32，`116cbb8`） | ≥ 0.6000 | ≥ 0.8450 |
-| 面积（diagnose） | **28,444.5 µm²**（LSQ32；opt 待测） | ≤ 9,000 µm² | ≤ 18,000 µm² |
-| 频率（diagnose） | **54.27 MHz**（LSQ32；opt 待测） | ≥ 300 MHz | ≥ 300 MHz |
+| IPC GEOMEAN | **0.6311**（C2 面积档，`1e99cc8`） | ≥ 0.6000 | ≥ 0.8450 |
+| 面积（diagnose） | **20,262.8 µm²**（C2；opt 待测） | ≤ 9,000 µm² | ≤ 18,000 µm² |
+| 频率（diagnose） | **53.44 MHz**（C2；opt 待测） | ≥ 300 MHz | ≥ 300 MHz |
 
 P2 基线 `a95a938` 的 IPC 为 0.5507；`a56cca6` 加入 store 地址预填后
-提升到 0.6380。2026-10-23 将默认 LSQ 深度提高到 32（`116cbb8`），IPC
-进一步提升到 **0.7295**（qsort 0.5100、rsort 0.8622、vvadd 1.1447）。
-W=1 档为 **19/19 PASS，IPC 0.6336**。perf 明细、参数敏感度和 synth
+提升到 0.6380。2026-10-23 曾用 LSQ32 把 IPC 推到 0.7295，但面积涨到
+28.4k；随后按“频率/面积优先”切回 **C2 面积档**（`1e99cc8`，ROB16/
+PRF48/LSQ16/1KB I$），W=2 IPC **0.6311**、diagnose 20.26k。
+tournament gshare + GHR 快照（`9666237`）在 LSQ32 上把 IPC 推到 0.7563，
+但面积 +1.45k，保留在 `feat/gshare-snapshot` 分支，未入默认。
+W=1 档 C2 为 19/19 PASS、IPC 0.5940。perf 明细、参数敏感度和 synth
 breakdown 见 `docs/perf-log.md` 与 `docs/integration-status.md`。
 
-2026-10-22 还修复了 ROB16 的恢复竞态（`ab00273`），现在 ROB16 配置可用。
-参数扫描中 **C2（ROB16/PRF48/LSQ16/1KB I$/小 BPU）IPC 0.6311、
-diagnose 20,262.8 µm²**，是当前最接近 18k 面积的可用配置；但频率仍约
-53.4 MHz，距 300 MHz 很远。默认配置仍是 ROB32/PRF64（IPC 0.6380）。
+2026-10-22 还修复了 ROB16 的恢复竞态（`ab00273`），C2 依赖该修复。
 C2 的完整参数/复现命令/注意事项见 `docs/configs/c2-area.md`。
 
 ---
@@ -100,13 +100,13 @@ C2 的完整参数/复现命令/注意事项见 `docs/configs/c2-area.md`。
 | 参数 | 当前值 |
 | --- | ---: |
 | `CPU_ISSUE_WIDTH` | 2 |
-| `CPU_ROB_DEPTH` | 32 |
-| `CPU_PRF_SIZE` | 64 |
+| `CPU_ROB_DEPTH` | 16 |
+| `CPU_PRF_SIZE` | 48 |
 | `CPU_RS_DEPTH` | 8 |
 | `CPU_CDB_NUM` | 2 |
-| `CPU_LSQ_DEPTH` | 8 |
-| I-Cache | 双 bank，每 bank 2 KB 直接映射，1 字/行 |
-| BTB / BHT | 64 项 / 256 项 2-bit（单 BPU 双读口） |
+| `CPU_LSQ_DEPTH` | 16 |
+| I-Cache | 双 bank，每 bank 1 KB 直接映射，1 字/行 |
+| BTB / BHT | 32 项 / 128 项 2-bit（单 BPU 双读口） |
 | D-Cache | **未实现**（原型已验证不适合当前阻塞式方案，已回退） |
 
 ### 已实现
