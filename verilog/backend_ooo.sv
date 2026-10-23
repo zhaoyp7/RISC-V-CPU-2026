@@ -266,6 +266,44 @@ module backend_ooo #(
   assign j_lane_ok       = j_reg_we && !j_is_mem && !j_is_div &&
                            !j_is_branch_any && !j_illegal;
 
+  // ---- lane1 ALU pipeline register ----------------------------------------
+  // IQ 选择 -> ALU1 缓冲 -> PRF 读/ALU。lane0 和 load/store 仍是原来的
+  // 同拍路径；这里只切断 lane1 的“IQ 选择 + PRF 读 + ALU”长组合路径。
+  logic          a1_valid_q;
+  logic [DW-1:0] a1_uop_q;
+  logic [31:0]   a1_seq_q;
+  logic          a1_accept, a1_discard, a1_squashed, a1_push;
+  logic          a1_issue;
+
+  logic [31:0]   p_pc, p_imm;
+  logic [PW-1:0] p_dest, p_src1_tag, p_src2_tag;
+  logic [4:0]    p_alu_op;
+  logic [1:0]    p_a_sel, p_wb_sel;
+  logic          p_b_sel, p_reg_we, p_illegal;
+  logic          p_is_load, p_is_store, p_is_div, p_is_branch_any;
+  logic          p_needs_alu_result;
+
+  assign p_pc          = a1_uop_q[`CPU_DISPATCH_PC_OFF +: 32];
+  assign p_imm         = a1_uop_q[`CPU_DISPATCH_IMM_OFF +: 32];
+  assign p_dest        = a1_uop_q[`CPU_DISPATCH_DEST_TAG_OFF +: PW];
+  assign p_src1_tag    = a1_uop_q[`CPU_DISPATCH_SRC1_TAG_OFF +: PW];
+  assign p_src2_tag    = a1_uop_q[`CPU_DISPATCH_SRC2_TAG_OFF +: PW];
+  assign p_alu_op      = a1_uop_q[`CPU_DISPATCH_ALU_OP_OFF +: 5];
+  assign p_a_sel       = a1_uop_q[`CPU_DISPATCH_A_SEL_OFF +: 2];
+  assign p_b_sel       = a1_uop_q[`CPU_DISPATCH_B_SEL_OFF];
+  assign p_wb_sel      = a1_uop_q[`CPU_DISPATCH_WB_SEL_OFF +: 2];
+  assign p_reg_we      = a1_uop_q[`CPU_DISPATCH_REG_WE_OFF];
+  assign p_illegal     = a1_uop_q[`CPU_DISPATCH_ILLEGAL_OFF];
+  assign p_is_load     = a1_uop_q[`CPU_DISPATCH_IS_LOAD_OFF];
+  assign p_is_store    = a1_uop_q[`CPU_DISPATCH_IS_STORE_OFF];
+  assign p_is_div      = (p_alu_op == `ALU_DIV) || (p_alu_op == `ALU_DIVU) ||
+                         (p_alu_op == `ALU_REM) || (p_alu_op == `ALU_REMU);
+  assign p_is_branch_any = a1_uop_q[`CPU_DISPATCH_IS_BRANCH_OFF] |
+                           a1_uop_q[`CPU_DISPATCH_IS_JAL_OFF] |
+                           a1_uop_q[`CPU_DISPATCH_IS_JALR_OFF];
+  assign p_needs_alu_result = !p_is_load && !p_is_store && !p_is_div &&
+                              p_reg_we && !p_illegal && !p_is_branch_any;
+
   // ---------------------------------------------------------------------------
   // PRF（固定 4 个读口：lane0 src1/src2 + lane1 src1/src2）
   // ---------------------------------------------------------------------------
@@ -279,12 +317,12 @@ module backend_ooo #(
     prf_raddr = '0;
     prf_raddr[0 +: PW]    = i_src1_tag;
     prf_raddr[PW +: PW]   = i_src2_tag;
-    prf_raddr[2*PW +: PW] = j_src1_tag;
-    prf_raddr[3*PW +: PW] = j_src2_tag;
+    prf_raddr[2*PW +: PW] = p_src1_tag;
+    prf_raddr[3*PW +: PW] = p_src2_tag;
   end
 
   logic [31:0] issue_src1, issue_src2;
-  logic [31:0] j_src1, j_src2;
+  logic [31:0] p_src1, p_src2;
   logic        cdb_bypass1, cdb_bypass2;
   logic        cdb_bypass3, cdb_bypass4;
   logic [31:0] cdb_bp1, cdb_bp2, cdb_bp3, cdb_bp4;
@@ -306,11 +344,11 @@ module backend_ooo #(
         cdb_bypass2 = 1'b1; cdb_bp2 = cdb[ib*CW + `CPU_CDB_VALUE_OFF +: 32];
       end
       if (cdb[ib*CW + `CPU_CDB_VALID_OFF] &&
-          (cdb[ib*CW + `CPU_CDB_TAG_OFF +: PW] == j_src1_tag)) begin
+          (cdb[ib*CW + `CPU_CDB_TAG_OFF +: PW] == p_src1_tag)) begin
         cdb_bypass3 = 1'b1; cdb_bp3 = cdb[ib*CW + `CPU_CDB_VALUE_OFF +: 32];
       end
       if (cdb[ib*CW + `CPU_CDB_VALID_OFF] &&
-          (cdb[ib*CW + `CPU_CDB_TAG_OFF +: PW] == j_src2_tag)) begin
+          (cdb[ib*CW + `CPU_CDB_TAG_OFF +: PW] == p_src2_tag)) begin
         cdb_bypass4 = 1'b1; cdb_bp4 = cdb[ib*CW + `CPU_CDB_VALUE_OFF +: 32];
       end
     end
@@ -318,8 +356,8 @@ module backend_ooo #(
 
   assign issue_src1 = cdb_bypass1 ? cdb_bp1 : prf_rdata[0 +: 32];
   assign issue_src2 = cdb_bypass2 ? cdb_bp2 : prf_rdata[32 +: 32];
-  assign j_src1 = cdb_bypass3 ? cdb_bp3 : prf_rdata[2*32 +: 32];
-  assign j_src2 = cdb_bypass4 ? cdb_bp4 : prf_rdata[3*32 +: 32];
+  assign p_src1 = cdb_bypass3 ? cdb_bp3 : prf_rdata[2*32 +: 32];
+  assign p_src2 = cdb_bypass4 ? cdb_bp4 : prf_rdata[3*32 +: 32];
 
   always_comb begin
     for (i = 0; i < R; i = i + 1) begin
@@ -365,24 +403,24 @@ module backend_ooo #(
 
   // lane 1 ALU（只处理普通写回 ALU 指令）
   logic [31:0] alu1_a, alu1_b, alu1_y;
-  logic [31:0] j_pc_plus4, wb1_value;
-  assign j_pc_plus4 = j_pc + 32'd4;
+  logic [31:0] p_pc_plus4, wb1_value;
+  assign p_pc_plus4 = p_pc + 32'd4;
 
   always_comb begin
-    alu1_a = (j_a_sel == `A_REG)  ? j_src1 :
-             (j_a_sel == `A_PC)   ? j_pc :
+    alu1_a = (p_a_sel == `A_REG)  ? p_src1 :
+             (p_a_sel == `A_PC)   ? p_pc :
                                     32'b0;
-    alu1_b = j_b_sel ? j_imm : j_src2;
+    alu1_b = p_b_sel ? p_imm : p_src2;
   end
 
   alu u_alu1 (
     .a  (alu1_a),
     .b  (alu1_b),
-    .op (j_alu_op),
+    .op (p_alu_op),
     .y  (alu1_y)
   );
 
-  assign wb1_value = (j_wb_sel == `WB_PC4) ? j_pc_plus4 : alu1_y;
+  assign wb1_value = (p_wb_sel == `WB_PC4) ? p_pc_plus4 : alu1_y;
 
   // ---------------------------------------------------------------------------
   // 分支解析
@@ -456,15 +494,18 @@ module backend_ooo #(
   logic                     noval_issue, noval_expected;
 
   // 需要 ALU 产生 CDB 值的 uop
-  logic needs_alu_result, j_needs_alu_result;
-  assign needs_alu_result   = !i_is_mem && !i_is_div && i_reg_we && !i_illegal;
-  assign j_needs_alu_result = !j_is_mem && !j_is_div && j_reg_we && !j_illegal;
+  logic needs_alu_result;
+  assign needs_alu_result = !i_is_mem && !i_is_div && i_reg_we && !i_illegal;
 
   logic alu_issue_ready, alu1_issue_ready;
   assign alu_issue_ready  = !needs_alu_result ||
                             !alu_valid_q || cdb_src_ready[0];
-  assign alu1_issue_ready = !j_needs_alu_result ||
+  assign alu1_issue_ready = !p_needs_alu_result ||
                             !alu1_valid_q || cdb_src_ready[1];
+  assign a1_squashed = a1_valid_q && sq_valid && (a1_seq_q > squash_seq);
+  assign a1_discard  = a1_squashed;
+  assign a1_accept   = !a1_valid_q || a1_discard || alu1_issue_ready;
+  assign a1_issue    = a1_valid_q && !a1_squashed && alu1_issue_ready;
 
   assign noval_expected = i_is_store ||
                           (!i_is_load && !i_is_div &&
@@ -571,12 +612,15 @@ module backend_ooo #(
   assign issue_ready[0] = issue_ready_base &&
                           (addr_only_issue || !noval_expected || cf_allow);
   // lane 1 只接收普通写回 ALU；资源独立且不产生有副作用的完成。
-  assign issue_ready[1] = iq_out_valid[1] && j_lane_ok && alu1_issue_ready;
+  // IQ 选中后先进入 a1 缓冲，下一拍再做 PRF 读/ALU；缓冲能吸收时即可
+  // 从 IQ 弹出，保持 lane1 每拍一条的吞吐。
+  assign issue_ready[1] = iq_out_valid[1] && j_lane_ok && a1_accept;
+  assign a1_push        = iq_out_valid[1] && issue_ready[1];
 
   logic alu_issue, div_issue, alu1_issue;
   assign alu_issue  = iq_out_valid[0] && issue_ready[0] && !i_is_mem && !i_is_div;
   assign div_issue  = iq_out_valid[0] && issue_ready[0] && i_is_div;
-  assign alu1_issue = iq_out_valid[1] && issue_ready[1];
+  assign alu1_issue = a1_issue;
 
   assign div_start = div_issue;
 
@@ -680,6 +724,9 @@ module backend_ooo #(
     if (reset) begin
       alu_valid_q  <= 1'b0;
       alu1_valid_q <= 1'b0;
+      a1_valid_q   <= 1'b0;
+      a1_uop_q     <= '0;
+      a1_seq_q     <= '0;
       div_valid_q  <= 1'b0;
       br_valid_q   <= 1'b0;
       div_tag_pending <= '0;
@@ -701,6 +748,15 @@ module backend_ooo #(
           (div_pending_seq > squash_seq))
         div_discard <= 1'b1;
 
+      // lane1 发射缓冲：丢弃/执行后释放；新选中覆盖旧内容。
+      if (a1_discard || a1_issue)
+        a1_valid_q <= 1'b0;
+      if (a1_push && !(sq_valid && (issue_seq[63:32] > squash_seq))) begin
+        a1_valid_q <= 1'b1;
+        a1_uop_q   <= issue_uop[2*DW-1:DW];
+        a1_seq_q   <= issue_seq[63:32];
+      end
+
       // ALU 结果
       if (alu_valid_q && cdb_src_ready[0])
         alu_valid_q <= 1'b0;
@@ -713,16 +769,16 @@ module backend_ooo #(
       end
       if (alu1_valid_q && cdb_src_ready[1])
         alu1_valid_q <= 1'b0;
-      if (alu1_issue && j_needs_alu_result) begin
+      if (alu1_issue && p_needs_alu_result) begin
         alu1_valid_q <= 1'b1;
-        alu1_tag_q   <= j_dest;
-        alu1_seq_q   <= issue_seq[63:32];
+        alu1_tag_q   <= p_dest;
+        alu1_seq_q   <= a1_seq_q;
         alu1_value_q <= wb1_value;
         alu1_exc_q   <= 1'b0;
       end
 `ifdef LOCAL_TRACE
       if (alu1_issue)
-        $display("[ALU1_SET] t=%0t tag=%0d val=%08x", $time, j_dest, wb1_value);
+        $display("[ALU1_SET] t=%0t tag=%0d val=%08x", $time, p_dest, wb1_value);
       if (cdb_src_valid[1])
         $display("[CDBSRC1] t=%0t tag=%0d raw=%0b ready1=%0b last=%0d", $time,
                  cdb_src_tag[1*PW +: PW], cdb_src_valid, cdb_src_ready[1],
@@ -977,7 +1033,7 @@ module backend_ooo #(
         st_stall1 <= st_stall1 + 1;
         if (!j_lane_ok)
           st_lane1_unsup <= st_lane1_unsup + 1;
-        else if (!alu1_issue_ready)
+        else if (!a1_accept)
           st_lane1_buf <= st_lane1_buf + 1;
         else
           st_lane1_other <= st_lane1_other + 1;
