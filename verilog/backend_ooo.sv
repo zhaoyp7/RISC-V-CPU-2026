@@ -63,15 +63,18 @@ module backend_ooo #(
       disp_valid[i] = dispatch[i*DW + `CPU_DISPATCH_VALID_OFF];
   end
 
-  // dispatch skid buffer: breaks the combinational loop
-  // backend_ready -> ren_ready -> dispatch.valid -> iq/lsq ready -> backend_ready.
+  // 两槽弹性 dispatch 缓冲：ready 只依赖后槽占用，不组合依赖 IQ/LSQ ready。
+  // 前槽可同拍排空并接收；遇下游停顿时后槽接住已接受的整组 dispatch。
   logic                 skid_valid;
   logic [W-1:0]         skid_vmask;
   logic [W*DW-1:0]      skid_uop;
   logic [W-1:0]         skid_is_load, skid_is_store;
   logic [W*LW-1:0]      skid_lsq;
   logic [W*RW-1:0]      skid_rob;
-  logic                 skid_drain;
+  logic                 skid_drain, skid_push;
+  logic                 tail_valid;
+  logic [W-1:0]         tail_vmask;
+  logic [W*DW-1:0]      tail_uop, tail_uop_next;
 
   // unified dispatch sequence for IQ/LSQ squash
   logic [31:0]          disp_seq;
@@ -113,6 +116,7 @@ module backend_ooo #(
 
   always_comb begin
     skid_uop_next  = skid_uop;
+    tail_uop_next  = tail_uop;
     disp_uop_woken = dispatch;
     for (i = 0; i < W; i = i + 1) begin
       if (!skid_uop_next[i*DW + `CPU_DISPATCH_SRC1_READY_OFF] &&
@@ -121,6 +125,13 @@ module backend_ooo #(
       if (!skid_uop_next[i*DW + `CPU_DISPATCH_SRC2_READY_OFF] &&
           wake_hit(skid_uop_next[i*DW + `CPU_DISPATCH_SRC2_TAG_OFF +: PW]))
         skid_uop_next[i*DW + `CPU_DISPATCH_SRC2_READY_OFF] = 1'b1;
+
+      if (!tail_uop_next[i*DW + `CPU_DISPATCH_SRC1_READY_OFF] &&
+          wake_hit(tail_uop_next[i*DW + `CPU_DISPATCH_SRC1_TAG_OFF +: PW]))
+        tail_uop_next[i*DW + `CPU_DISPATCH_SRC1_READY_OFF] = 1'b1;
+      if (!tail_uop_next[i*DW + `CPU_DISPATCH_SRC2_READY_OFF] &&
+          wake_hit(tail_uop_next[i*DW + `CPU_DISPATCH_SRC2_TAG_OFF +: PW]))
+        tail_uop_next[i*DW + `CPU_DISPATCH_SRC2_READY_OFF] = 1'b1;
 
       if (!disp_uop_woken[i*DW + `CPU_DISPATCH_SRC1_READY_OFF] &&
           wake_hit(disp_uop_woken[i*DW + `CPU_DISPATCH_SRC1_TAG_OFF +: PW]))
@@ -131,15 +142,7 @@ module backend_ooo #(
     end
   end
 
-  // squash 也要清 skid：被解析的 branch 已经离开 skid，skid 里的内容必然
-  // 比它年轻，属于错误路径。整组丢弃，避免 seq 映射边界问题。
-  logic [W-1:0] skid_vmask_next;
-  always_comb begin
-    skid_vmask_next = skid_vmask;
-    if (sq_valid)
-      skid_vmask_next = '0;
-  end
-
+  // 已发射 branch 必然比两个待 dispatch 槽位更老；squash 清整组缓冲。
   logic [W-1:0]    cm_valid, cm_is_store, cm_is_load;
   logic [W*LW-1:0] cm_lsq;
 
@@ -715,6 +718,9 @@ module backend_ooo #(
       skid_valid <= 1'b0;
       skid_vmask <= '0;
       skid_uop   <= '0;
+      tail_valid <= 1'b0;
+      tail_vmask <= '0;
+      tail_uop <= '0;
       disp_seq   <= '0;
       for (i = 0; i < `CPU_ROB_DEPTH; i = i + 1)
         rob_seq[i] <= '0;
@@ -730,16 +736,32 @@ module backend_ooo #(
                  $time, disp_seq, skid_rob[0 +: RW], skid_vmask);
 `endif
       end
-      if (skid_valid && !skid_drain) begin
-        skid_uop   <= skid_uop_next;
-        skid_vmask <= skid_vmask_next;
-        if (skid_vmask_next == '0)
-          skid_valid <= 1'b0;
-      end
-      if ((|disp_valid) && backend_ready) begin
-        skid_valid <= 1'b1;
-        skid_vmask <= disp_valid;
-        skid_uop   <= disp_uop_woken;
+      if (sq_valid) begin
+        skid_valid <= 1'b0;
+        skid_vmask <= '0;
+        tail_valid <= 1'b0;
+        tail_vmask <= '0;
+      end else begin
+        if (skid_valid) skid_uop <= skid_uop_next;
+        if (tail_valid) tail_uop <= tail_uop_next;
+        if (skid_drain) begin
+          skid_valid <= tail_valid;
+          skid_vmask <= tail_valid ? tail_vmask : '0;
+          if (tail_valid) skid_uop <= tail_uop_next;
+          tail_valid <= 1'b0;
+          tail_vmask <= '0;
+        end
+        if (skid_push) begin
+          if (!skid_valid || skid_drain) begin
+            skid_valid <= 1'b1;
+            skid_vmask <= disp_valid;
+            skid_uop <= disp_uop_woken;
+          end else begin
+            tail_valid <= 1'b1;
+            tail_vmask <= disp_valid;
+            tail_uop <= disp_uop_woken;
+          end
+        end
       end
     end
   end
@@ -955,7 +977,8 @@ module backend_ooo #(
   // ---------------------------------------------------------------------------
   assign skid_drain    = skid_valid && iq_in_ready && lsu_alloc_ready &&
                          !sq_valid;
-  assign backend_ready = !skid_valid || skid_drain;
+  assign backend_ready = !tail_valid;
+  assign skid_push = (|disp_valid) && backend_ready;
 
 `ifdef LOCAL_TRACE
   integer stall_dbg = 0;

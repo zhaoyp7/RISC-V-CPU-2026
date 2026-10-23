@@ -1,28 +1,27 @@
 # 性能记录
 
-## 当前频率实验：LSQ 已提交 store 的平衡最老选择（独立分支）
+## 当前频率实验：双槽 dispatch 弹性缓冲（独立分支）
 
-分支 `feat/freq-store-select-tree`，tag `freq-store-tree-20261023`，基于 `6ae6be2`。
-只改store drain组合选择，保持已提交/未发送候选和sent FIFO，不增加拍数。
+`feat/freq-dispatch-buffer`，tag `freq-dispatch-buffer-20261023`，基于`d81cacb`。
+增加后槽吸收反压，backend_ready只依赖寄存占用状态；两槽保存唤醒，squash清两槽。
 
-| 候选 | W2 / W1 IPC | diagnose 面积 / MHz | opt |
+| 候选 | W2 / W1 IPC（四位） | diagnose 面积 / MHz | opt |
 | --- | ---: | ---: | --- |
-| LSU 最老选择树 `6ae6be2` | 0.5274 / 0.5059 | 19,980.042 / 232.04 | 未运行 |
-| store 排空选择树 | **0.5274 / 0.5059** | **19,952.559 / 240.60** | **未运行** |
+| store 排空选择树 `d81cacb` | 0.5274 / 0.5059 | 19,952.559 / 240.60 | 已取消，无有效结果 |
+| 双槽 dispatch 缓冲 | **0.5274 / 0.5059** | **20,103.272 / 251.29** | **未运行** |
 
-同模式Fmax **+3.69%**、面积 **-0.14%**、IPC不变，`IPC×Fmax`约+3.69%。
-W1/W2各19/19、run_all ALL PASS；全部correctness及两档六个perf周期与基线相同。
-LSQ专项W1/8、W1/16、W2/16为637/1173/1173项通过，覆盖反压、双提交、多笔在途、
-B响应当拍复用id和sent FIFO回绕，保留独立检查点。
+Fmax **+4.44%**、面积 **+0.76%**；两档perf仅qsort减少55/47周期，四位IPC不变。
+W1/W2各19/19、run_all ALL PASS；backend增强测试各502项通过，覆盖满缓冲容量、
+两个源操作数的后槽唤醒、无重复完成、squash和恢复。24个报告输入hash一致。
 
-新第一条路径为 **squash → LSU/CDB → ROB提交 → LSQ分配ready → 前端I-cache地址**，
-已移出store选择。下一步优先研究切断跨模块ready反压传播，保持缓冲容量、
-dispatch/ROB/LSQ分配握手及恢复一致性。
+原通往前端I-cache的ready链已移出第一条路径。新瓶颈为 **ROB→IQ→PRF→LSU地址
+生成→LSQ fill捕获**，下一轮按报告检查访存发射与squash门控，暂不继续叠加前端改动。
 
-**本轮只跑一次diagnose，未跑opt、未合入main、未推送**。main仍为 `bc795ae`，
-24个报告输入hash已核对。基线报告/仿真器在 `build/synth/store_tree_baseline/`，
-当前报告位于 `build/synth/diagnose/`；`build/synth/opt/` 仍为main旧结果。
-详见 [store 选择树实验](experiments/store-select-tree.md)。
+用户明确“先不要opt，继续工作”：d81cacb的opt已停止（130），部分产物在
+`build/synth/opt_cancelled_20261023/`；原main opt报告在
+`build/synth/frequency_checkpoint_baseline/`。本候选只跑一次diagnose，未合main、
+未推送；main为`bc795ae`。基线报告/仿真器在`build/synth/dispatch_buffer_baseline/`。
+详见 [dispatch缓冲实验](experiments/dispatch-buffer.md)。
 
 ## 最新检查点：ALU 乘法器共享（2026-10-23）
 
@@ -78,6 +77,7 @@ load/store 放入旧的 a0/a1 缓冲。优先做分析和方案设计，单次�
 | 2026-10-23 | `freq-iq-tree-20261023` | W2/16/48/8/2/16/1KB×2 | **0.5274** | **20,057.360 (diag)** | **197.11 (diag)** | IQ 双候选树；opt 未运行、未合入 main |
 | 2026-10-23 | `freq-lsu-tree-20261023` | W2/16/48/8/2/16/1KB×2 | **0.5274** | **19,980.042 (diag)** | **232.04 (diag)** | LSU 最老选择树；opt 未运行、未合入 main |
 | 2026-10-23 | `freq-store-tree-20261023` | W2/16/48/8/2/16/1KB×2 | **0.5274** | **19,952.559 (diag)** | **240.60 (diag)** | store 排空选择树；opt 未运行、未合入 main |
+| 2026-10-23 | `freq-dispatch-buffer-20261023` | W2/16/48/8/2/16/1KB×2 | **0.5274** | **20,103.272 (diag)** | **251.29 (diag)** | 双槽dispatch；opt未运行、未合入main |
 
 P2 基线 opt 综合：comb 16,361.326、seq 5,648.117、SRAM 2,278.903 µm²，
 min period 17.8320 ns（目标 2 ns，WNS −15.8320 ns）。diagnose 为 25,025.438 µm²、
@@ -210,6 +210,7 @@ ALU，必须先确认 IPC 不低于 0.60。
 | IQ 双候选树（未合并） | `freq-iq-tree-20261023` | **0.5274** | **0.5059** | **20,057.4** | **197.11** | **未运行** | **未运行** |
 | LSU 最老选择树（未合并） | `freq-lsu-tree-20261023` | **0.5274** | **0.5059** | **19,980.0** | **232.04** | **未运行** | **未运行** |
 | store 排空选择树（未合并） | `freq-store-tree-20261023` | **0.5274** | **0.5059** | **19,952.6** | **240.60** | **未运行** | **未运行** |
+| 双槽dispatch缓冲（未合并） | `freq-dispatch-buffer-20261023` | **0.5274** | **0.5059** | **20,103.3** | **251.29** | **未运行** | **未运行** |
 
 lane0 非访存流水版相对 C2 opt：面积 **+547.3 µm²（+2.8%）**，Fmax **+31.1%**，IPC **-3.6%**；
 `IPC × Fmax` **+26.4%**。W2/W1 均 19/19，`run_all` ALL PASS。
@@ -257,6 +258,20 @@ W2 使用标准 `make perf MAX_CYCLES=50000000 SIM="$REPO_ROOT/build/sim"` 复�
 | perf_towers | 5,278 | 11,102 | 0.4754 | 11,352 | 0.4649 |
 | perf_vvadd | 4,524 | 5,738 | 0.7884 | 5,647 | 0.8011 |
 | **GEOMEAN** | | | **0.6084** | | **0.5759** |
+
+## 分 benchmark（双槽dispatch缓冲候选，未合入main）
+
+latency=10，MAX_CYCLES=50,000,000。两档仅perf_qsort周期变化，分别比基线减少55/47周期；四位IPC不变。
+
+| benchmark | instructions | W2 cycles | W2 IPC | W1 cycles | W1 IPC |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| perf_median | 6,961 | 17,827 | 0.3905 | 18,439 | 0.3775 |
+| perf_multiply | 21,722 | 23,161 | 0.9379 | 28,938 | 0.7506 |
+| perf_qsort | 139,900 | 375,920 | 0.3722 | 383,094 | 0.3652 |
+| perf_rsort | 195,719 | 362,998 | 0.5392 | 355,734 | 0.5502 |
+| perf_towers | 5,278 | 12,379 | 0.4264 | 12,411 | 0.4253 |
+| perf_vvadd | 4,524 | 6,584 | 0.6871 | 6,536 | 0.6922 |
+| **GEOMEAN** | | | **0.5274** | | **0.5059** |
 
 ## 分 benchmark（store 排空选择树候选，未合入 main）
 

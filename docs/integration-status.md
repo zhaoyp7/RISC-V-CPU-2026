@@ -1,28 +1,27 @@
 # 集成状态（P1 完成，P2 进入性能优化）
 
-## 当前频率实验：LSQ 已提交 store 的平衡最老选择（独立分支）
+## 当前频率实验：双槽 dispatch 弹性缓冲（独立分支）
 
-分支 `feat/freq-store-select-tree`，tag `freq-store-tree-20261023`，基于 `6ae6be2`。
-只改store drain组合选择，保持已提交/未发送候选和sent FIFO，不增加拍数。
+`feat/freq-dispatch-buffer`，tag `freq-dispatch-buffer-20261023`，基于`d81cacb`。
+增加后槽吸收反压，backend_ready只依赖寄存占用状态；两槽保存唤醒，squash清两槽。
 
-| 候选 | W2 / W1 IPC | diagnose 面积 / MHz | opt |
+| 候选 | W2 / W1 IPC（四位） | diagnose 面积 / MHz | opt |
 | --- | ---: | ---: | --- |
-| LSU 最老选择树 `6ae6be2` | 0.5274 / 0.5059 | 19,980.042 / 232.04 | 未运行 |
-| store 排空选择树 | **0.5274 / 0.5059** | **19,952.559 / 240.60** | **未运行** |
+| store 排空选择树 `d81cacb` | 0.5274 / 0.5059 | 19,952.559 / 240.60 | 已取消，无有效结果 |
+| 双槽 dispatch 缓冲 | **0.5274 / 0.5059** | **20,103.272 / 251.29** | **未运行** |
 
-同模式Fmax **+3.69%**、面积 **-0.14%**、IPC不变，`IPC×Fmax`约+3.69%。
-W1/W2各19/19、run_all ALL PASS；全部correctness及两档六个perf周期与基线相同。
-LSQ专项W1/8、W1/16、W2/16为637/1173/1173项通过，覆盖反压、双提交、多笔在途、
-B响应当拍复用id和sent FIFO回绕，保留独立检查点。
+Fmax **+4.44%**、面积 **+0.76%**；两档perf仅qsort减少55/47周期，四位IPC不变。
+W1/W2各19/19、run_all ALL PASS；backend增强测试各502项通过，覆盖满缓冲容量、
+两个源操作数的后槽唤醒、无重复完成、squash和恢复。24个报告输入hash一致。
 
-新第一条路径为 **squash → LSU/CDB → ROB提交 → LSQ分配ready → 前端I-cache地址**，
-已移出store选择。下一步优先研究切断跨模块ready反压传播，保持缓冲容量、
-dispatch/ROB/LSQ分配握手及恢复一致性。
+原通往前端I-cache的ready链已移出第一条路径。新瓶颈为 **ROB→IQ→PRF→LSU地址
+生成→LSQ fill捕获**，下一轮按报告检查访存发射与squash门控，暂不继续叠加前端改动。
 
-**本轮只跑一次diagnose，未跑opt、未合入main、未推送**。main仍为 `bc795ae`，
-24个报告输入hash已核对。基线报告/仿真器在 `build/synth/store_tree_baseline/`，
-当前报告位于 `build/synth/diagnose/`；`build/synth/opt/` 仍为main旧结果。
-详见 [store 选择树实验](experiments/store-select-tree.md)。
+用户明确“先不要opt，继续工作”：d81cacb的opt已停止（130），部分产物在
+`build/synth/opt_cancelled_20261023/`；原main opt报告在
+`build/synth/frequency_checkpoint_baseline/`。本候选只跑一次diagnose，未合main、
+未推送；main为`bc795ae`。基线报告/仿真器在`build/synth/dispatch_buffer_baseline/`。
+详见 [dispatch缓冲实验](experiments/dispatch-buffer.md)。
 
 ## 最新检查点：ALU 乘法器共享（2026-10-23）
 

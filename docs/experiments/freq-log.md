@@ -1,6 +1,6 @@
 # 频率实验记录
 
-> 最新独立频率候选见实验 14：diagnose 240.60 MHz，W2 IPC 0.5274，未跑 opt、未合入 main。
+> 最新独立频率候选见实验 15：diagnose 251.29 MHz，W2 IPC 0.5274，未跑 opt、未合入 main。
 
 > 最新主线结果见末尾实验 8：本地 main 为 17,895.8 µm² / 115.12 MHz（opt），
 > W2 IPC 0.6084；前面各实验的“未合并”描述保留为当时的历史状态。
@@ -377,3 +377,24 @@ sent FIFO回绕。Fmax+3.69%、面积-0.14%、IPC不变，保留独立检查点�
 新路径为squash→LSU/CDB→ROB提交→LSQ分配ready→前端第二路I-cache地址端。
 下一轮优先研究ready反压传播与弹性缓冲，避免把终点误认为SRAM自身访问延迟。
 详见 [store-select-tree.md](store-select-tree.md)。
+
+## 实验 15：双槽 dispatch 弹性缓冲（独立检查点）
+
+`feat/freq-dispatch-buffer`，基于`d81cacb`，tag `freq-dispatch-buffer-20261023`。
+backend_ready只由尾槽占用决定，切断IQ/LSQ ready组合回传；前槽同拍排空与接收，
+后槽吸收停顿，两槽保存wake，squash清两槽。
+
+| 指标 | store选择树 | 双槽dispatch缓冲 |
+| --- | ---: | ---: |
+| W2 / W1 IPC（四位） | 0.5274 / 0.5059 | **0.5274 / 0.5059** |
+| diagnose 面积 / MHz | 19,952.559 / 240.60 | **20,103.272 / 251.29** |
+| opt | 已取消，无有效结果 | **未运行** |
+
+W1/W2各19/19、run_all ALL PASS；backend增强测试各502项通过。两档perf_qsort
+少55/47周期，其余相同；频率+4.44%、面积+0.76%，保留独立检查点。24个输入
+hash一致。本轮用户明确不opt，已中断此前d81cacb的opt（130）；未合main、未推送。
+
+新路径ROB→IQ→PRF→LSU地址生成→LSQ fill捕获，原前端ready链移出第一条路径。
+下一轮按新报告检查访存发射和squash门控，不把load/store直接放入旧a0/a1。
+基线为`build/synth/dispatch_buffer_baseline/`，详见
+[dispatch-buffer.md](dispatch-buffer.md)。

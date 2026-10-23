@@ -494,3 +494,17 @@ perf周期不变，IPC仍0.5274/0.5059。diagnose **19,952.559 µm² / 240.60 MH
 最后沿backend_ready/前端响应接收到达第二路I-cache地址端。下一阶段优先研究
 用弹性缓冲及寄存容量/ready切断反压链，保留dispatch资源预留、分配与恢复一致性。
 详见 [store选择树实验](../experiments/store-select-tree.md)。
+
+## 19. 双槽 dispatch 弹性缓冲检查点（2026-10-23）
+
+`feat/freq-dispatch-buffer` / `freq-dispatch-buffer-20261023` 基于`d81cacb`，
+backend_ready改为仅依赖tail_valid，增加后槽保存整组输入与唤醒；两槽同拍恢复
+按squash清理，seq仍在前槽进入IQ/LSQ时建立。满缓冲不借用当拍排空容量接收，
+无停顿时仍可每拍接收一组。
+
+W1/W2各19/19、run_all ALL PASS，backend各502项通过。IPC四位0.5274/0.5059，
+两档perf_qsort少55/47周期；diagnose **20,103.272 µm² / 251.29 MHz**，频率+4.44%、
+面积+0.76%。用户明确暂不opt，已取消先前opt；未合main、未推送。
+新最长路径为ROB→IQ→PRF→LSU地址→LSQ fill捕获，下一轮优先检查访存发射及
+squash门控位置，确保load/store所有权、重试和预填推进能力。
+详见 [dispatch缓冲实验](../experiments/dispatch-buffer.md)。

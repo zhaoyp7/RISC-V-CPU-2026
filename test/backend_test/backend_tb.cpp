@@ -341,8 +341,10 @@ struct Harness {
 }  // namespace
 
 int main(int argc, char** argv) {
-    Verilated::commandArgs(argc, argv);
-    Vbackend_ooo dut;
+    VerilatedContext context;
+    context.threads(1);
+    context.commandArgs(argc, argv);
+    Vbackend_ooo dut{&context};
     Harness h;
     h.dut = &dut;
     h.reset();
@@ -484,6 +486,81 @@ int main(int argc, char** argv) {
     }
     h.expect(accepted >= 8, "filled issue queue + skid");
     h.expect(!dut.backend_ready, "backend_ready low with IQ+skid full");
+
+    // ---- two-slot dispatch: full queue wake preservation and recovery -----
+    for (int kill = 0; kill < 2; ++kill) {
+        h.auto_respond = true;
+        h.reset();
+        h.auto_respond = false;
+        h.write_word(0x7100, 100, 15);
+        Uop producer;
+        producer.pc=0x900; producer.dest=40; producer.rob=1; producer.reg_we=1;
+        producer.is_load=1; producer.wb_sel=WB_MEM;
+        producer.imm=0x7100; producer.lsq=0;
+        h.expect(h.dispatch_one(producer), "buffer wake producer accepted");
+        for (int n=0; n<24 && h.ld_pending.empty(); ++n) h.tick();
+        h.expect(h.ld_pending.size()==1, "buffer wake producer waiting for memory");
+        constexpr int queued=8+2*W;
+        for (int base=0; base<queued; base+=W) {
+            Uop group[W];
+            for (int lane=0; lane<W; ++lane) {
+                int n=base+lane;
+                group[lane].pc=0x904+4*n; group[lane].dest=10+n;
+                group[lane].rob=2+n; group[lane].reg_we=1;
+                group[lane].src1=40; group[lane].src1_ready=0;
+                group[lane].b_sel=B_IMM; group[lane].imm=n;
+                if (n & 1) {
+                    group[lane].pc=n; group[lane].a_sel=A_PC;
+                    group[lane].src1=0; group[lane].src1_ready=1;
+                    group[lane].src2=40; group[lane].src2_ready=0;
+                    group[lane].b_sel=B_REG;
+                }
+            }
+            h.expect(h.dispatch_group(group), "IQ and both dispatch slots accept exact capacity");
+        }
+        h.expect(!dut.backend_ready, "two full dispatch slots apply backpressure");
+        Uop overflow;
+        overflow.dest=35; overflow.rob=20; overflow.reg_we=1;
+        h.expect(!h.dispatch_one(overflow), "full buffer rejects extra dispatch");
+        h.clear_dispatch();
+        if (kill) {
+            h.squash_one(1);
+            h.expect(dut.backend_ready, "squash frees both pending dispatch slots");
+            Uop fresh;
+            fresh.dest=55; fresh.rob=21; fresh.reg_we=1; fresh.b_sel=B_IMM; fresh.imm=7;
+            h.expect(h.dispatch_one(fresh), "post-squash dispatch accepted");
+        }
+        h.auto_respond=true;
+        bool seen[queued] = {};
+        int received=0;
+        bool producer_seen=false, fresh_seen=false;
+        for (int cycle=0; cycle<512; ++cycle) {
+            h.tick();
+            while (!h.cdb_q.empty()) {
+                auto result=h.cdb_q.front(); h.cdb_q.pop_front();
+                if (result.first==40) {
+                    h.expect(!producer_seen && result.second==100, "producer returns once");
+                    producer_seen=true;
+                } else if (kill) {
+                    h.expect(result.first==55 && result.second==7 && !fresh_seen,
+                             "squashed head and tail never produce results");
+                    fresh_seen=true;
+                } else {
+                    int n=int(result.first)-10;
+                    bool ok=n>=0 && n<queued;
+                    h.expect(ok && result.second==100u+n, "queued dependency has saved wake and data");
+                    if (ok) {
+                        h.expect(!seen[n], "accepted dispatch completes once");
+                        if (!seen[n]) ++received;
+                        seen[n]=true;
+                    }
+                }
+            }
+        }
+        h.expect(producer_seen && (kill?fresh_seen:received==queued),
+                 "all retained owners complete after full-buffer stall");
+        h.expect(dut.backend_ready, "dispatch buffer recovers after drain");
+    }
 
     // ---- W=2 dispatch absorption -----------------------------------------
     if (W == 2) {
