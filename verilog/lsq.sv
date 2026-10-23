@@ -102,7 +102,7 @@ module lsq #(
   integer i, lane;
   integer i_commit, lane_commit;
   integer i_free, lane_free;
-  integer i_squash, i_drain, i_count, lane_count;
+  integer i_squash, i_count, lane_count;
   logic [`CPU_LSQ_IDX_W-1:0] id;
 
   // ---- allocation ---------------------------------------------------------
@@ -166,37 +166,41 @@ module lsq #(
   end
 
   // ---- store drain selection ---------------------------------------------
-  logic [31:0] best_seq;
-  logic [`CPU_LSQ_IDX_W-1:0] best_id;
-  logic        found;
-
-  always_comb begin
-    drain_valid = 1'b0;
-    drain_id    = '0;
-    drain_addr  = 32'b0;
-    drain_wdata = 32'b0;
-    drain_wstrb = 4'b0;
-    best_seq    = 32'hffff_ffff;
-    best_id     = '0;
-    found       = 1'b0;
-    for (i_drain = 0; i_drain < D; i_drain = i_drain + 1) begin
-      if (valid[i_drain] && is_store[i_drain] && committed[i_drain] &&
-          !sent[i_drain]) begin
-        if (!found || (seq[i_drain*32 +: 32] < best_seq)) begin
-          found       = 1'b1;
-          best_seq    = seq[i_drain*32 +: 32];
-          best_id     = i_drain[LW-1:0];
-        end
+  // 候选保持为已提交、未发送的 store；按 seq 最老、同龄低 id 优先。
+  // 选择树不增加拍数，发送与写响应释放仍由原 sent FIFO 管理。
+  wire drain_tree_valid [0:2*QLEAVES-1] /* verilator split_var */;
+  wire [31:0] drain_tree_seq [0:2*QLEAVES-1] /* verilator split_var */;
+  wire [LW-1:0] drain_tree_id [0:2*QLEAVES-1] /* verilator split_var */;
+  assign drain_tree_valid[0] = 1'b0;
+  assign drain_tree_seq[0] = '0;
+  assign drain_tree_id[0] = '0;
+  generate
+    for (genvar g = 0; g < QLEAVES; g = g + 1) begin : gen_drain_leaf
+      if (g < D) begin : gen_entry
+        assign drain_tree_valid[QLEAVES+g] = valid[g] && is_store[g] &&
+                                            committed[g] && !sent[g];
+        assign drain_tree_seq[QLEAVES+g] = seq[g*32 +: 32];
+        assign drain_tree_id[QLEAVES+g] = LW'(g);
+      end else begin : gen_pad
+        assign drain_tree_valid[QLEAVES+g] = 1'b0;
+        assign drain_tree_seq[QLEAVES+g] = '0;
+        assign drain_tree_id[QLEAVES+g] = '0;
       end
     end
-    if (found) begin
-      drain_valid = 1'b1;
-      drain_id    = best_id;
-      drain_addr  = addr[best_id*32 +: 32];
-      drain_wdata = wdata[best_id*32 +: 32];
-      drain_wstrb = wstrb[best_id*4 +: 4];
+    for (genvar g = 1; g < QLEAVES; g = g + 1) begin : gen_drain_merge
+      wire take_right = drain_tree_valid[2*g+1] &&
+                         (!drain_tree_valid[2*g] ||
+                          drain_tree_seq[2*g+1] < drain_tree_seq[2*g]);
+      assign drain_tree_valid[g] = drain_tree_valid[2*g] || drain_tree_valid[2*g+1];
+      assign drain_tree_seq[g] = take_right ? drain_tree_seq[2*g+1] : drain_tree_seq[2*g];
+      assign drain_tree_id[g] = take_right ? drain_tree_id[2*g+1] : drain_tree_id[2*g];
     end
-  end
+  endgenerate
+  assign drain_valid = drain_tree_valid[1];
+  assign drain_id = drain_valid ? drain_tree_id[1] : '0;
+  assign drain_addr = drain_valid ? addr[drain_tree_id[1]*32 +: 32] : '0;
+  assign drain_wdata = drain_valid ? wdata[drain_tree_id[1]*32 +: 32] : '0;
+  assign drain_wstrb = drain_valid ? wstrb[drain_tree_id[1]*4 +: 4] : '0;
 
   // ---- query stage 1: independent comparisons and a coherent snapshot ------
   // 不只保存 slot id：store 可在下一拍释放并复用。候选的 seq/data/full

@@ -1,6 +1,6 @@
 # 频率实验记录
 
-> 最新独立频率候选见实验 13：diagnose 232.04 MHz，W2 IPC 0.5274，未跑 opt、未合入 main。
+> 最新独立频率候选见实验 14：diagnose 240.60 MHz，W2 IPC 0.5274，未跑 opt、未合入 main。
 
 > 最新主线结果见末尾实验 8：本地 main 为 17,895.8 µm² / 115.12 MHz（opt），
 > W2 IPC 0.6084；前面各实验的“未合并”描述保留为当时的历史状态。
@@ -356,3 +356,24 @@ LSU 292/483项通过，覆盖置换物理槽位、逆龄入队、同龄、批量
 `drain_addr[29]`。下一阶段针对store drain线性最老选择，保持提交/发送顺序和
 sent FIFO/B响应对应。基线报告/仿真器为 `build/synth/lsu_tree_baseline/`，详见
 [lsu-select-tree.md](lsu-select-tree.md)。
+
+## 实验 14：LSQ 已提交 store 平衡选择（独立检查点）
+
+`feat/freq-store-select-tree`，基于`6ae6be2`，tag `freq-store-tree-20261023`。
+store drain线性扫描改为平衡树，保持committed/unsent筛选、同龄低id优先，
+不增加拍数，不改sent FIFO及写响应释放。
+
+| 指标 | LSU 最老选择树 | store 排空选择树 |
+| --- | ---: | ---: |
+| W2 / W1 IPC | 0.5274 / 0.5059 | **0.5274 / 0.5059** |
+| diagnose 面积 / MHz | 19,980.042 / 232.04 | **19,952.559 / 240.60** |
+| opt | 未运行 | **未运行** |
+
+W1/W2各19/19、run_all ALL PASS，全部correctness/perf周期与基线相同。
+LSQ专项637/1173/1173项通过，覆盖双提交、反压、多笔在途、B响应当拍复用及
+sent FIFO回绕。Fmax+3.69%、面积-0.14%、IPC不变，保留独立检查点；一次diagnose，
+无opt，未合入main、未推送。24个输入hash一致，基线为`build/synth/store_tree_baseline/`。
+
+新路径为squash→LSU/CDB→ROB提交→LSQ分配ready→前端第二路I-cache地址端。
+下一轮优先研究ready反压传播与弹性缓冲，避免把终点误认为SRAM自身访问延迟。
+详见 [store-select-tree.md](store-select-tree.md)。

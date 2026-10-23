@@ -1,4 +1,4 @@
-// Direct tests of the LSQ query snapshot and balanced youngest-store selection.
+// Direct tests of LSQ query snapshots and committed-store drain arbitration.
 #include "Vlsq.h"
 #include "verilated.h"
 #include <cstdint>
@@ -45,6 +45,18 @@ struct Harness {
         check(bool(d.query_blocked)==blocked, "blocked result");
         check(bool(d.query_fwd_valid)==fwd, "forwarding result");
         if (fwd) check(d.query_fwd_data==data, "forwarding data");
+    }
+    void commit_store(unsigned id, int id2=-1) {
+        d.commit_valid=(id2>=0)?3:1; d.commit_is_store=d.commit_valid;
+        d.commit_id=id | ((id2>=0?unsigned(id2):0) << ((TB_DEPTH==16)?4:3));
+        tick(); d.commit_valid=0; d.commit_is_store=0; d.eval();
+    }
+    void drain(unsigned id, uint32_t base, uint32_t data_base, unsigned mask) {
+        d.eval(); check(d.drain_valid,"committed store drain valid");
+        check(d.drain_id==id,"oldest store id");
+        check(d.drain_addr==base+4*id,"store drain address");
+        check(d.drain_wdata==data_base+id,"store drain data");
+        check(d.drain_wstrb==mask,"store drain byte enables");
     }
     void consume() { d.query_resp_ready=1; tick(); d.query_resp_ready=0; d.eval(); }
 };
@@ -101,6 +113,71 @@ int main(int argc, char** argv) {
     // Store squash changes live table but not an older captured response.
     d.squash_valid=1; d.squash_seq=20; h.tick(); d.squash_valid=0;
     h.query(50,0x100); h.response(false,false);
-    std::printf("lsq_query depth=%d: %u checks, %u failures\n",TB_DEPTH,h.checks,h.fails);
+    // Fill all physical slots in permuted age order; hold write ready low
+    // while committing. No store may appear before its commit edge.
+    for (unsigned round=0; round<2; ++round) {
+        h.reset();
+        unsigned order[TB_DEPTH];
+        for (unsigned age=0; age<TB_DEPTH; ++age) {
+            unsigned id=(5*age+3)%TB_DEPTH;
+            h.alloc(id,0x90000000u+(round?0:age));
+            h.fill(id,0x2000+4*id,0xc3000000u+id,(id%15)+1);
+            h.check(!d.drain_valid,"uncommitted stores never drain");
+            order[age]=round?age:id; // same seq uses ascending physical id
+        }
+        for (unsigned age=0; age<TB_DEPTH; age+=TB_W) {
+            unsigned id=(5*age+3)%TB_DEPTH;
+            int id2=(TB_W==2)?int((5*(age+1)+3)%TB_DEPTH):-1;
+            h.commit_store(id,id2);
+        }
+        for (unsigned pos=0; pos<TB_DEPTH; ++pos) {
+            unsigned id=order[pos];
+            for (unsigned stall=0; stall<3; ++stall) {
+                h.drain(id,0x2000,0xc3000000u,(id%15)+1);
+                h.tick(); // ready low: winner and payload remain stable
+            }
+            d.drain_fire=1; h.tick(); d.drain_fire=0;
+            h.check(d.count==TB_DEPTH,"sent stores retained until write response");
+        }
+        h.check(!d.drain_valid,"sent entries cannot be sent twice");
+        // All stores outstanding. Each B response frees its FIFO head slot;
+        // allocate that id on the same edge and send its new owner while the
+        // remaining older B responses are still pending. This wraps the FIFO.
+        for (unsigned pos=0; pos<TB_DEPTH; ++pos) {
+            unsigned id=order[pos];
+            d.store_resp_valid=1; d.alloc_valid=1; d.alloc_is_store=1;
+            d.alloc_fire=1; d.alloc_id=id; d.seq_base=0xa0000000u+pos; d.eval();
+            h.check(d.alloc_ready,"B head can be reused on response edge");
+            h.tick(); d.store_resp_valid=0; d.alloc_valid=0; d.alloc_fire=0;
+            h.fill(id,0x3000+4*id,0xd4000000u+id);
+            h.check(!d.drain_valid,"reused slot waits for new commit");
+            h.commit_store(id); h.drain(id,0x3000,0xd4000000u,15);
+            d.drain_fire=1; h.tick(); d.drain_fire=0;
+            h.check(!d.drain_valid,"new sent owner excluded from selection");
+            h.check(d.count==TB_DEPTH,"old B cannot discard another new owner");
+        }
+        for (unsigned pos=0; pos<TB_DEPTH; ++pos) {
+            d.store_resp_valid=1; h.tick(); d.store_resp_valid=0;
+            h.check(d.count==TB_DEPTH-pos-1,"new B releases exactly one slot");
+            d.alloc_valid=1; d.alloc_id=order[pos]; d.eval();
+            h.check(d.alloc_ready,"new B releases matching sent FIFO id");
+            if (pos+1<TB_DEPTH) {
+                d.alloc_id=order[pos+1]; d.eval();
+                h.check(!d.alloc_ready,"next outstanding owner remains reserved");
+            }
+            d.alloc_valid=0;
+        }
+        h.check(d.count==0 && !d.drain_valid,"all store owners drain and release");
+    }
+    // Recovery removes speculative stores and preserves committed stores.
+    h.reset(); h.alloc(0,10); h.fill(0,0x4000,0x12345678);
+    h.alloc(1,20); h.fill(1,0x4004,0xabcdef01); h.commit_store(0);
+    d.squash_valid=1; d.squash_seq=0; h.tick(); d.squash_valid=0;
+    h.check(d.count==1 && d.drain_valid && d.drain_id==0,
+            "squash preserves committed owner and removes speculative store");
+    d.drain_fire=1; h.tick(); d.drain_fire=0;
+    d.store_resp_valid=1; h.tick(); d.store_resp_valid=0;
+    h.check(d.count==0 && !d.drain_valid,"squashed store never writes");
+    std::printf("lsq_query W=%d depth=%d: %u checks, %u failures\n",TB_W,TB_DEPTH,h.checks,h.fails);
     return h.fails ? 1:0;
 }

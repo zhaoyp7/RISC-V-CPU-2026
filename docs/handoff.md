@@ -1,28 +1,32 @@
 # RISC-V CPU 2026 — 协作者交接（P2 功能完成，性能优化中）
 
-## 当前频率实验：LSU 等待 load 的平衡最老选择（独立分支）
+## 当前频率实验：LSQ 已提交 store 的平衡最老选择（独立分支）
 
-分支 `feat/freq-lsu-select-tree`，tag `freq-lsu-tree-20261023`，基于 `a239510`。
-等待表线性扫描改为平衡树，直接传递获胜seq，不增加流水拍数。
+分支 `feat/freq-store-select-tree`，tag `freq-store-tree-20261023`，基于 `6ae6be2`。
+只改store drain组合选择，保持已提交/未发送候选和sent FIFO，不增加拍数。
 
 | 候选 | W2 / W1 IPC | diagnose 面积 / MHz | opt |
 | --- | ---: | ---: | --- |
-| IQ 双候选树 `a239510` | 0.5274 / 0.5059 | 20,057.360 / 197.11 | 未运行 |
-| LSU 最老选择树 | **0.5274 / 0.5059** | **19,980.042 / 232.04** | **未运行** |
+| LSU 最老选择树 `6ae6be2` | 0.5274 / 0.5059 | 19,980.042 / 232.04 | 未运行 |
+| store 排空选择树 | **0.5274 / 0.5059** | **19,952.559 / 240.60** | **未运行** |
 
-同模式Fmax **+17.72%**、面积 **-0.39%**，IPC不变，`IPC×Fmax`约+17.72%。
-已超过200 MHz诊断阶段目标，保留独立检查点。W1/W2各19/19、run_all ALL PASS，
-全部correctness和两档六个perf周期与基线相同。LSU W1/LSQ8为292项、W2/LSQ16为
-483项通过，新增逆龄入队、置换物理id、同龄优先、q/r排除和批量squash检查。
+同模式Fmax **+3.69%**、面积 **-0.14%**、IPC不变，`IPC×Fmax`约+3.69%。
+W1/W2各19/19、run_all ALL PASS；全部correctness及两档六个perf周期与基线相同。
+LSQ专项W1/8、W1/16、W2/16为637/1173/1173项通过，覆盖反压、双提交、多笔在途、
+B响应当拍复用id和sent FIFO回绕，保留独立检查点。
 
-新第一条路径为 **LSQ已提交store选择 → AXI写请求捕获**，LSQ段约4.11 ns；
-已移出load等待表选择。下一阶段优先优化store drain的16项线性最老选择，
-保持提交后发送、发送顺序和sent FIFO/B响应释放语义。
+新第一条路径为 **squash → LSU/CDB → ROB提交 → LSQ分配ready → 前端I-cache地址**，
+已移出store选择。下一步优先研究切断跨模块ready反压传播，保持缓冲容量、
+dispatch/ROB/LSQ分配握手及恢复一致性。
 
-**本轮只跑一次diagnose，未跑opt、未合入main、未推送**。main仍为`bc795ae`；
-24个报告输入hash已核对。基线报告/仿真器在 `build/synth/lsu_tree_baseline/`，
-本轮报告位于 `build/synth/diagnose/`；`build/synth/opt/` 仍为main旧结果。
-详见 [LSU 选择树实验](experiments/lsu-select-tree.md)。
+**本轮只跑一次diagnose，未跑opt、未合入main、未推送**。main仍为 `bc795ae`，
+24个报告输入hash已核对。基线报告/仿真器在 `build/synth/store_tree_baseline/`，
+当前报告位于 `build/synth/diagnose/`；`build/synth/opt/` 仍为main旧结果。
+详见 [store 选择树实验](experiments/store-select-tree.md)。
+
+阶段建议：当前已积累多轮且回归全绿，适合在下一次控制链结构改动前安排
+一次opt。报告输入与当前RTL一致、频率收益经opt确认后，再按用户“频率优先”
+策略考虑合入main；原main的tag继续保留。用户本轮仅询问时机，未追加opt/合并指令。
 
 ## 最新检查点：ALU 乘法器共享（2026-10-23）
 

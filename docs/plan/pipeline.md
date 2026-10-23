@@ -481,3 +481,16 @@ diagnose **19,980.042 µm² / 232.04 MHz**，频率+17.72%、面积-0.39%、IPC�
 store选择→AXI写请求捕获，LSQ段约4.11 ns。下一轮先优化store drain的16项
 线性最老选择，保持提交后发送、按序、反压与sent FIFO/B响应释放语义。
 详见 [LSU 选择树实验](../experiments/lsu-select-tree.md)。
+
+## 18. store 排空平衡选择检查点（2026-10-23）
+
+`feat/freq-store-select-tree` / `freq-store-tree-20261023` 基于`6ae6be2`，只改
+LSQ已提交store的组合最老选择，不增加拍数，保留sent FIFO和写响应释放。
+W1/W2各19/19、run_all ALL PASS，LSQ专项637/1173/1173项通过；全部correctness/
+perf周期不变，IPC仍0.5274/0.5059。diagnose **19,952.559 µm² / 240.60 MHz**，
+频率+3.69%、面积-0.14%；未跑opt、未合入main、未推送。
+
+新第一条路径跨越squash、LSU结果有效、CDB ready、ROB提交、LSQ分配ready，
+最后沿backend_ready/前端响应接收到达第二路I-cache地址端。下一阶段优先研究
+用弹性缓冲及寄存容量/ready切断反压链，保留dispatch资源预留、分配与恢复一致性。
+详见 [store选择树实验](../experiments/store-select-tree.md)。
