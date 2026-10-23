@@ -277,6 +277,13 @@ load 响应 → 结果队列 → CDB
   squash→ALU 结果捕获路径，或设计独立 MIQ。不要直接把 load/store 放入
   流水级。
 
+2026-10-23 后续进展：非访存流水化已合入本地 `main`；进一步关闭两个
+OoO ALU 中未使用的组合除法，diagnose 达到 19,777.0 µm² / 99.38 MHz，
+opt **18,955.7 µm² / 115.80 MHz**，W2 IPC 保持 0.6084，W1/W2 19/19、
+`run_all` ALL PASS。该改动没有增加流水拍数。关键路径已转为访存 issue/LSQ
+消歧，应重新按报告排序后续实验，不机械沿用下面的旧步骤顺序。
+详见 `docs/experiments/alu-no-comb-div.md`。
+
 ### Step 2：WB1 / WB2 分开
 
 - CDB 仲裁与广播分开；

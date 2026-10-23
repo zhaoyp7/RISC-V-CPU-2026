@@ -448,7 +448,8 @@ module backend_ooo #(
     alu_b = a0_b_sel ? a0_imm : a0_src2;
   end
 
-  alu u_alu (
+  // DIV/REM 只通过 u_div 执行，不在两个 ALU 中保留组合除法器。
+  alu #(.ENABLE_DIV(1'b0)) u_alu (
     .a  (alu_a),
     .b  (alu_b),
     .op (a0_alu_op),
@@ -470,7 +471,7 @@ module backend_ooo #(
     alu1_b = p_b_sel ? p_imm : p_src2;
   end
 
-  alu u_alu1 (
+  alu #(.ENABLE_DIV(1'b0)) u_alu1 (
     .a  (alu1_a),
     .b  (alu1_b),
     .op (p_alu_op),

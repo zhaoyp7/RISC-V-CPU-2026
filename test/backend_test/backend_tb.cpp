@@ -36,6 +36,7 @@ constexpr uint32_t A_REG = 0, A_PC = 1, A_ZERO = 2;
 constexpr uint32_t B_REG = 0, B_IMM = 1;
 constexpr uint32_t WB_ALU = 0, WB_MEM = 1, WB_PC4 = 2;
 constexpr uint32_t ALU_ADD = 0, ALU_SUB = 1;
+constexpr uint32_t ALU_DIV = 14, ALU_DIVU = 15, ALU_REM = 16, ALU_REMU = 17;
 
 constexpr int C_VALID = 0, C_TAG = 1, C_VALUE = 1 + PRF,
               C_STORE = 1 + PRF, C_LOAD = 2 + PRF, C_LSQ = 3 + PRF;
@@ -501,6 +502,59 @@ int main(int argc, char** argv) {
         }
         h.expect(got12 && val12 == 0, "W=2 tag12 value");
         h.expect(got13 && val13 == 7, "W=2 tag13 value");
+    }
+
+    // DIV/REM must use the serial divider after combinational division is
+    // disabled in both ALUs. Also check a consumer waiting for its CDB result.
+    const uint32_t div_operands[][2] = {
+        {10, 3}, {0xfffffff6u, 3}, {10, 0xfffffffdu},
+        {0x80000000u, 0xffffffffu}, {0x80000000u, 0},
+        {0xffffffffu, 0}, {0, 0}, {0xffffffffu, 2},
+    };
+    for (const auto& operands : div_operands) {
+        for (uint32_t op = ALU_DIV; op <= ALU_REMU; ++op) {
+            h.reset();
+            for (uint32_t src = 1; src <= 2; ++src) {
+                Uop seed;
+                seed.reg_we = 1; seed.dest = src; seed.rob = src;
+                seed.a_sel = A_ZERO; seed.b_sel = B_IMM;
+                seed.imm = operands[src - 1];
+                h.expect(h.dispatch_one(seed), "divider operand dispatch");
+                h.expect(h.wait_cdb(tag, value), "divider operand cdb");
+                h.expect(tag == src && value == seed.imm, "divider operand value");
+                h.tick();  // let the broadcast write the PRF
+            }
+            const uint32_t a = operands[0], b = operands[1];
+            const bool signed_op = (op == ALU_DIV || op == ALU_REM);
+            const bool rem_op = (op == ALU_REM || op == ALU_REMU);
+            uint32_t expected;
+            if (b == 0) {
+                expected = rem_op ? a : 0xffffffffu;
+            } else if (signed_op) {
+                // Widen first: INT_MIN/-1 is well-defined in int64_t.
+                const int64_t sa = static_cast<int32_t>(a);
+                const int64_t sb = static_cast<int32_t>(b);
+                expected = static_cast<uint32_t>(rem_op ? sa % sb : sa / sb);
+            } else {
+                expected = rem_op ? a % b : a / b;
+            }
+
+            Uop divide;
+            divide.reg_we = 1; divide.dest = 3; divide.rob = 3;
+            divide.alu = op; divide.src1 = 1; divide.src2 = 2;
+            h.expect(h.dispatch_one(divide), "DIV/REM dispatch");
+            Uop consumer;
+            consumer.reg_we = 1; consumer.dest = 4; consumer.rob = 4;
+            consumer.src1 = 3; consumer.src1_ready = 0;
+            consumer.b_sel = B_IMM; consumer.imm = 1;
+            h.expect(h.dispatch_one(consumer), "DIV/REM consumer dispatch");
+            h.expect(h.wait_cdb(tag, value), "DIV/REM cdb");
+            h.expect(tag == 3 && value == expected, "DIV/REM result");
+            h.expect(h.wait_cdb(tag, value), "DIV/REM consumer cdb");
+            h.expect(tag == 4 && value == expected + 1u, "DIV/REM consumer value");
+            for (int n = 0; n < 8; ++n) h.tick();
+            h.expect(h.cdb_q.empty(), "DIV/REM has no duplicate ALU result");
+        }
     }
 
     printf("\nW=%d checked=%ld fails=%ld\n", W, h.checks, h.fails);
