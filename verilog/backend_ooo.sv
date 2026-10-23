@@ -273,7 +273,7 @@ module backend_ooo #(
   logic [DW-1:0] a1_uop_q;
   logic [31:0]   a1_seq_q;
   logic          a1_accept, a1_discard, a1_squashed, a1_push;
-  logic          a1_issue;
+  logic          a1_issue, a1_issue_ready;
 
   logic [31:0]   p_pc, p_imm;
   logic [PW-1:0] p_dest, p_src1_tag, p_src2_tag;
@@ -304,11 +304,53 @@ module backend_ooo #(
   assign p_needs_alu_result = !p_is_load && !p_is_store && !p_is_div &&
                               p_reg_we && !p_illegal && !p_is_branch_any;
 
+  // ---- lane0 非访存流水缓冲 ------------------------------------------------
+  // load/store 仍然从 IQ 直接进 LSU；只有非访存 uop 进入这个缓冲，下一拍
+  // 再做 PRF 读和 ALU/div/branch。这样不会把访存放进流水级，避免旧实验
+  // 的 load/store 所有权死锁。
+  logic          a0_valid_q;
+  logic [DW-1:0] a0_uop_q;
+  logic [31:0]   a0_seq_q;
+  logic          a0_accept, a0_discard, a0_squashed, a0_push, a0_issue;
+  logic          a0_issue_ready;
+
+  logic [31:0]   a0_pc, a0_inst, a0_imm;
+  logic [PW-1:0] a0_dest, a0_src1_tag, a0_src2_tag;
+  logic [4:0]    a0_alu_op;
+  logic [1:0]    a0_a_sel, a0_wb_sel;
+  logic          a0_b_sel, a0_reg_we, a0_illegal;
+  logic          a0_is_load, a0_is_store, a0_is_div, a0_is_branch_any;
+  logic          a0_is_branch, a0_is_jal, a0_is_jalr;
+  logic          a0_needs_alu_result;
+
+  assign a0_pc          = a0_uop_q[`CPU_DISPATCH_PC_OFF +: 32];
+  assign a0_inst        = a0_uop_q[`CPU_DISPATCH_INST_OFF +: 32];
+  assign a0_imm         = a0_uop_q[`CPU_DISPATCH_IMM_OFF +: 32];
+  assign a0_dest        = a0_uop_q[`CPU_DISPATCH_DEST_TAG_OFF +: PW];
+  assign a0_src1_tag    = a0_uop_q[`CPU_DISPATCH_SRC1_TAG_OFF +: PW];
+  assign a0_src2_tag    = a0_uop_q[`CPU_DISPATCH_SRC2_TAG_OFF +: PW];
+  assign a0_alu_op      = a0_uop_q[`CPU_DISPATCH_ALU_OP_OFF +: 5];
+  assign a0_a_sel       = a0_uop_q[`CPU_DISPATCH_A_SEL_OFF +: 2];
+  assign a0_b_sel       = a0_uop_q[`CPU_DISPATCH_B_SEL_OFF];
+  assign a0_wb_sel      = a0_uop_q[`CPU_DISPATCH_WB_SEL_OFF +: 2];
+  assign a0_reg_we      = a0_uop_q[`CPU_DISPATCH_REG_WE_OFF];
+  assign a0_illegal     = a0_uop_q[`CPU_DISPATCH_ILLEGAL_OFF];
+  assign a0_is_load     = a0_uop_q[`CPU_DISPATCH_IS_LOAD_OFF];
+  assign a0_is_store    = a0_uop_q[`CPU_DISPATCH_IS_STORE_OFF];
+  assign a0_is_branch   = a0_uop_q[`CPU_DISPATCH_IS_BRANCH_OFF];
+  assign a0_is_jal      = a0_uop_q[`CPU_DISPATCH_IS_JAL_OFF];
+  assign a0_is_jalr     = a0_uop_q[`CPU_DISPATCH_IS_JALR_OFF];
+  assign a0_is_div      = (a0_alu_op == `ALU_DIV) || (a0_alu_op == `ALU_DIVU) ||
+                          (a0_alu_op == `ALU_REM) || (a0_alu_op == `ALU_REMU);
+  assign a0_is_branch_any = a0_is_branch | a0_is_jal | a0_is_jalr;
+  assign a0_needs_alu_result = !a0_is_load && !a0_is_store && !a0_is_div &&
+                               a0_reg_we && !a0_illegal;
+
   // ---------------------------------------------------------------------------
-  // PRF（固定 4 个读口：lane0 src1/src2 + lane1 src1/src2）
+  // PRF（6 个读口：lane0 直连 + lane0 缓冲 + lane1 缓冲）
   // ---------------------------------------------------------------------------
-  logic [4*PW-1:0] prf_raddr;
-  logic [4*32-1:0] prf_rdata;
+  logic [6*PW-1:0] prf_raddr;
+  logic [6*32-1:0] prf_rdata;
   logic [R-1:0]      prf_we;
   logic [R*PW-1:0]   prf_waddr;
   logic [R*32-1:0]   prf_wdata;
@@ -319,13 +361,16 @@ module backend_ooo #(
     prf_raddr[PW +: PW]   = i_src2_tag;
     prf_raddr[2*PW +: PW] = p_src1_tag;
     prf_raddr[3*PW +: PW] = p_src2_tag;
+    prf_raddr[4*PW +: PW] = a0_src1_tag;
+    prf_raddr[5*PW +: PW] = a0_src2_tag;
   end
 
   logic [31:0] issue_src1, issue_src2;
   logic [31:0] p_src1, p_src2;
+  logic [31:0] a0_src1, a0_src2;
   logic        cdb_bypass1, cdb_bypass2;
-  logic        cdb_bypass3, cdb_bypass4;
-  logic [31:0] cdb_bp1, cdb_bp2, cdb_bp3, cdb_bp4;
+  logic        cdb_bypass3, cdb_bypass4, cdb_bypass5, cdb_bypass6;
+  logic [31:0] cdb_bp1, cdb_bp2, cdb_bp3, cdb_bp4, cdb_bp5, cdb_bp6;
   integer ib;
 
   // 同拍 CDB 旁路（R 条 CDB 都要检查；lane 0 优先）。
@@ -334,6 +379,8 @@ module backend_ooo #(
     cdb_bypass2 = 1'b0; cdb_bp2 = 32'b0;
     cdb_bypass3 = 1'b0; cdb_bp3 = 32'b0;
     cdb_bypass4 = 1'b0; cdb_bp4 = 32'b0;
+    cdb_bypass5 = 1'b0; cdb_bp5 = 32'b0;
+    cdb_bypass6 = 1'b0; cdb_bp6 = 32'b0;
     for (ib = 0; ib < R; ib = ib + 1) begin
       if (cdb[ib*CW + `CPU_CDB_VALID_OFF] &&
           (cdb[ib*CW + `CPU_CDB_TAG_OFF +: PW] == i_src1_tag)) begin
@@ -351,6 +398,14 @@ module backend_ooo #(
           (cdb[ib*CW + `CPU_CDB_TAG_OFF +: PW] == p_src2_tag)) begin
         cdb_bypass4 = 1'b1; cdb_bp4 = cdb[ib*CW + `CPU_CDB_VALUE_OFF +: 32];
       end
+      if (cdb[ib*CW + `CPU_CDB_VALID_OFF] &&
+          (cdb[ib*CW + `CPU_CDB_TAG_OFF +: PW] == a0_src1_tag)) begin
+        cdb_bypass5 = 1'b1; cdb_bp5 = cdb[ib*CW + `CPU_CDB_VALUE_OFF +: 32];
+      end
+      if (cdb[ib*CW + `CPU_CDB_VALID_OFF] &&
+          (cdb[ib*CW + `CPU_CDB_TAG_OFF +: PW] == a0_src2_tag)) begin
+        cdb_bypass6 = 1'b1; cdb_bp6 = cdb[ib*CW + `CPU_CDB_VALUE_OFF +: 32];
+      end
     end
   end
 
@@ -358,6 +413,8 @@ module backend_ooo #(
   assign issue_src2 = cdb_bypass2 ? cdb_bp2 : prf_rdata[32 +: 32];
   assign p_src1 = cdb_bypass3 ? cdb_bp3 : prf_rdata[2*32 +: 32];
   assign p_src2 = cdb_bypass4 ? cdb_bp4 : prf_rdata[3*32 +: 32];
+  assign a0_src1 = cdb_bypass5 ? cdb_bp5 : prf_rdata[4*32 +: 32];
+  assign a0_src2 = cdb_bypass6 ? cdb_bp6 : prf_rdata[5*32 +: 32];
 
   always_comb begin
     for (i = 0; i < R; i = i + 1) begin
@@ -367,7 +424,7 @@ module backend_ooo #(
     end
   end
 
-  prf #(.W(2), .R(R)) u_prf (
+  prf #(.W(3), .R(R)) u_prf (
     .clk   (clk),
     .reset (reset),
     .raddr (prf_raddr),
@@ -381,25 +438,25 @@ module backend_ooo #(
   // ALU
   // ---------------------------------------------------------------------------
   logic [31:0] alu_a, alu_b, alu_y;
-  logic [31:0] i_pc_plus4;
-  assign i_pc_plus4 = i_pc + 32'd4;
+  logic [31:0] a0_pc_plus4;
+  assign a0_pc_plus4 = a0_pc + 32'd4;
 
   always_comb begin
-    alu_a = (i_a_sel == `A_REG)  ? issue_src1 :
-            (i_a_sel == `A_PC)   ? i_pc :
-                                   32'b0;
-    alu_b = i_b_sel ? i_imm : issue_src2;
+    alu_a = (a0_a_sel == `A_REG)  ? a0_src1 :
+            (a0_a_sel == `A_PC)   ? a0_pc :
+                                    32'b0;
+    alu_b = a0_b_sel ? a0_imm : a0_src2;
   end
 
   alu u_alu (
     .a  (alu_a),
     .b  (alu_b),
-    .op (i_alu_op),
+    .op (a0_alu_op),
     .y  (alu_y)
   );
 
   logic [31:0] wb_value;
-  assign wb_value = (i_wb_sel == `WB_PC4) ? i_pc_plus4 : alu_y;
+  assign wb_value = (a0_wb_sel == `WB_PC4) ? a0_pc_plus4 : alu_y;
 
   // lane 1 ALU（只处理普通写回 ALU 指令）
   logic [31:0] alu1_a, alu1_b, alu1_y;
@@ -430,21 +487,21 @@ module backend_ooo #(
 
   always_comb begin
     br_taken  = 1'b0;
-    br_target = i_pc + i_imm;
-    if (i_is_jal) begin
+    br_target = a0_pc + a0_imm;
+    if (a0_is_jal) begin
       br_taken  = 1'b1;
-      br_target = i_pc + i_imm;
-    end else if (i_is_jalr) begin
+      br_target = a0_pc + a0_imm;
+    end else if (a0_is_jalr) begin
       br_taken  = 1'b1;
-      br_target = (issue_src1 + i_imm) & ~32'h1;
-    end else if (i_is_branch) begin
-      unique case (i_inst[14:12])
-        3'b000: br_taken = (issue_src1 == issue_src2);
-        3'b001: br_taken = (issue_src1 != issue_src2);
-        3'b100: br_taken = ($signed(issue_src1) < $signed(issue_src2));
-        3'b101: br_taken = ($signed(issue_src1) >= $signed(issue_src2));
-        3'b110: br_taken = (issue_src1 < issue_src2);
-        3'b111: br_taken = (issue_src1 >= issue_src2);
+      br_target = (a0_src1 + a0_imm) & ~32'h1;
+    end else if (a0_is_branch) begin
+      unique case (a0_inst[14:12])
+        3'b000: br_taken = (a0_src1 == a0_src2);
+        3'b001: br_taken = (a0_src1 != a0_src2);
+        3'b100: br_taken = ($signed(a0_src1) < $signed(a0_src2));
+        3'b101: br_taken = ($signed(a0_src1) >= $signed(a0_src2));
+        3'b110: br_taken = (a0_src1 < a0_src2);
+        3'b111: br_taken = (a0_src1 >= a0_src2);
         default: br_taken = 1'b0;
       endcase
     end
@@ -495,17 +552,21 @@ module backend_ooo #(
 
   // 需要 ALU 产生 CDB 值的 uop
   logic needs_alu_result;
-  assign needs_alu_result = !i_is_mem && !i_is_div && i_reg_we && !i_illegal;
+  assign needs_alu_result = a0_needs_alu_result;
 
-  logic alu_issue_ready, alu1_issue_ready;
-  assign alu_issue_ready  = !needs_alu_result ||
-                            !alu_valid_q || cdb_src_ready[0];
-  assign alu1_issue_ready = !p_needs_alu_result ||
-                            !alu1_valid_q || cdb_src_ready[1];
+  assign a0_issue_ready = a0_is_div ? div_issue_ready :
+                          (!a0_needs_alu_result ||
+                           !alu_valid_q || cdb_src_ready[0]);
+  assign a1_issue_ready = !p_needs_alu_result ||
+                          !alu1_valid_q || cdb_src_ready[1];
+  assign a0_squashed = a0_valid_q && sq_valid && (a0_seq_q > squash_seq);
+  assign a0_discard  = a0_squashed;
+  assign a0_accept   = !a0_valid_q || a0_discard || a0_issue_ready;
+  assign a0_issue    = a0_valid_q && !a0_squashed && a0_issue_ready;
   assign a1_squashed = a1_valid_q && sq_valid && (a1_seq_q > squash_seq);
   assign a1_discard  = a1_squashed;
-  assign a1_accept   = !a1_valid_q || a1_discard || alu1_issue_ready;
-  assign a1_issue    = a1_valid_q && !a1_squashed && alu1_issue_ready;
+  assign a1_accept   = !a1_valid_q || a1_discard || a1_issue_ready;
+  assign a1_issue    = a1_valid_q && !a1_squashed && a1_issue_ready;
 
   assign noval_expected = i_is_store ||
                           (!i_is_load && !i_is_div &&
@@ -520,7 +581,7 @@ module backend_ooo #(
   logic [PW-1:0] div_tag_pending;
   logic        div_exc_pending;
 
-  assign div_is_signed = (i_alu_op == `ALU_DIV) || (i_alu_op == `ALU_REM);
+  assign div_is_signed = (a0_alu_op == `ALU_DIV) || (a0_alu_op == `ALU_REM);
 
   logic div_issue_ready;
   assign div_issue_ready = !div_busy && !div_done && !div_valid_q;
@@ -530,8 +591,8 @@ module backend_ooo #(
     .reset     (reset),
     .start     (div_start),
     .is_signed (div_is_signed),
-    .a         (issue_src1),
-    .b         (issue_src2),
+    .a         (a0_src1),
+    .b         (a0_src2),
     .busy      (div_busy),
     .done      (div_done),
     .quotient  (div_quot),
@@ -602,15 +663,15 @@ module backend_ooo #(
   // ---------------------------------------------------------------------------
   // issue 路由
   // ---------------------------------------------------------------------------
-  logic issue_ready_base;
-  logic addr_only_issue;
-  assign issue_ready_base = i_is_mem ? lsu_issue_ready :
-                            i_is_div ? div_issue_ready :
-                                       alu_issue_ready;
+  logic addr_only_issue, i_mem_ready;
   // address-only store 不产生 complete，不占用 complete FIFO。
   assign addr_only_issue = iq_out_valid[0] && iq_out_addr_only[0] && i_is_store;
-  assign issue_ready[0] = issue_ready_base &&
-                          (addr_only_issue || !noval_expected || cf_allow);
+  assign i_mem_ready = lsu_issue_ready &&
+                       (addr_only_issue || !noval_expected || cf_allow);
+  // lane0：load/store 仍然直连 LSU；非访存进入 a0 缓冲，下一拍执行。
+  assign issue_ready[0] = i_is_mem ? i_mem_ready :
+                          (a0_accept && (!noval_expected || cf_allow));
+  assign a0_push = iq_out_valid[0] && issue_ready[0] && !i_is_mem;
   // lane 1 只接收普通写回 ALU；资源独立且不产生有副作用的完成。
   // IQ 选中后先进入 a1 缓冲，下一拍再做 PRF 读/ALU；缓冲能吸收时即可
   // 从 IQ 弹出，保持 lane1 每拍一条的吞吐。
@@ -618,8 +679,8 @@ module backend_ooo #(
   assign a1_push        = iq_out_valid[1] && issue_ready[1];
 
   logic alu_issue, div_issue, alu1_issue;
-  assign alu_issue  = iq_out_valid[0] && issue_ready[0] && !i_is_mem && !i_is_div;
-  assign div_issue  = iq_out_valid[0] && issue_ready[0] && i_is_div;
+  assign alu_issue  = a0_issue && !a0_is_div;
+  assign div_issue  = a0_issue && a0_is_div;
   assign alu1_issue = a1_issue;
 
   assign div_start = div_issue;
@@ -724,6 +785,9 @@ module backend_ooo #(
     if (reset) begin
       alu_valid_q  <= 1'b0;
       alu1_valid_q <= 1'b0;
+      a0_valid_q   <= 1'b0;
+      a0_uop_q     <= '0;
+      a0_seq_q     <= '0;
       a1_valid_q   <= 1'b0;
       a1_uop_q     <= '0;
       a1_seq_q     <= '0;
@@ -748,6 +812,15 @@ module backend_ooo #(
           (div_pending_seq > squash_seq))
         div_discard <= 1'b1;
 
+      // lane0 非访存缓冲：丢弃/执行后释放；新选中覆盖旧内容。
+      if (a0_discard || a0_issue)
+        a0_valid_q <= 1'b0;
+      if (a0_push && !(sq_valid && (issue_seq[31:0] > squash_seq))) begin
+        a0_valid_q <= 1'b1;
+        a0_uop_q   <= issue_uop[DW-1:0];
+        a0_seq_q   <= issue_seq[31:0];
+      end
+
       // lane1 发射缓冲：丢弃/执行后释放；新选中覆盖旧内容。
       if (a1_discard || a1_issue)
         a1_valid_q <= 1'b0;
@@ -756,14 +829,24 @@ module backend_ooo #(
         a1_uop_q   <= issue_uop[2*DW-1:DW];
         a1_seq_q   <= issue_seq[63:32];
       end
+`ifdef LOCAL_TRACE
+      if (a1_push)
+        $display("[A1_PUSH] t=%0t seq=%0d pc=%08x accept=%0b sq=%0b",
+                 $time, issue_seq[63:32], issue_uop[DW + `CPU_DISPATCH_PC_OFF +: 32],
+                 a1_accept, sq_valid);
+      if (a1_valid_q)
+        $display("[A1_STATE] t=%0t seq=%0d pc=%08x rdy=%0b issue=%0b alu1v=%0b needs=%0b",
+                 $time, a1_seq_q, p_pc, a1_issue_ready, a1_issue,
+                 alu1_valid_q, p_needs_alu_result);
+`endif
 
       // ALU 结果
       if (alu_valid_q && cdb_src_ready[0])
         alu_valid_q <= 1'b0;
       if (alu_issue && needs_alu_result) begin
         alu_valid_q  <= 1'b1;
-        alu_tag_q    <= i_dest;
-        alu_seq_q    <= issue_seq[31:0];
+        alu_tag_q    <= a0_dest;
+        alu_seq_q    <= a0_seq_q;
         alu_value_q  <= wb_value;
         alu_exc_q    <= 1'b0;
       end
@@ -789,10 +872,10 @@ module backend_ooo #(
       if (div_valid_q && cdb_src_ready[3])
         div_valid_q <= 1'b0;
       if (div_issue) begin
-        div_tag_pending <= i_dest;
-        div_op_q        <= i_alu_op;
-        div_exc_pending <= i_illegal;
-        div_pending_seq <= issue_seq[31:0];
+        div_tag_pending <= a0_dest;
+        div_op_q        <= a0_alu_op;
+        div_exc_pending <= a0_illegal;
+        div_pending_seq <= a0_seq_q;
         div_discard     <= 1'b0;
       end
       if (div_done) begin
@@ -809,14 +892,14 @@ module backend_ooo #(
 
       // 分支更新 / 无值完成
       br_valid_q <= 1'b0;
-      if (alu_issue && i_is_branch_any) begin
+      if (alu_issue && a0_is_branch_any) begin
         br_valid_q  <= 1'b1;
-        br_pc_q     <= i_pc;
+        br_pc_q     <= a0_pc;
         br_taken_q  <= br_taken;
         br_target_q <= br_target;
-        br_jalr_q   <= i_is_jalr;
-        br_tag_q    <= i_dest;
-        br_seq_q    <= issue_seq[31:0];
+        br_jalr_q   <= a0_is_jalr;
+        br_tag_q    <= a0_dest;
+        br_seq_q    <= a0_seq_q;
       end
     end
   end
@@ -893,18 +976,18 @@ module backend_ooo #(
   end
 
   logic br_issue;
-  assign br_issue = alu_issue && i_is_branch_any &&
-                    !(sq_valid && (issue_seq[31:0] > squash_seq));
+  assign br_issue = alu_issue && a0_is_branch_any &&
+                    !(sq_valid && (a0_seq_q > squash_seq));
 
   always_comb begin
     br_update = '0;
     if (br_issue) begin
       br_update[`CPU_BR_VALID_OFF] = 1'b1;
-      br_update[`CPU_BR_PC_OFF +: 32] = i_pc;
+      br_update[`CPU_BR_PC_OFF +: 32] = a0_pc;
       br_update[`CPU_BR_TAKEN_OFF] = br_taken;
       br_update[`CPU_BR_TARGET_OFF +: 32] = br_target;
-      br_update[`CPU_BR_IS_JALR_OFF] = i_is_jalr;
-      br_update[`CPU_BR_TAG_OFF +: PW] = i_dest;
+      br_update[`CPU_BR_IS_JALR_OFF] = a0_is_jalr;
+      br_update[`CPU_BR_TAG_OFF +: PW] = a0_dest;
     end
   end
 
@@ -922,8 +1005,8 @@ module backend_ooo #(
       if (iq_out_valid[0] && !issue_ready[0] && stall_dbg < 12) begin
         $display("[STALL] t=%0t pc=%08x inst=%08x dest=%0d rob=%0d mem=%0b div=%0b alu_rdy=%0b div_rdy=%0b lsu_rdy=%0b alu_buf=%0b cdb_rdy0=%0b",
                  $time, i_pc, i_inst, i_dest, i_rob, i_is_mem, i_is_div,
-                 alu_issue_ready, div_issue_ready, lsu_issue_ready,
-                 alu_valid_q, cdb_src_ready[0]);
+                 a0_accept, div_issue_ready, lsu_issue_ready,
+                 a0_valid_q, cdb_src_ready[0]);
         stall_dbg <= stall_dbg + 1;
       end
       if (iq_out_valid[0] && issue_ready[0])
@@ -946,10 +1029,11 @@ module backend_ooo #(
         $display("[SQUASH] t=%0t rob=%0d", $time, sq_rob);
       if (br_issue)
         $display("[BR] t=%0t pc=%08x taken=%0b target=%08x jalr=%0b tag=%0d",
-                 $time, i_pc, br_taken, br_target, i_is_jalr, i_dest);
+                 $time, a0_pc, br_taken, br_target, a0_is_jalr, a0_dest);
       if (alu_issue && needs_alu_result)
         $display("[ALU_SET] t=%0t tag=%0d rob=%0d val=%08x",
-                 $time, i_dest, i_rob, wb_value);
+                 $time, a0_dest,
+                 a0_uop_q[`CPU_DISPATCH_ROB_IDX_OFF +: RW], wb_value);
       if (div_done)
         $display("[DIV_DONE] t=%0t discard=%0b tag=%0d rob=%0d",
                  $time, div_discard, div_tag_pending, div_pending_seq);
@@ -1023,7 +1107,7 @@ module backend_ooo #(
           st_stall_lsu <= st_stall_lsu + 1;
         else if (i_is_div && !div_issue_ready)
           st_stall_div <= st_stall_div + 1;
-        else if (!i_is_mem && !i_is_div && !alu_issue_ready)
+        else if (!i_is_mem && !i_is_div && !a0_accept)
           st_stall_alu <= st_stall_alu + 1;
         else
           st_stall_other <= st_stall_other + 1;
