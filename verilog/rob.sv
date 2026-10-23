@@ -26,6 +26,7 @@ module rob #(
   input  logic [W*`CPU_PRF_IDX_W-1:0]  in_old_tag,
   input  logic [W-1:0]                 in_pred_taken,
   input  logic [W*32-1:0]              in_pred_target,
+  input  logic [W*`CPU_BHT_INDEX_BITS-1:0] in_pred_ghr,
   output logic                         in_ready,
   output logic [W*`CPU_ROB_TAG_W-1:0]  alloc_rob_idx,
 
@@ -74,13 +75,16 @@ module rob #(
   output logic [31:0]                  redirect_pc,
   output logic                         squash_valid,
   output logic [`CPU_ROB_TAG_W-1:0]    squash_rob_idx,
-  output logic                         br_update_uncond
+  output logic                         br_update_uncond,
+  output logic [`CPU_BHT_INDEX_BITS-1:0] br_update_ghr,
+  output logic                         br_update_found
 );
 
   localparam integer PW       = `CPU_PRF_IDX_W;
   localparam integer LW       = `CPU_LSQ_IDX_W;
   localparam integer RW       = `CPU_ROB_TAG_W;
   localparam integer R        = `CPU_CDB_NUM;
+  localparam integer GH       = `CPU_BHT_INDEX_BITS;
   localparam integer MASK     = DEPTH - 1;
   localparam integer CNTW     = $clog2(DEPTH + 1);
   localparam [LW-1:0] LSQ_LAST = `CPU_LSQ_DEPTH - 1;
@@ -100,6 +104,7 @@ module rob #(
   logic                  entry_uncond    [0:DEPTH-1];
   logic                  entry_pred_taken[0:DEPTH-1];
   logic [31:0]           entry_pred_tgt  [0:DEPTH-1];
+  logic [GH-1:0]         entry_pred_ghr  [0:DEPTH-1];
   logic                  entry_done      [0:DEPTH-1];
   logic                  entry_exception [0:DEPTH-1];
   logic                  entry_illegal   [0:DEPTH-1];
@@ -179,6 +184,8 @@ module rob #(
   logic [31:0] redirect_pc_c;
   assign flush_young = br_update_valid && br_found && br_mispredict;
   assign br_update_uncond = br_update_valid && br_found && entry_uncond[br_idx];
+  assign br_update_found  = br_update_valid && br_found;
+  assign br_update_ghr    = br_update_found ? entry_pred_ghr[br_idx] : '0;
   assign redirect_valid = flush_young;
   assign redirect_pc_c  = br_update_taken ? br_update_target :
                           (entry_pc[br_idx] + 32'd4);
@@ -438,6 +445,7 @@ module rob #(
                                             in_uop[i_alloc2*`CPU_RENAME_W + `CPU_DISPATCH_IS_JALR_OFF];
               entry_pred_taken[i_alloc_idx] <= in_pred_taken[i_alloc2];
               entry_pred_tgt[i_alloc_idx]   <= in_pred_target[i_alloc2*32 +: 32];
+              entry_pred_ghr[i_alloc_idx]   <= in_pred_ghr[i_alloc2*GH +: GH];
               entry_done[i_alloc_idx]       <= 1'b0;
               entry_exception[i_alloc_idx]  <= 1'b0;
               entry_illegal[i_alloc_idx]    <= in_uop[i_alloc2*`CPU_RENAME_W + `CPU_DISPATCH_ILLEGAL_OFF];

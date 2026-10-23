@@ -41,7 +41,8 @@ printf '%s\n' "$w" > "$marker"
     "$root/verilog/cpu_config.sv" "$root/verilog/if_defs.sv" \
     "$root/verilog/rv32_defs.sv" "$root/verilog/pc_unit.sv" \
     "$root/verilog/icache_pipe.sv" "$root/verilog/decoder.sv" \
-    "$root/verilog/bpu.sv" "$root/verilog/rename.sv" \
+    "$root/verilog/bpu.sv" "$root/verilog/bpu_gshare_snap.sv" \
+    "$root/verilog/rename.sv" \
     "$root/verilog/commit.sv" "$root/verilog/rob.sv" \
     "$root/verilog/frontend_ooo.sv" "$root/verilog/stub_exec.sv" \
     "$root/scripts/ram/sram_fakeram.sv" \

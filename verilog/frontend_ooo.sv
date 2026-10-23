@@ -31,11 +31,14 @@ module frontend_ooo #(
   input  logic        br_update_is_jalr,
   input  logic        br_update_uncond,
   input  logic [`CPU_PRF_IDX_W-1:0] br_update_tag,
+  input  logic [`CPU_BHT_INDEX_BITS-1:0] br_update_ghr,
+  input  logic        br_update_found,
 
   output logic [W-1:0]                 dec_valid,
   output logic [W*`CPU_DECODE_W-1:0]   dec_uop,
   output logic [W-1:0]                 dec_pred_taken,
   output logic [W*32-1:0]              dec_pred_target,
+  output logic [W*`CPU_BHT_INDEX_BITS-1:0] dec_pred_ghr,
   input  logic                         rename_ready,
 
   output logic [31:0]                 pc_out,
@@ -68,25 +71,37 @@ module frontend_ooo #(
   logic p0_taken, p1_taken;
   logic [31:0] p0_target, p1_target;
 
-  bpu u_bpu (
+  logic [`CPU_BHT_INDEX_BITS-1:0] p0_ghr, p1_ghr;
+
+  bpu_gshare_snap #(.GHIST_BITS(`CPU_BHT_INDEX_BITS)) u_bpu (
     .clk             (clk),
     .reset           (reset),
+    .fetch_valid     (fetch_fire),
     .fetch_pc        (pc_q),
     .predict_taken   (p0_taken),
     .predict_target  (p0_target),
+    .predict_ghr     (p0_ghr),
+    .fetch2_valid    (fetch_fire && use2),
     .fetch_pc2       (pc1),
     .predict_taken2  (p1_taken),
     .predict_target2 (p1_target),
-    .upd_valid       (br_update_valid),
+    .predict_ghr2    (p1_ghr),
+    .upd_valid       (br_update_valid && br_update_found),
     .upd_pc          (br_update_pc),
     .upd_taken       (br_update_taken),
     .upd_target      (br_update_target),
-    .upd_is_uncond   (br_update_uncond)
+    .upd_is_uncond   (br_update_uncond),
+    .upd_ghr         (br_update_ghr),
+    .recover_valid   (redirect_valid),
+    .recover_ghr     (br_update_ghr),
+    .recover_taken   (br_update_taken),
+    .recover_uncond  (br_update_uncond)
   );
 
   // ---- 请求 FIFO（预测/配对信息） ----------------------------------------
   logic [RDEPTH-1:0]   rq_use2, rq_p0t, rq_p1t;
   logic [RDEPTH*32-1:0] rq_p0tg, rq_p1tg;
+  logic [RDEPTH*`CPU_BHT_INDEX_BITS-1:0] rq_ghr0, rq_ghr1;
   logic [RFW-1:0]      rq_head, rq_tail;
   logic [RCW-1:0]      rq_count;
 
@@ -107,6 +122,7 @@ module frontend_ooo #(
   logic [FDEPTH*`CPU_DECODE_W-1:0] fq_uop;
   logic [FDEPTH-1:0]               fq_pred_taken;
   logic [FDEPTH*32-1:0]            fq_pred_target;
+  logic [FDEPTH*`CPU_BHT_INDEX_BITS-1:0] fq_pred_ghr;
   logic [FW-1:0]                   fq_head, fq_tail;
   logic [FCW-1:0]                  fq_count;
 
@@ -265,6 +281,7 @@ module frontend_ooo #(
     dec_uop         = '0;
     dec_pred_taken  = '0;
     dec_pred_target = '0;
+    dec_pred_ghr    = '0;
     for (i_out = 0; i_out < W; i_out = i_out + 1) begin
       if (i_out < fq_count) begin
         dec_valid[i_out] = fq_valid[(fq_head + i_out) % FDEPTH];
@@ -273,6 +290,8 @@ module frontend_ooo #(
         dec_pred_taken[i_out]  = fq_pred_taken[(fq_head + i_out) % FDEPTH];
         dec_pred_target[i_out*32 +: 32] =
             fq_pred_target[((fq_head + i_out) % FDEPTH)*32 +: 32];
+        dec_pred_ghr[i_out*`CPU_BHT_INDEX_BITS +: `CPU_BHT_INDEX_BITS] =
+            fq_pred_ghr[((fq_head + i_out) % FDEPTH)*`CPU_BHT_INDEX_BITS +: `CPU_BHT_INDEX_BITS];
       end
     end
   end
@@ -290,6 +309,8 @@ module frontend_ooo #(
         rq_p0tg[rq_tail*32 +: 32]   <= p0_target;
         rq_p1t[rq_tail]             <= p1_taken;
         rq_p1tg[rq_tail*32 +: 32]   <= p1_target;
+        rq_ghr0[rq_tail*`CPU_BHT_INDEX_BITS +: `CPU_BHT_INDEX_BITS] <= p0_ghr;
+        rq_ghr1[rq_tail*`CPU_BHT_INDEX_BITS +: `CPU_BHT_INDEX_BITS] <= p1_ghr;
         rq_tail <= (rq_tail == RDEPTH - 1) ? '0 : rq_tail + 1'b1;
       end
       if (resp_accept)
@@ -343,6 +364,8 @@ module frontend_ooo #(
         fq_uop[fq_tail*`CPU_DECODE_W + `CPU_DECODE_RS2_OFF +: 5]      <= dec_rs2;
         fq_pred_taken[fq_tail]  <= rq_p0t[rq_head];
         fq_pred_target[fq_tail*32 +: 32] <= rq_p0tg[rq_head*32 +: 32];
+        fq_pred_ghr[fq_tail*`CPU_BHT_INDEX_BITS +: `CPU_BHT_INDEX_BITS]
+            <= rq_ghr0[rq_head*`CPU_BHT_INDEX_BITS +: `CPU_BHT_INDEX_BITS];
       end
 
       // lane 1
@@ -369,6 +392,8 @@ module frontend_ooo #(
         fq_uop[((fq_tail + 1) % FDEPTH)*`CPU_DECODE_W + `CPU_DECODE_RS2_OFF +: 5]      <= dec1_rs2;
         fq_pred_taken[(fq_tail + 1) % FDEPTH]  <= rq_p1t[rq_head];
         fq_pred_target[((fq_tail + 1) % FDEPTH)*32 +: 32] <= rq_p1tg[rq_head*32 +: 32];
+        fq_pred_ghr[((fq_tail + 1) % FDEPTH)*`CPU_BHT_INDEX_BITS +: `CPU_BHT_INDEX_BITS]
+            <= rq_ghr1[rq_head*`CPU_BHT_INDEX_BITS +: `CPU_BHT_INDEX_BITS];
       end
 
       fq_count <= fq_count + push_n - (pop_fire ? pop_n : '0);

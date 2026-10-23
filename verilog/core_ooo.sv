@@ -48,12 +48,17 @@ module core_ooo #(
   localparam integer CW = `CPU_CDB_W;
   localparam integer R  = `CPU_CDB_NUM;
   localparam integer MW = `CPU_COMPLETE_W;
+  localparam integer GH = `CPU_BHT_INDEX_BITS;
 
   // frontend <-> rename
   logic [W-1:0]               dec_valid;
   logic [W*`CPU_DECODE_W-1:0] dec_uop;
   logic [W-1:0]               dec_pred_taken;
   logic [W*32-1:0]            dec_pred_target;
+  logic [W*GH-1:0]            dec_pred_ghr;
+  logic [W*GH-1:0]            ren_pred_ghr;
+  logic [GH-1:0]              rob_pred_ghr;
+  logic                       br_update_found;
   logic                       rename_ready;
 
   // rename <-> ROB
@@ -155,10 +160,13 @@ module core_ooo #(
     .br_update_is_jalr (br_jalr),
     .br_update_uncond  (rob_br_uncond),
     .br_update_tag     (br_tag),
+    .br_update_ghr     (rob_pred_ghr),
+    .br_update_found   (br_update_found),
     .dec_valid         (dec_valid),
     .dec_uop           (dec_uop),
     .dec_pred_taken    (dec_pred_taken),
     .dec_pred_target   (dec_pred_target),
+    .dec_pred_ghr      (dec_pred_ghr),
     .rename_ready      (rename_ready),
     .refill_valid      (refill_valid),
     .refill_addr       (refill_addr),
@@ -176,10 +184,12 @@ module core_ooo #(
     .reset             (reset),
     .in_valid          (dec_valid),
     .in_uop            (dec_uop),
+    .in_pred_ghr       (dec_pred_ghr),
     .in_ready          (rename_ready),
     .out_valid         (ren_valid),
     .out_uop           (ren_uop),
     .out_old_tag       (ren_old_tag),
+    .out_pred_ghr      (ren_pred_ghr),
     .out_ready         (ren_ready),
     .commit_valid      (cm_valid),
     .commit_rd         (cm_rd),
@@ -204,6 +214,7 @@ module core_ooo #(
     .in_old_tag         (ren_old_tag),
     .in_pred_taken      (dec_pred_taken),
     .in_pred_target     (dec_pred_target),
+    .in_pred_ghr        (ren_pred_ghr),
     .in_ready           (rob_in_ready),
     .alloc_rob_idx      (alloc_rob_idx),
     .cdb_valid          (cdb_valid),
@@ -240,7 +251,9 @@ module core_ooo #(
     .redirect_pc        (rob_redirect_pc),
     .squash_valid       (rob_sq_valid),
     .squash_rob_idx     (rob_sq_idx),
-    .br_update_uncond   (rob_br_uncond)
+    .br_update_uncond   (rob_br_uncond),
+    .br_update_ghr      (rob_pred_ghr),
+    .br_update_found    (br_update_found)
   );
 
   assign ren_ready = rob_in_ready && backend_ready;

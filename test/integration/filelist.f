@@ -12,6 +12,7 @@
 ../../verilog/backend_ooo.sv
 ../../verilog/pc_unit.sv
 ../../verilog/bpu.sv
+../../verilog/bpu_gshare_snap.sv
 ../../verilog/icache_pipe.sv
 ../../verilog/decoder.sv
 ../../verilog/rename.sv

@@ -21,6 +21,7 @@ backend_ooo.sv
 
 pc_unit.sv
 bpu.sv
+bpu_gshare_snap.sv
 icache_pipe.sv
 decoder.sv
 rename.sv

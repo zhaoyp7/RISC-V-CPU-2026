@@ -31,12 +31,14 @@ module rename #(
   // decoded uop 输入（dispatch 低 122 位布局）
   input  logic [W-1:0]                 in_valid,
   input  logic [W*`CPU_DECODE_W-1:0]   in_uop,
+  input  logic [W*`CPU_BHT_INDEX_BITS-1:0] in_pred_ghr,
   output logic                         in_ready,
 
   // renamed uop 输出（dispatch 去掉 rob_idx 的布局）
   output logic [W-1:0]                 out_valid,
   output logic [W*`CPU_RENAME_W-1:0]   out_uop,
   output logic [W*`CPU_PRF_IDX_W-1:0]  out_old_tag,
+  output logic [W*`CPU_BHT_INDEX_BITS-1:0] out_pred_ghr,
   input  logic                         out_ready,
 
   // 提交（来自 ROB/commit）
@@ -63,6 +65,9 @@ module rename #(
   localparam integer LW  = `CPU_LSQ_IDX_W;
   localparam integer FCW = $clog2(PRF + 1);
   localparam [LW-1:0] LSQ_LAST = `CPU_LSQ_DEPTH - 1;
+
+  // GHR 快照只是随流水线透传，不参与 rename 状态。
+  assign out_pred_ghr = in_pred_ghr;
 
   integer i_uop, i_cnt, i_alloc, i_wake, i_src, j_src;
   integer i_out, i_rec, i_ff;

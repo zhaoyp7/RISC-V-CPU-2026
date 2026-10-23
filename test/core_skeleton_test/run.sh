@@ -44,6 +44,7 @@ $root/verilog/pc_unit.sv
 $root/verilog/icache_pipe.sv
 $root/verilog/decoder.sv
 $root/verilog/bpu.sv
+$root/verilog/bpu_gshare_snap.sv
 $root/verilog/rename.sv
 $root/verilog/commit.sv
 $root/verilog/rob.sv
