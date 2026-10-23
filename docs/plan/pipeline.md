@@ -270,6 +270,12 @@ load 响应 → 结果队列 → CDB
 - 已做的 WIP 实验见 `docs/plan/replay.md`：Fmax +29.8%，但会因
   load/store issue 死锁；正式实现必须先做 store 地址预填 + retain-entry
   IQ/replay。
+- 2026-10-23 进展（`feat/freq-alupipe`）：先做了**只流水化非访存**的
+  a0/a1 缓冲，load/store 保持 IQ→LSU 直连；C2 opt 55.47→72.73 MHz
+  （+31.1%），面积 19.76k→20.31k（+2.8%），W2 IPC 0.6311→0.6084。
+  该版本 W2/W1 19/19、`run_all` ALL PASS，但尚未合并；下一步是处理
+  squash→ALU 结果捕获路径，或设计独立 MIQ。不要直接把 load/store 放入
+  流水级。
 
 ### Step 2：WB1 / WB2 分开
 

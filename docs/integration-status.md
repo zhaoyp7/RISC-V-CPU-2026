@@ -1,5 +1,19 @@
 # 集成状态（P1 完成，P2 进入性能优化）
 
+## 频率流水化分支（`feat/freq-alupipe`，2026-10-23，未合并）
+
+- 分支 HEAD `fa8920f`，只改 `verilog/backend_ooo.sv`；未合入 `main`。
+- lane1 和 lane0 非访存都改为“IQ 选择 → a0/a1 缓冲 → PRF/ALU”两级；
+  load/store 仍直连 LSU，避免旧 `feat/pipeline-iq` 的访存所有权死锁。
+- PRF 从 4 读口扩到 6 读口。
+- 验证：W2 19/19、W1 19/19、`run_all` ALL PASS。
+- W2 IPC 0.6084（C2 0.6311，-3.6%）；W1 IPC 0.5759（C2 0.5940，-3.1%）。
+- diagnose：21,092.6 µm² / 67.91 MHz；opt：**20,306.7 µm² / 72.73 MHz**。
+- 相对 C2 opt（19,759.4 / 55.47）：面积 +2.8%，Fmax +31.1%，IPC -3.6%，
+  `IPC × Fmax` +26.4%。
+- 关键路径仍在 `ROB → backend`，终点为 ALU 结果寄存器；下一步可试
+  squash 结果捕获路径或 MIQ，不要先做 D-Cache。
+
 ## P2 当前结果（RTL `a95a938`，2026-10-22）
 
 - **W=1 correctness：19/19 PASS**；**W=2 correctness：19/19 PASS**（`MAX_CYCLES=50,000,000`）。

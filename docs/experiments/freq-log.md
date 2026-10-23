@@ -112,27 +112,95 @@ skid 捕获 store 做预填，仍然无法解开 qsort/hanoi/queens 死锁。结
 issue 所有权、skid/IQ 反压、LSQ 分配时机和 load/store 内存序需要一起
 重写，局部补丁不可行；按时间盒停止，`feat/pipeline-iq` 不合并。
 
+## 实验 5：lane1 ALU 发射流水化（`feat/freq-alupipe`，保留检查点）
+
+2026-10-23，基于 `main` 的 C2 面积档（ROB16/PRF48/LSQ16/1KB I$）。
+
+改动：
+
+- 在 IQ lane1 与 PRF/ALU1 之间增加一个 a1 缓冲；
+- IQ 选中 lane1 后先写入缓冲，下一拍才做 PRF 读 + ALU1；
+- lane0 和 load/store 完全保持原路径，不进入流水级；
+- lane1 结果仍经原有 `alu1_valid_q` / CDB 写回。
+
+| 指标 | C2 基线 | 实验 5 |
+| --- | ---: | ---: |
+| W=2 IPC | 0.6311 | **0.6252（-0.9%）** |
+| diagnose 面积 | 20,262.8 µm² | 20,518.3 µm² |
+| diagnose Fmax | 53.44 MHz | **59.26 MHz（+10.9%）** |
+| W=2 correctness | 19/19 | 19/19 |
+| qsort/hanoi/queens | PASS | 逐个 PASS，无死锁 |
+
+结论：**保留**。面积只增加约 255 µm²，Fmax +10.9%，IPC 损失很小。
+新关键路径从 lane1 移到 **lane0 的 PRF→ALU0**，说明下一步应流水化
+lane0 非访存路径。检查点 commit：`0621c83`。
+
+## 实验 6：lane0 非访存流水化（当前分支，未合并 `main`）
+
+改动：
+
+- lane0 的**非访存** uop（ALU、branch、jal/jalr、div、非法指令）进入 a0
+  缓冲，下一拍做 PRF 读 + ALU/分支/div start；
+- **load/store 仍然从 IQ 直接进 LSU**，不进入流水级，避免之前
+  `feat/pipeline-iq` 的 load/store 所有权死锁；
+- PRF 读口从 4 个扩到 6 个（lane0 直连 + a0 + a1）；
+- 非访存指令的 complete 仍在 IQ 选中时压入 complete FIFO；分支的
+  `br_update` 在 a0 执行时产生，ROB 提交会等待 `resolved`；
+- a0/a1 都按 seq squash，并在同一拍支持“排空旧项 + 接收新项”。
+
+| 指标 | C2 基线 | 实验 6 |
+| --- | ---: | ---: |
+| W=2 IPC | 0.6311 | **0.6084（-3.6%）** |
+| W=1 IPC | 0.5940 | **0.5759（-3.1%）** |
+| W=2 correctness | 19/19 | 19/19 |
+| W=1 correctness | 19/19 | 19/19 |
+| `run_all` | ALL PASS | ALL PASS |
+| diagnose 面积 | 20,262.8 µm² | 21,092.6 µm² |
+| diagnose Fmax | 53.44 MHz | **67.91 MHz（+27.1%）** |
+| **opt 面积** | **19,759.4 µm²** | **20,306.7 µm²（+2.8%）** |
+| **opt Fmax** | **55.47 MHz** | **72.73 MHz（+31.1%）** |
+| 关键路径 | ROB → backend → ALU1 | 仍 ROB → backend → ALU 结果寄存器 |
+
+`IPC × Fmax` 从 **35.0** 提升到 **44.2（+26.4%）**。这是目前唯一同时
+通过 W1/W2/`run_all` 且 Fmax 收益超过 20% 的频率改动。
+
+调试过程：
+
+- qsort 第一次超时，ROB head 卡在 `pc=0x4` 的 `auipc`；
+- trace 显示指令在 t=53 被 lane1 弹出，但 `a1_issue_ready` 永远为 0；
+- 根因有两个：
+  1. `a1_issue_ready` 漏了显式声明，被 Verilator 隐式建网；
+  2. 实际逻辑还连着旧的 `alu1_issue_ready`，而后者已无驱动。
+- 补声明并统一信号名后 qsort/hanoi/queens/全量 19 项全部通过。
+- 教训：综合/仿真前检查 `IMPLICIT`、`UNUSEDSIGNAL`；新增流水控制信号
+  必须显式声明并确认只使用一个名字。
+
+当前状态：分支 `feat/freq-alupipe`，HEAD `fa8920f`（RTL 改动只在
+`verilog/backend_ooo.sv`），**尚未合并到 `main`**。`main` 仍是 C2 面积档
+（`94eac37`）。回滚到实验前：`git switch main` 或 branch 上的 `0621c83`
+（保留 lane1 版）/ `94eac37`（C2）。
+
 ## 当前决策
 
-- `feat/freq-recovery` 保留为 WIP 分支（commit `63a06cf`），不合并到 `main`。
-- `main` 包含 `36e4302` 的 complete FIFO 修复；默认 IPC 恢复为 **0.6380**，
-  W=2 19/19、`run_all` ALL PASS。
-- 四次频率实验：
-  - squash 两级化：Fmax +4.0%，IPC -1.8%，不达标；
-  - CDB 打一拍：Fmax +3.2%，IPC -4.4%，不达标；
-  - complete FIFO 修复：正确性收益，保留；
-  - IQ/PRF 分开：Fmax **+29.8%**，但 6 个 case 死锁，需要 replay 重构，
-    不合并。
-- IQ/PRF 分开是唯一一个 Fmax 收益超过 20% 的实验，证明方向正确；下一步
-  应设计 **issue replay / 非阻塞 issue queue**，而不是继续加局部旁路。
+- `main`：C2 面积档，opt 19,759.4 µm² / 55.47 MHz，IPC 0.6311；保持可交付。
+- `feat/freq-alupipe`：频率优化版，opt 20,306.7 µm² / 72.73 MHz，IPC 0.6084；
+  **未合并**，等下一 agent/用户决定是否接受面积换频率。
+- `feat/freq-recovery`、`feat/pipeline-iq`、`feat/gshare-snapshot` 保留为
+  实验分支，不合并。
+- 下一步优先级：
+  1. 若接受面积换频率：把 `feat/freq-alupipe` 合入 `main`，再补 opt 后文档；
+  2. 若继续频率：先试“a0/a1 结果捕获不再由 squash 组合门控”，把 squash
+     从 ALU 结果使能路径上移走；再考虑两级 squash；
+  3. 若继续面积：当前 20.3k opt，距 18k 还差 2.3k，需砍 LSQ/ROB/BPU/I$
+     或做结构优化，不要只扫参数；
+  4. MIQ/独立 memory issue queue 仍留到频率流水化稳定之后。
+- D-Cache 继续暂缓。
 
 ## 停止后的候选方向
 
-1. **先修 complete FIFO / ROB squash 竞态**：这是 CDB 实验暴露出的正确性
-   隐患，也可能影响现有设计在更激进时序下的稳定性。
-2. **分支预测**：qsort/median 误预测仍是 IPC 的主要损失，带 GHR 快照的
-   gshare + RAS 是低风险 IPC 方向。
-3. **接受当前性能，转向报告/参数化展示**：当前 W=2 IPC 0.638、W=1 0.5688，
-   功能全绿；若频率无法突破，继续投入的性价比需要重新评估。
-4. **D-Cache 仍暂缓**：计数器显示 load 阻塞已不是主要矛盾，且面积/频率
-   代价高。
+1. **先做 opt 后的合并决策**：频率版已全绿，但面积 +547 µm²、IPC -3.6%。
+2. **squash→ALU 结果使能路径**：当前关键路径起点仍是 ROB；可试让 a0/a1
+   照常执行，只在结果捕获处用 seq 门控，缩短控制路径。
+3. **分支预测**：qsort/median 误预测仍是 IPC 主要损失；带 GHR 快照的
+   gshare + RAS 是低风险 IPC 方向，但会增加面积。
+4. **D-Cache 仍暂缓**：load 阻塞不是当前主要矛盾，面积/频率代价高。

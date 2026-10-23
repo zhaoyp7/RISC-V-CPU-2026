@@ -12,8 +12,8 @@
 ## 0. 拉取后第一件事
 
 ```sh
-git switch feat/p1-integration
-git pull
+git switch main
+git pull --ff-only
 git submodule update --init --recursive
 git log --oneline -5
 ```
@@ -49,7 +49,7 @@ make test MAX_CYCLES=50000000
 
 ---
 
-## 1. 当前状态（2026-10-22）
+## 1. 当前状态（2026-10-23）
 
 - 分支：`main`
 - P1 功能 tag：`p1-ooo-final`（`0d6e07f`）
@@ -91,6 +91,27 @@ breakdown 见 `docs/perf-log.md` 与 `docs/integration-status.md`。
 2026-10-22 还修复了 ROB16 的恢复竞态（`ab00273`），C2 依赖该修复。
 C2 的完整参数/复现命令/注意事项见 `docs/configs/c2-area.md`。
 
+### 频率流水化分支（未合并）
+
+分支 `feat/freq-alupipe`（HEAD `fa8920f`）在 C2 参数上把非访存发射流水化：
+
+- lane1：IQ → a1 缓冲 → PRF/ALU1；
+- lane0：非访存 IQ → a0 缓冲 → PRF/ALU/分支/div；load/store 仍直连 LSU；
+- PRF 扩为 6 读口，避免 a0/a1 同时执行时读口冲突。
+
+| 指标 | C2 `main` | 频率分支 |
+| --- | ---: | ---: |
+| W2 IPC | 0.6311 | **0.6084** |
+| W1 IPC | 0.5940 | **0.5759** |
+| diagnose 面积 / Fmax | 20,262.8 / 53.44 | 21,092.6 / **67.91** |
+| opt 面积 / Fmax | 19,759.4 / 55.47 | **20,306.7 / 72.73** |
+| correctness | W2/W1 19/19 | W2/W1 19/19 |
+| `run_all` | ALL PASS | ALL PASS |
+
+相对 C2 opt：面积 +2.8%，Fmax +31.1%，IPC -3.6%，`IPC × Fmax` +26.4%。
+分支**尚未合并**；若接受面积换频率，再合入 `main`。回滚点：
+`main` 的 `94eac37`，或本分支的 `0621c83`（仅 lane1 版本）。
+
 ---
 
 ## 2. 当前架构
@@ -124,8 +145,11 @@ C2 的完整参数/复现命令/注意事项见 `docs/configs/c2-area.md`。
 1. 取指仍限制吞吐：每 bank 每拍一条，分支误预测恢复约 6–7 拍
 2. 无低延迟 D-Cache：towers 等 pointer chasing 直接暴露 10 拍内存延迟
 3. BPU 仍是 BTB + 2-bit BHT；gshare/RAS 未接入
-4. 关键路径 `ROB → backend`，56.08 MHz；面积 24.3k，阶段 1/2 均未达
+4. 关键路径仍是 `ROB → backend`；`main` C2 opt 55.47 MHz / 19.76k，
+   频率分支 opt 72.73 MHz / 20.31k，阶段 1/2 的面积/频率门槛均未达
 5. 双发射只在 ALU lane 生效；mem/div/branch 仍单端口
+6. 频率分支已验证“非访存 IQ/PRF 分开”可行，但 load/store 仍直连 LSU；
+   独立 memory issue queue（MIQ）尚未实现
 
 ---
 
@@ -133,33 +157,34 @@ C2 的完整参数/复现命令/注意事项见 `docs/configs/c2-area.md`。
 
 2026-10-22 决策：**不要先做 D-Cache**。当前课程门槛是全有或全无：
 
-| 指标 | 当前 | 阶段 1 | 阶段 2 |
-| --- | ---: | ---: | ---: |
-| IPC | 0.5507 | ≥ 0.6000 | ≥ 0.8450 |
-| 面积 | 24,288 µm² | ≤ 9,000 | ≤ 18,000 |
-| 频率 | 56.08 MHz | ≥ 300 | ≥ 300 |
+| 指标 | `main` C2 | 频率分支 | 阶段 1 | 阶段 2 |
+| --- | ---: | ---: | ---: | ---: |
+| IPC | 0.6311 | 0.6084 | ≥ 0.6000 | ≥ 0.8450 |
+| 面积（opt） | 19,759 µm² | 20,307 µm² | ≤ 9,000 | ≤ 18,000 |
+| 频率（opt） | 55.47 MHz | 72.73 MHz | ≥ 300 | ≥ 300 |
 
-IPC 只差约 9%，但面积/频率差得更远；只把 IPC 提到 0.6 不会改变 85 分。
+IPC 已过阶段 1，但面积/频率差得更远；只把 IPC 提到 0.6 不会改变 85 分。
 D-Cache 会增加面积、可能拖慢 ROB→backend 关键路径，而且 P2 的 4KB
 阻塞式写直达原型已经测到 IPC 0.1543，不能直接重做。
 
 建议优先级：
 
-1. **性能计数器**：branch miss、I$/D$ miss、load latency、IQ/ROB full、
-   LSU blocked、CDB conflict、divider busy。先确认瓶颈，不要凭感觉加 D$。
-2. **频率流水化（最高优先）**：关键路径 ROB→backend；拆 ROB recovery/
-   recover_rat/busy mask、IQ select/wakeup、ALU 乘法器、I$ tag/BPU 路径。
-3. **面积参数收缩**：ROB 16/24、PRF 48、IQ 4/6、LSQ 4/6、I$ 1KB/bank、
-   BTB/BHT 缩小；用 `make perf` + `MODE=diagnose` 做参数档。
-4. **分支预测**：gshare 必须保存预测时 GHR 快照；加 RAS；配合 fetch queue。
-   这比 D-Cache 面积小，直接针对 qsort/median 的数据相关分支。
+1. **先决定频率分支是否合入**：`feat/freq-alupipe` 已全绿，Fmax +31%，
+   但面积 +0.55k、IPC -3.6%；接受后合入 `main` 再跑 opt 文档。
+2. **频率继续（最高优先）**：关键路径仍是 ROB→backend，终点在 ALU
+   结果寄存器。先试把 a0/a1 的结果捕获从 squash 组合使能路径上移走，
+   再考虑两级 squash / MIQ；不要重复“把 load/store 放进流水级”的旧死锁。
+3. **面积**：当前频率版 20.3k opt，距 18k 还差约 2.3k；需要 LSQ/ROB/BPU/
+   I$ 的结构性缩减，单纯扫参数会把 IPC 压到 0.60 以下。
+4. **分支预测**：gshare 必须保存预测时 GHR 快照；分支 `feat/gshare-snapshot`
+   已有实现（LSQ32 上 IPC 0.7563，但面积 29.9k），未入默认。
 5. **D-Cache 仅在计数器和面积预算允许时再做**：小型、非阻塞、
    写直达 + store buffer、带 MSHR/hit-under-miss；不要重复阻塞式 4KB。
 6. **LSQ 增强**：store-to-load forwarding、non-blocking load、地址消歧。
 
 路线判断：阶段 1 的 9k 面积非常激进；如果频率/面积压不下去，优先评估
 阶段 2（面积 18k 更近，但 IPC 要 0.845），不要为了一个 IPC 指标盲目加
-D-Cache。当前 P2 已打 tag `p2-dual-issue`，没有 `p2-stage1`。
+D-Cache。`main` 已打 tag `p2-dual-issue`，没有 `p2-stage1`。
 
 ---
 
