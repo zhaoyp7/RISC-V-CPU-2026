@@ -85,3 +85,7 @@ LSQ 入口 3.986 ns、出口 8.505 ns，LSU 终点 9.240 ns；
 唤醒旁路。用户已允许 IPC / 面积暂时越线，后续可以评估更深的选择、读口或
 访存分级，但必须先设计请求所有权 / retry，避免旧 load-store 死锁。
 继续尊重降低 opt 频率的要求，不追加 opt。
+
+后续 load 查询分级实验保留了本轮诊断副本，位于
+`build/synth/load_query_baseline/diagnose_report.txt`、`diagnose_report.json`。
+默认 diagnose 目录会被新实验更新，历史结果以此副本和本页检查点为准。

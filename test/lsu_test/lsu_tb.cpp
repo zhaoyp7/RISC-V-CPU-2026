@@ -12,11 +12,17 @@
 #include <cstdint>
 #include <cstdio>
 #include <deque>
+#include <utility>
+#include <vector>
+
+#ifndef TB_LSQ_DEPTH
+#define TB_LSQ_DEPTH 8
+#endif
 
 namespace {
 
 constexpr int PRF = 6;
-constexpr int LSQ = 3;
+constexpr int LSQ = (TB_LSQ_DEPTH == 16) ? 4 : 3;
 constexpr int ROB = 5;
 constexpr int DW = 124 + 3 * PRF + LSQ + ROB;
 constexpr int IN_WORDS = (DW + 31) / 32;
@@ -28,7 +34,7 @@ enum : int {
     O_BR = 113, O_JAL = 114, O_JALR = 115, O_LOAD = 116, O_STORE = 117,
     O_ILLEGAL = 118, O_MEM_SIZE = 119, O_MEM_UNS = 121,
     O_DEST = 122, O_S1 = 128, O_S1R = 134, O_S2 = 135, O_S2R = 141,
-    O_LSQ = 142, O_ROB = 145,
+    O_LSQ = 142, O_ROB = O_LSQ + LSQ,
 };
 
 struct Uop {
@@ -41,6 +47,7 @@ struct Uop {
     uint32_t mem_uns = 0;
     uint32_t lsq = 0;
     uint32_t rob = 0;
+    uint32_t addr_only = 0;
 };
 
 template <typename Vec>
@@ -58,6 +65,7 @@ struct Harness {
     Vlsu* dut = nullptr;
     uint8_t mem[1 << 16] = {};
     bool auto_respond = true;
+    bool load_ready = true;
     long checks = 0;
     long fails = 0;
     uint32_t seq_base = 0;
@@ -66,6 +74,8 @@ struct Harness {
     // Requests accepted by the memory model, waiting for a response.
     std::deque<uint32_t> ld_pending;
     std::deque<uint8_t>  st_pending;
+    std::vector<uint32_t> accepted_loads;
+    std::deque<std::pair<uint32_t, uint32_t>> results;
 
     uint32_t read_word(uint32_t addr) const {
         uint32_t a = addr & 0xffff;
@@ -86,7 +96,7 @@ struct Harness {
         dut->eval();
 
         // Memory model: one response per cycle, in request order.
-        dut->ld_req_ready = 1;
+        dut->ld_req_ready = load_ready;
         dut->st_req_ready = 1;
         const bool ld_resp = auto_respond && !ld_pending.empty();
         const bool st_resp = auto_respond && !st_pending.empty();
@@ -101,11 +111,18 @@ struct Harness {
         const uint32_t st_addr = dut->st_req_addr;
         const uint32_t st_data = dut->st_req_wdata;
         const uint8_t  st_strb = (uint8_t)dut->st_req_wstrb;
+        const bool result_fire = dut->load_result_valid && dut->load_result_ready;
+        const uint32_t result_tag = dut->load_result_tag;
+        const uint32_t result_value = dut->load_result_value;
 
         dut->clk = 1;
         dut->eval();
 
-        if (ld_fire) ld_pending.push_back(ld_addr);
+        if (ld_fire) {
+            ld_pending.push_back(ld_addr);
+            accepted_loads.push_back(ld_addr);
+        }
+        if (result_fire) results.push_back({result_tag, result_value});
         if (st_fire) {
             write_word(st_addr, st_data, st_strb);
             st_pending.push_back(1);
@@ -130,6 +147,7 @@ struct Harness {
         dut->squash_seq = 0;
         dut->issue_valid = 0;
         dut->issue_seq = 0;
+        dut->issue_addr_only = 0;
         for (int i = 0; i < IN_WORDS; ++i) dut->issue_uop[i] = 0;
         dut->issue_src1 = 0;
         dut->issue_src2 = 0;
@@ -148,6 +166,8 @@ struct Harness {
     }
 
     void reset() {
+        auto_respond = true;
+        load_ready = true;
         dut->reset = 1;
         clear_inputs();
         for (int i = 0; i < 4; ++i) tick();
@@ -157,6 +177,8 @@ struct Harness {
         for (int i = 0; i < 32; ++i) seq_of_rob[i] = 0;
         ld_pending.clear();
         st_pending.clear();
+        accepted_loads.clear();
+        results.clear();
     }
 
     void pack(const Uop& u) {
@@ -198,8 +220,9 @@ struct Harness {
         dut->issue_src1 = src1;
         dut->issue_src2 = src2;
         dut->issue_seq = seq_of_rob[u.rob & 31];
-        // issue_ready for loads depends on ld_req_ready.
-        dut->ld_req_ready = 1;
+        dut->issue_addr_only = u.addr_only;
+        // A load is accepted into its reserved slot independently of memory.
+        dut->ld_req_ready = load_ready;
         dut->st_req_ready = 1;
         dut->eval();
         if (!dut->issue_ready) return false;
@@ -282,8 +305,10 @@ struct Harness {
 }  // namespace
 
 int main(int argc, char** argv) {
-    Verilated::commandArgs(argc, argv);
-    Vlsu dut;
+    VerilatedContext context;
+    context.threads(1);
+    context.commandArgs(argc, argv);
+    Vlsu dut{&context};
     Harness h;
     h.dut = &dut;
     h.reset();
@@ -348,6 +373,7 @@ int main(int argc, char** argv) {
     h.auto_respond = false;
     h.expect(h.issue(l0, 0x4000, 0), "multi load 0 issue");
     h.expect(h.issue(l1, 0x4004, 0), "multi load 1 issue");
+    for (int i = 0; i < 8 && h.ld_pending.size() < 2; ++i) h.tick();
     h.expect(h.ld_pending.size() == 2, "two outstanding loads");
     h.auto_respond = true;
     h.expect(h.wait_load_result(0x11111111, 10, "multi load 0 result"),
@@ -389,14 +415,14 @@ int main(int argc, char** argv) {
     Uop pl;
     pl.dest = 6; pl.is_load = 1; pl.lsq = 1; pl.rob = 2;
     pl.mem_size = WORD;
-    h.expect(!h.issue(pl, 0x6000, 0), "partial store blocks load");
+    h.expect(h.issue(pl, 0x6000, 0), "blocked load accepted into waiting table");
     for (int i = 0; i < 4; ++i) {
         h.tick();
         h.expect(!dut.ld_req_valid, "blocked load not sent");
     }
     h.commit(0, true, false);
     h.expect(h.wait_store_quiet("partial store drain"), "partial store drain");
-    h.expect(h.issue(pl, 0x6000, 0), "load after partial store");
+    // The waiting table owns this load; do not issue a second copy after drain.
     h.expect(h.wait_load_result(0x010203aa, 6, "partial load value"),
              "partial load value");
     h.commit(1, false, true);
@@ -414,7 +440,8 @@ int main(int argc, char** argv) {
     sl.mem_size = WORD;
     h.auto_respond = false;
     h.expect(h.issue(sl, 0x8000, 0), "squash load issue");
-    h.tick();
+    for (int i = 0; i < 8 && h.ld_pending.empty(); ++i) h.tick();
+    h.expect(h.ld_pending.size() == 1, "load sent before squash");
     h.squash(0);
     h.auto_respond = true;
     for (int i = 0; i < 8; ++i) {
@@ -430,6 +457,160 @@ int main(int argc, char** argv) {
     h.expect(h.issue(bp, 0x9000, 0x1), "bp issue");
     h.expect(!h.alloc(0, 2, true), "duplicate lsq id rejected");
 
+    // ---- late old load can pass younger loads blocked by an old store -----
+    h.reset();
+    h.write_word(0xa000, 0x11223344, 0xf);
+    for (int id = 0; id < TB_LSQ_DEPTH; ++id)
+        h.expect(h.alloc(id, id + 1, id == 1), "reserved waiting slot alloc");
+    for (int id = 2; id < TB_LSQ_DEPTH; ++id) {
+        Uop young;
+        young.dest = 20 + id; young.is_load = 1; young.lsq = id; young.rob = id + 1;
+        h.expect(h.issue(young, 0xb000, 0), "young blocked load enqueued");
+    }
+    for (int i = 0; i < 8; ++i) h.tick();
+    h.expect(h.accepted_loads.empty(), "unknown store blocks all young requests");
+    Uop address;
+    address.dest = 11; address.is_store = 1; address.lsq = 1; address.rob = 2;
+    address.addr_only = 1;
+    h.expect(h.issue(address, 0xb000, 0), "store address prefill progresses");
+    h.expect(!dut.store_complete_valid, "address prefill does not complete store");
+    for (int i = 0; i < 4; ++i) h.tick();
+    h.expect(h.accepted_loads.empty(), "prefilled store still waits for data");
+    Uop late;
+    late.dest = 10; late.is_load = 1; late.lsq = 0; late.rob = 1;
+    h.expect(h.issue(late, 0xa000, 0), "late old load uses its reserved slot");
+    h.expect(h.wait_load_result(0x11223344, 10, "late old load result"),
+             "late old load progresses past blocked young requests");
+    h.results.clear();
+    Uop unblock;
+    unblock.dest = 11; unblock.is_store = 1; unblock.lsq = 1; unblock.rob = 2;
+    h.expect(h.issue(unblock, 0xb000, 0x11223344), "store can fill with blocked loads");
+    bool young_seen[64] = {};
+    int young_count = 0;
+    for (int cycle = 0; cycle < 512 && young_count < TB_LSQ_DEPTH - 2; ++cycle) {
+        dut.load_result_ready = 1;
+        h.tick();
+        while (!h.results.empty()) {
+            const auto result = h.results.front(); h.results.pop_front();
+            const bool tag_ok = result.first >= 22 && result.first < 20 + TB_LSQ_DEPTH;
+            h.expect(tag_ok && result.second == 0x11223344, "young forwarded result");
+            if (tag_ok) {
+                h.expect(!young_seen[result.first], "young load completes once");
+                if (!young_seen[result.first]) ++young_count;
+                young_seen[result.first] = true;
+            }
+        }
+    }
+    h.clear_inputs();
+    h.expect(young_count == TB_LSQ_DEPTH - 2, "all young loads eventually complete");
+    h.expect(h.accepted_loads.size() == 1, "young loads forward without extra reads");
+    h.commit(0, false, true);
+    for (int id = 2; id < TB_LSQ_DEPTH; ++id) h.commit(id, false, true);
+    h.commit(1, true, false);
+    h.expect(h.wait_idle("late load/store drain"), "late load/store idle");
+
+    // ---- memory backpressure holds the registered address; squash cancels --
+    h.reset();
+    h.seq_base = 2;
+    h.expect(h.alloc(0, 1, false), "held load alloc");
+    h.load_ready = false;
+    Uop held; held.dest = 12; held.is_load = 1; held.lsq = 0; held.rob = 1;
+    h.expect(h.issue(held, 0xd000, 0), "load accepts while memory is not ready");
+    for (int i = 0; i < 8 && !dut.ld_req_valid; ++i) h.tick();
+    for (int i = 0; i < 5; ++i) {
+        h.expect(dut.ld_req_valid && dut.ld_req_addr == 0xd000, "request held stable");
+        h.tick();
+    }
+    h.squash(1);
+    h.load_ready = true;
+    for (int i = 0; i < 8; ++i) h.tick();
+    h.expect(h.accepted_loads.empty() && !dut.load_result_valid,
+             "squashed stalled request has no side effect");
+    h.write_word(0xd004, 0x55667788, 0xf);
+    h.expect(h.alloc(0, 2, false), "squashed waiting slot can be reused");
+    held.dest = 13; held.rob = 2;
+    h.expect(h.issue(held, 0xd004, 0), "reused waiting slot accepts fresh load");
+    h.expect(h.wait_load_result(0x55667788, 13, "reused slot value"), "fresh load result");
+    h.commit(0, false, true);
+
+    // ---- squash before pending selection ---------------------------------
+    h.reset(); h.seq_base = 2;
+    h.expect(h.alloc(0, 1, false), "pending squash alloc");
+    held.dest = 14; held.rob = 1;
+    h.expect(h.issue(held, 0xd000, 0), "pending squash enqueue");
+    h.squash(1);
+    for (int i = 0; i < 8; ++i) h.tick();
+    h.expect(h.accepted_loads.empty() && !dut.load_result_valid,
+             "pending squash prevents request and CDB result");
+
+    // ---- illegal loads use captured tag/exception without a memory read ----
+    h.reset();
+    h.expect(h.alloc(0, 1, false), "illegal load alloc");
+    Uop illegal;
+    illegal.dest = 43; illegal.is_load = 1; illegal.illegal = 1;
+    illegal.lsq = 0; illegal.rob = 1;
+    h.expect(h.issue(illegal, 0xd000, 0), "illegal load enqueued");
+    for (int i = 0; i < 16 && !dut.load_result_valid; ++i) h.tick();
+    h.expect(dut.load_result_valid && dut.load_result_exception &&
+             dut.load_result_tag == 43 && dut.load_result_value == 0,
+             "illegal load carries captured metadata");
+    h.expect(h.accepted_loads.empty(), "illegal load never reads memory");
+
+    // ---- forwarding carries captured size, offset and signedness ----------
+    h.reset();
+    h.expect(h.alloc(0, 1, true), "format store alloc");
+    fs.lsq = 0; fs.rob = 1;
+    h.expect(h.issue(fs, 0xe000, 0x89abcdef), "format store fill");
+    h.expect(h.alloc(1, 2, false), "format byte alloc");
+    fl.dest = 44; fl.lsq = 1; fl.rob = 2; fl.mem_size = BYTE; fl.mem_uns = 0;
+    h.expect(h.issue(fl, 0xe001, 0), "signed byte waiting enqueue");
+    h.expect(h.wait_load_result(0xffffffcd, 44, "captured signed byte"), "signed format");
+    h.commit(1, false, true);
+    h.expect(h.alloc(2, 3, false), "format unsigned byte alloc");
+    fl.dest = 45; fl.lsq = 2; fl.rob = 3; fl.mem_uns = 1;
+    h.expect(h.issue(fl, 0xe003, 0), "unsigned byte waiting enqueue");
+    h.expect(h.wait_load_result(0x89, 45, "captured unsigned byte"), "unsigned format");
+    h.commit(2, false, true);
+    h.commit(0, true, false);
+    h.expect(h.wait_idle("format store drain"), "format idle");
+
+    // ---- result credits cover both in-flight requests and stalled results --
+    if (TB_LSQ_DEPTH > 8) {
+        h.reset();
+        for (int id = 0; id < 12; ++id) {
+            h.write_word(0xc000 + 4 * id, 0xa1000000u + id, 0xf);
+            h.expect(h.alloc(id, id + 1, false), "credit load alloc");
+        }
+        for (int id = 0; id < 12; ++id) {
+            Uop queued;
+            queued.dest = 30 + id; queued.is_load = 1; queued.lsq = id; queued.rob = id + 1;
+            h.expect(h.issue(queued, 0xc000 + 4 * id, 0), "credit load enqueue");
+        }
+        for (int i = 0; i < 80; ++i) h.tick();
+        h.expect(h.accepted_loads.size() == 8, "eight reserved result credits cap requests");
+        bool seen[12] = {};
+        int received = 0;
+        for (int cycle = 0; cycle < 512 && received < 12; ++cycle) {
+            dut.load_result_ready = 1;
+            h.tick();
+            while (!h.results.empty()) {
+                const auto result = h.results.front(); h.results.pop_front();
+                const int id = int(result.first) - 30;
+                const bool ok = id >= 0 && id < 12;
+                h.expect(ok && result.second == 0xa1000000u + id, "credit result data");
+                if (ok) {
+                    h.expect(!seen[id], "credit result not duplicated");
+                    if (!seen[id]) ++received;
+                    seen[id] = true;
+                }
+            }
+        }
+        h.clear_inputs();
+        h.expect(received == 12 && h.accepted_loads.size() == 12, "all reserved loads drain");
+        for (int id = 0; id < 12; ++id) h.commit(id, false, true);
+        h.expect(h.wait_idle("credit drain"), "credit queues idle");
+    }
+
     // ---- reset -----------------------------------------------------------
     h.reset();
     h.expect(!dut.load_result_valid, "reset load result");
@@ -437,7 +618,7 @@ int main(int argc, char** argv) {
     h.expect(!dut.ld_req_valid, "reset ld request");
     h.expect(!dut.st_req_valid, "reset st request");
 
-    printf("\nchecked=%ld fails=%ld\n", h.checks, h.fails);
+    printf("\nLSQ=%d checked=%ld fails=%ld\n", TB_LSQ_DEPTH, h.checks, h.fails);
     const bool pass = (h.fails == 0);
     printf(pass ? "PASS\n" : "FAIL\n");
     return pass ? 0 : 1;

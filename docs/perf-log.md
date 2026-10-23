@@ -1,23 +1,32 @@
 # 性能记录
 
-## 当前频率实验：隔拍唤醒（独立分支，未合入 main）
+## 当前频率实验：load 等待表与查询分级（独立分支）
 
-用户允许为提高频率暂时放宽 IPC / 面积限制；正确性仍为硬约束。
-分支 `feat/freq-registered-wake`，检查点 tag `freq-registered-wake-20261023`，基于 `bc795ae`。
-W1/W2 各 19/19、完整单元回归 ALL PASS；W2 IPC **0.5727**、W1 **0.5471**。
-同模式 diagnose 从 18,603.442 µm² / 99.38 MHz 变为 **18,542.177 µm² /
-107.56 MHz**，Fmax **+8.2%**、W2 IPC -5.9%；`IPC×Fmax` 约
-+1.9%（仅同模式趋势比较）。
+分支 `feat/freq-load-query-pipe`，tag `freq-load-query-pipe-20261023`，基于 `819ddd1`。
+用户允许 IPC / 面积暂时越线，以正确性和频率为主。
 
-本轮只做了一次 diagnose，**没有运行 opt**。`build/synth/opt/` 仍是 main 的
-旧报告，不是候选结果；不能把候选 diagnose 107.56 MHz 与 main 的 opt
-115.12 MHz 直接比较。main 仍为 `bc795ae` / `alu-shared-mul-20261023`。
-原 main 的 diagnose / opt 报告已备份到 `build/synth/registered_wake_baseline/`。
+| 候选 | W2 / W1 IPC | diagnose 面积 / MHz | opt |
+| --- | ---: | ---: | --- |
+| 隔拍唤醒 `819ddd1` | 0.5727 / 0.5471 | 18,542.177 / 107.56 | 未运行 |
+| load 查询分级 | **0.5419 / 0.5205** | **19,706.842 / 156.31** | **未运行** |
 
-候选切断了同拍 CDB→IQ select / 操作数旁路，关键路径变为
-`ROB → IQ → PRF → LSU/LSQ`；IQ 段约 2.4 ns、LSQ 段约 4.5 ns，仍需后续
-结构性分级。保留为下一阶段检查点，暂不替换 main，不追加 opt。
-详见 [隔拍唤醒实验](experiments/registered-wake.md)。
+同模式 Fmax **+45.3%**、面积 **+6.3%**、W2 IPC -5.4%；`IPC×Fmax`
+约 +37.5%（趋势比较）。W1/W2 各 19/19、完整 run_all ALL PASS，LSU
+W1/LSQ8 与 W2/LSQ16 分别 144 / 227 项通过。已超过本轮 150 MHz 诊断目标。
+
+实现：load 按 LSQ id 预留等待槽位，按 seq 选择进入查询寄存器；阻塞时保留
+表项重试，store 独立填 LSQ，晚就绪老 load 不会被年轻请求挤占容量。
+在途与结果队列统一预留槽位，避免 CDB 反压时覆盖结果。第一条关键路径已
+不经过 IQ/PRF，现为 `ROB → LSU → LSQ → LSU`，LSQ 段约 4.6 ns。
+
+**本轮仅跑一次 diagnose，没有运行 opt，未合入 main、未推送。** main 仍为
+`bc795ae` / `alu-shared-mul-20261023`；其 opt 115.12 MHz 不能与本候选的
+诊断频率直接比较。上一轮报告在 `build/synth/load_query_baseline/`；当前
+`build/synth/diagnose/` 为本候选，`build/synth/opt/` 仍是 main 的旧结果。
+
+详见 [实验记录](experiments/load-query-pipe.md) 和
+[请求所有权设计](plan/memory-query-pipeline.md)。后续按报告继续拆 LSQ 内部
+查询，积累到阶段检查点才跑 opt，不追加零散 opt。
 
 ## 最新检查点：ALU 乘法器共享（2026-10-23）
 
@@ -75,6 +84,8 @@ load/store 放入旧的 a0/a1 缓冲。优先做分析和方案设计，单次�
 | 2026-10-23 | `alu-shared-mul-20261023` | W1/16/48/8/2/16/1KB×2 | **0.5759** | 未单独综合 | 未单独综合 | 当前主线 W1；19/19 PASS，全部周期数与前一版一致 |
 | 2026-10-23 | `freq-registered-wake-20261023` | W2/16/48/8/2/16/1KB×2 | **0.5727** | **18,542.177 (diag)** | **107.56 (diag)** | 独立频率候选；opt 未运行、未合入 main |
 | 2026-10-23 | `freq-registered-wake-20261023` | W1/16/48/8/2/16/1KB×2 | **0.5471** | 未单独综合 | 未单独综合 | 候选 W1；19/19 PASS |
+| 2026-10-23 | `freq-load-query-pipe-20261023` | W2/16/48/8/2/16/1KB×2 | **0.5419** | **19,706.842 (diag)** | **156.31 (diag)** | 最新独立频率候选；opt 未运行、未合入 main |
+| 2026-10-23 | `freq-load-query-pipe-20261023` | W1/16/48/8/2/16/1KB×2 | **0.5205** | 未单独综合 | 未单独综合 | 候选 W1；19/19 PASS |
 
 P2 基线 opt 综合：comb 16,361.326、seq 5,648.117、SRAM 2,278.903 µm²，
 min period 17.8320 ns（目标 2 ns，WNS −15.8320 ns）。diagnose 为 25,025.438 µm²、
@@ -202,6 +213,7 @@ ALU，必须先确认 IPC 不低于 0.60。
 | 关闭冗余组合除法 | `21fba79` | **0.6084** | **0.5759** | **19,777.0** | **99.38** | **18,955.7** | **115.80** |
 | 共享乘法器 | `alu-shared-mul-20261023` | **0.6084** | **0.5759** | **18,603.4** | **99.38** | **17,895.8** | **115.12** |
 | 隔拍唤醒（未合并） | `freq-registered-wake-20261023` | **0.5727** | **0.5471** | **18,542.2** | **107.56** | **未运行** | **未运行** |
+| load 查询分级（未合并） | `freq-load-query-pipe-20261023` | **0.5419** | **0.5205** | **19,706.8** | **156.31** | **未运行** | **未运行** |
 
 lane0 非访存流水版相对 C2 opt：面积 **+547.3 µm²（+2.8%）**，Fmax **+31.1%**，IPC **-3.6%**；
 `IPC × Fmax` **+26.4%**。W2/W1 均 19/19，`run_all` ALL PASS。
@@ -249,6 +261,20 @@ W2 使用标准 `make perf MAX_CYCLES=50000000 SIM="$REPO_ROOT/build/sim"` 复�
 | perf_towers | 5,278 | 11,102 | 0.4754 | 11,352 | 0.4649 |
 | perf_vvadd | 4,524 | 5,738 | 0.7884 | 5,647 | 0.8011 |
 | **GEOMEAN** | | | **0.6084** | | **0.5759** |
+
+## 分 benchmark（load 查询分级候选，未合入 main）
+
+latency=10，MAX_CYCLES=50,000,000；W1/W2 各 19/19，完整 run_all ALL PASS。
+
+| benchmark | instructions | W2 cycles | W2 IPC | W1 cycles | W1 IPC |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| perf_median | 6,961 | 17,340 | 0.4014 | 17,952 | 0.3878 |
+| perf_multiply | 21,722 | 23,031 | 0.9432 | 28,808 | 0.7540 |
+| perf_qsort | 139,900 | 364,107 | 0.3842 | 371,952 | 0.3761 |
+| perf_rsort | 195,719 | 351,473 | 0.5569 | 340,185 | 0.5753 |
+| perf_towers | 5,278 | 12,054 | 0.4379 | 12,084 | 0.4368 |
+| perf_vvadd | 4,524 | 6,336 | 0.7140 | 6,289 | 0.7194 |
+| **GEOMEAN** | | | **0.5419** | | **0.5205** |
 
 ## 分 benchmark（隔拍唤醒候选，未合入 main）
 

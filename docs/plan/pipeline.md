@@ -421,3 +421,17 @@ W1/W2 各 19/19、完整单测 ALL PASS。此候选未合入 main、未跑 opt�
 PRF 读或访存查询；在访存分级前必须先定义请求所有权、重试和 squash，
 不能把被旧 store 阻塞的 load 留在唯一 lane0 缓冲里。保留 main `bc795ae`
 及独立检查点作回滚，不追加零散 opt。
+
+## 14. load 查询分级检查点（2026-10-23）
+
+`feat/freq-load-query-pipe` / `freq-load-query-pipe-20261023` 基于隔拍唤醒，加入按 LSQ id
+预留容量的待执行 load 表及查询寄存器。store 仍由 IQ 直填 LSQ，阻塞 load
+留表重试，晚就绪老 load 不会被年轻请求挤占入口。
+
+W1/W2 各 19/19、完整单测 ALL PASS；W2 / W1 IPC 0.5419 / 0.5205。
+diagnose **19,706.842 µm² / 156.31 MHz**，相对 `819ddd1` Fmax +45.3%，
+面积 +6.3%；未跑 opt，未合入 main。本轮已经超过 150 MHz 诊断目标。
+
+第一条路径不再经过 IQ/PRF；LSQ 的匹配和最年轻 store 选择仍占约 4.6 ns。
+下一阶段针对 LSQ 查询内部继续分级，并检查全局 squash 对查询级的组合门控。
+具体所有权、容量和恢复不变量见 `docs/plan/memory-query-pipeline.md`。

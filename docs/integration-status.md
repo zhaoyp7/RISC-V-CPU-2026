@@ -1,23 +1,32 @@
 # 集成状态（P1 完成，P2 进入性能优化）
 
-## 当前频率实验：隔拍唤醒（独立分支，未合入 main）
+## 当前频率实验：load 等待表与查询分级（独立分支）
 
-用户允许为提高频率暂时放宽 IPC / 面积限制；正确性仍为硬约束。
-分支 `feat/freq-registered-wake`，检查点 tag `freq-registered-wake-20261023`，基于 `bc795ae`。
-W1/W2 各 19/19、完整单元回归 ALL PASS；W2 IPC **0.5727**、W1 **0.5471**。
-同模式 diagnose 从 18,603.442 µm² / 99.38 MHz 变为 **18,542.177 µm² /
-107.56 MHz**，Fmax **+8.2%**、W2 IPC -5.9%；`IPC×Fmax` 约
-+1.9%（仅同模式趋势比较）。
+分支 `feat/freq-load-query-pipe`，tag `freq-load-query-pipe-20261023`，基于 `819ddd1`。
+用户允许 IPC / 面积暂时越线，以正确性和频率为主。
 
-本轮只做了一次 diagnose，**没有运行 opt**。`build/synth/opt/` 仍是 main 的
-旧报告，不是候选结果；不能把候选 diagnose 107.56 MHz 与 main 的 opt
-115.12 MHz 直接比较。main 仍为 `bc795ae` / `alu-shared-mul-20261023`。
-原 main 的 diagnose / opt 报告已备份到 `build/synth/registered_wake_baseline/`。
+| 候选 | W2 / W1 IPC | diagnose 面积 / MHz | opt |
+| --- | ---: | ---: | --- |
+| 隔拍唤醒 `819ddd1` | 0.5727 / 0.5471 | 18,542.177 / 107.56 | 未运行 |
+| load 查询分级 | **0.5419 / 0.5205** | **19,706.842 / 156.31** | **未运行** |
 
-候选切断了同拍 CDB→IQ select / 操作数旁路，关键路径变为
-`ROB → IQ → PRF → LSU/LSQ`；IQ 段约 2.4 ns、LSQ 段约 4.5 ns，仍需后续
-结构性分级。保留为下一阶段检查点，暂不替换 main，不追加 opt。
-详见 [隔拍唤醒实验](experiments/registered-wake.md)。
+同模式 Fmax **+45.3%**、面积 **+6.3%**、W2 IPC -5.4%；`IPC×Fmax`
+约 +37.5%（趋势比较）。W1/W2 各 19/19、完整 run_all ALL PASS，LSU
+W1/LSQ8 与 W2/LSQ16 分别 144 / 227 项通过。已超过本轮 150 MHz 诊断目标。
+
+实现：load 按 LSQ id 预留等待槽位，按 seq 选择进入查询寄存器；阻塞时保留
+表项重试，store 独立填 LSQ，晚就绪老 load 不会被年轻请求挤占容量。
+在途与结果队列统一预留槽位，避免 CDB 反压时覆盖结果。第一条关键路径已
+不经过 IQ/PRF，现为 `ROB → LSU → LSQ → LSU`，LSQ 段约 4.6 ns。
+
+**本轮仅跑一次 diagnose，没有运行 opt，未合入 main、未推送。** main 仍为
+`bc795ae` / `alu-shared-mul-20261023`；其 opt 115.12 MHz 不能与本候选的
+诊断频率直接比较。上一轮报告在 `build/synth/load_query_baseline/`；当前
+`build/synth/diagnose/` 为本候选，`build/synth/opt/` 仍是 main 的旧结果。
+
+详见 [实验记录](experiments/load-query-pipe.md) 和
+[请求所有权设计](plan/memory-query-pipeline.md)。后续按报告继续拆 LSQ 内部
+查询，积累到阶段检查点才跑 opt，不追加零散 opt。
 
 ## 最新检查点：ALU 乘法器共享（2026-10-23）
 

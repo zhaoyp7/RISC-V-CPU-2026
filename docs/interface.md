@@ -292,3 +292,15 @@ store 在 commit 后由 LSQ 按序 drain；写响应不必在提交路径上等�
 
 `mem_subsystem` 仍保留 P1 的 `data_req_* / data_resp_*` 单事务口，供
 `test/mem_subsystem_test` 使用；官方顶层不连接该口。
+
+## 访存查询分级实验的内部接收语义（独立分支）
+
+`feat/freq-load-query-pipe` 不改变上述八条总线或 AXI 接口。乙内部 LSU 的
+`issue_valid && issue_ready` 对 load 表示“按 LSQ id 的等待表已接收”，不再
+表示读请求已发出；后端删除 IQ 表项后由 LSU 负责重试，不重复提交该 load。
+load 的 ROB 完成仍只由实际 CDB 结果通知，不在接收时提前 complete。
+
+store 地址预填 / 数据填入仍在接收拍执行，前者保留 IQ 表项，后者才完成。
+load 内存 valid 独立于 ready，等待 ready 时地址稳定；查询 / 在途 / 结果
+均携带 seq 处理 squash。在途与结果队列共同预留 LDQ_DEPTH 个结果容量。
+详情见 `docs/plan/memory-query-pipeline.md`，该实验尚未合入 main。

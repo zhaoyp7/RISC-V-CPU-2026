@@ -1,6 +1,6 @@
 # 频率实验记录
 
-> 最新独立频率候选见实验 9：diagnose 107.56 MHz，W2 IPC 0.5727，未跑 opt、未合入 main。
+> 最新独立频率候选见实验 10：diagnose 156.31 MHz，W2 IPC 0.5419，未跑 opt、未合入 main。
 
 > 最新主线结果见末尾实验 8：本地 main 为 17,895.8 µm² / 115.12 MHz（opt），
 > W2 IPC 0.6084；前面各实验的“未合并”描述保留为当时的历史状态。
@@ -270,3 +270,24 @@ opt 面积 -5.6%，Fmax -0.6%，保留并合入本地 main，tag `alu-shared-mul
 和 LSQ 仍长。保留为后续结构分级的独立起点，未合入 main，未推送。
 本轮没有跑 opt，继续遵守“diagnose 筛选、阶段检查点才 opt”的要求。
 详见 [registered-wake.md](registered-wake.md)。
+
+## 实验 10：load 等待表 / 查询寄存器（独立检查点）
+
+分支 `feat/freq-load-query-pipe`，基于 `819ddd1`，tag `freq-load-query-pipe-20261023`。
+按 LSQ id 为 load 预留等待槽位，按 seq 选择进入查询寄存器；消歧阻塞保留
+表项重试，store 保持独立入口。分离 AGU / 查询，同时为在途响应预留结果槽。
+
+| 指标 | 隔拍唤醒 | load 查询分级 |
+| --- | ---: | ---: |
+| W2 / W1 IPC | 0.5727 / 0.5471 | **0.5419 / 0.5205** |
+| diagnose 面积 / MHz | 18,542.177 / 107.56 | **19,706.842 / 156.31** |
+| opt | 未运行 | **未运行** |
+
+W1/W2 各 19/19、完整 run_all ALL PASS；LSU W1/LSQ8 144 项、W2/LSQ16
+227 项通过，覆盖晚就绪老 load、预填、部分写、三阶段 squash、请求反压和
+12 笔 load / 8 个结果槽的 CDB 反压场景。
+
+同模式 Fmax +45.3%，面积 +6.3%，W2 IPC -5.4%，`IPC×Fmax` 约
++37.5%。按用户频率优先授权保留，未合入 main、未推送；本轮不跑 opt。
+新第一条关键路径 `ROB → LSU → LSQ → LSU`，LSQ 段约 4.6 ns，后续继续
+按报告分级。详见 [load-query-pipe.md](load-query-pipe.md)。
