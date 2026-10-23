@@ -1,28 +1,26 @@
 # 性能记录
 
-## 当前频率实验：dispatch 接收时预分配年龄（独立分支）
+## 当前频率实验：前端独立响应队列（独立实验，小收益）
 
-`feat/freq-dispatch-seq`，tag `freq-dispatch-seq-20261024`，基于`b80df1d`。
-next-free序号在缓冲接收时递增，前后槽保存年龄，IQ/LSQ用前槽seq；ROB映射仍实际下发建立。
+`feat/freq-frontend-response-queues`，tag `freq-frontend-response-20261024`，基于`d309093`。
+两路I-cache各接两槽响应队列，ready只看本路占用；保留use2、预测快照和即时redirect。
+同时修复rename停顿时decode FIFO借用未出队槽位的问题。
 
 | 候选 | W2 / W1 IPC | diagnose 面积 / MHz | opt |
 | --- | ---: | ---: | --- |
-| BPU训练寄存 `b80df1d` | 0.5274 / 0.5059 | 20,170.865 / 263.10 | 未运行 |
-| dispatch年龄预分配 | **0.5274 / 0.5059** | **20,231.241 / 279.78** | **未运行** |
+| dispatch年龄预分配 `d309093` | 0.5274 / 0.5059 | 20,231.241 / 279.78 | 未运行 |
+| 前端独立响应队列 | **0.5196 / 0.4990** | **20,397.453 / 284.44** | **未运行** |
 
-Fmax **+6.34%**、面积 **+0.30%**，全部correctness/perf周期与基线相同。
-W1/W2各19/19、最终run_all ALL PASS，backend增强测试539/541项通过。
-n_push计输入组、n_disp保留下发统计，LOCAL_STATS lint通过；最终报告24个输入hash一致。
-早期一次diagnose因统计口径修正而中断，最终只采用重启后一次完成的结果。
+频率+1.67%、面积+0.82%；W2 IPC -1.49%，`IPC×Fmax`仅+0.16%，整体收益很小。
+保留独立实验供后续组合验证，不据此单独合main。W1/W2各19/19、run_all ALL PASS，
+增强前端测试281/284项通过；一次diagnose，24个输入hash一致。
+新路径为squash索引→LSU/CDB→分支tag→ROB提交LSQ id→LSQ alloc_ready→IQ捕获。
+下一轮优先评估LSQ分配对当拍提交释放的组合依赖，保持表项复用与访存所有权。
 
-原序号计数器路径移出首位。新瓶颈为 **ROB redirect→cache0响应valid→cache1接收/ready
-→I-cache地址**，上游仍经过LSU/CDB。下一轮优先评估前端独立响应缓冲，保持use2、
-预测快照、配对顺序和redirect清理，不直接延迟redirect。
-
-本轮未跑opt、未合main、未推送；main为`bc795ae`。原取消opt无有效结果，产物在
+未跑opt、未合main、未推送；main仍为`bc795ae`。基线在
+`build/synth/frontend_response_baseline/`，详情见
+[前端响应队列实验](experiments/frontend-response-queues.md)。原取消opt产物在
 `build/synth/opt_cancelled_20261023/`，原main报告在`build/synth/frequency_checkpoint_baseline/`。
-基线报告/仿真器为`build/synth/dispatch_seq_baseline/`，详见
-[dispatch年龄预分配实验](experiments/dispatch-seq.md)。
 
 ## 最新检查点：ALU 乘法器共享（2026-10-23）
 
@@ -82,6 +80,7 @@ load/store 放入旧的 a0/a1 缓冲。优先做分析和方案设计，单次�
 | 2026-10-23 | `freq-iq-late-squash-20261023` | W2/16/48/8/2/16/1KB×2 | **0.5274** | **20,162.350 (diag)** | **261.69 (diag)** | IQ末端取消；opt未运行、未合入main |
 | 2026-10-23 | `freq-bpu-training-20261023` | W2/16/48/8/2/16/1KB×2 | **0.5274** | **20,170.865 (diag)** | **263.10 (diag)** | BPU训练寄存；仅+0.54%，独立实验，opt未运行 |
 | 2026-10-24 | `freq-dispatch-seq-20261024` | W2/16/48/8/2/16/1KB×2 | **0.5274** | **20,231.241 (diag)** | **279.78 (diag)** | 接收时预分配年龄；opt未运行、未合main |
+| 2026-10-24 | `freq-frontend-response-20261024` | W2/16/48/8/2/16/1KB×2 | **0.5196** | **20,397.453 (diag)** | **284.44 (diag)** | 前端响应队列；整体收益仅+0.16%，opt未运行 |
 
 P2 基线 opt 综合：comb 16,361.326、seq 5,648.117、SRAM 2,278.903 µm²，
 min period 17.8320 ns（目标 2 ns，WNS −15.8320 ns）。diagnose 为 25,025.438 µm²、
@@ -218,6 +217,7 @@ ALU，必须先确认 IPC 不低于 0.60。
 | IQ末端squash（未合并） | `freq-iq-late-squash-20261023` | **0.5274** | **0.5059** | **20,162.4** | **261.69** | **未运行** | **未运行** |
 | BPU训练寄存（独立实验） | `freq-bpu-training-20261023` | **0.5274** | **0.5059** | **20,170.9** | **263.10** | **未运行** | **未运行** |
 | dispatch年龄预分配（未合并） | `freq-dispatch-seq-20261024` | **0.5274** | **0.5059** | **20,231.2** | **279.78** | **未运行** | **未运行** |
+| 前端响应队列（独立实验） | `freq-frontend-response-20261024` | **0.5196** | **0.4990** | **20,397.5** | **284.44** | **未运行** | **未运行** |
 
 lane0 非访存流水版相对 C2 opt：面积 **+547.3 µm²（+2.8%）**，Fmax **+31.1%**，IPC **-3.6%**；
 `IPC × Fmax` **+26.4%**。W2/W1 均 19/19，`run_all` ALL PASS。
@@ -246,8 +246,8 @@ Fmax -0.6%，IPC / 周期数不变，保留并纳入本地 main。
 
 当前 opt：组合 12,103.572、时序 4,631.308、SRAM 1,160.951 µm²；
 最小周期 8.6865 ns，2 ns 目标下 WNS -6.6859 ns。面积已低于 18k 约 104.2 µm²，
-但 IPC 和频率仍不满足阶段 2。报告为 `build/synth/diagnose/report.txt` 和
-`build/synth/opt/report.txt`，输入 SHA-256 与候选 RTL 已核对一致。
+但 IPC 和频率仍不满足阶段 2。该历史检查点报告已归档至 `build/synth/frequency_checkpoint_baseline/`，
+输入 SHA-256 在当时与候选 RTL 核对一致。
 本轮仅运行一次 diagnose 和一次阶段验收 opt；后续降低 opt 频率。
 
 ## 分 benchmark（当前主线 `alu-shared-mul-20261023`，W1/W2）
@@ -265,6 +265,22 @@ W2 使用标准 `make perf MAX_CYCLES=50000000 SIM="$REPO_ROOT/build/sim"` 复�
 | perf_towers | 5,278 | 11,102 | 0.4754 | 11,352 | 0.4649 |
 | perf_vvadd | 4,524 | 5,738 | 0.7884 | 5,647 | 0.8011 |
 | **GEOMEAN** | | | **0.6084** | | **0.5759** |
+
+## 分 benchmark（前端独立响应队列候选，未合入main）
+
+latency=10、MAX_CYCLES=50,000,000。
+
+| benchmark | instructions | W2 cycles | W2 IPC | W1 cycles | W1 IPC |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| perf_median | 6,961 | 18,444 | 0.3774 | 18,926 | 0.3678 |
+| perf_multiply | 21,722 | 23,843 | 0.9110 | 29,588 | 0.7341 |
+| perf_qsort | 139,900 | 386,378 | 0.3621 | 393,521 | 0.3555 |
+| perf_rsort | 195,719 | 364,020 | 0.5377 | 355,740 | 0.5502 |
+| perf_towers | 5,278 | 12,148 | 0.4345 | 12,502 | 0.4222 |
+| perf_vvadd | 4,524 | 6,686 | 0.6766 | 6,537 | 0.6921 |
+| **GEOMEAN** | | | **0.5196** | | **0.4990** |
+
+W2/W1 IPC分别约下降1.49%/1.37%；合并本轮频率收益后，W2 `IPC×Fmax`仅+0.16%。
 
 ## 分 benchmark（dispatch年龄预分配候选，未合入main）
 

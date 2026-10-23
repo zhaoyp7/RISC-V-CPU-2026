@@ -1,28 +1,26 @@
 # RISC-V CPU 2026 — 协作者交接（P2 功能完成，性能优化中）
 
-## 当前频率实验：dispatch 接收时预分配年龄（独立分支）
+## 当前频率实验：前端独立响应队列（独立实验，小收益）
 
-`feat/freq-dispatch-seq`，tag `freq-dispatch-seq-20261024`，基于`b80df1d`。
-next-free序号在缓冲接收时递增，前后槽保存年龄，IQ/LSQ用前槽seq；ROB映射仍实际下发建立。
+`feat/freq-frontend-response-queues`，tag `freq-frontend-response-20261024`，基于`d309093`。
+两路I-cache各接两槽响应队列，ready只看本路占用；保留use2、预测快照和即时redirect。
+同时修复rename停顿时decode FIFO借用未出队槽位的问题。
 
 | 候选 | W2 / W1 IPC | diagnose 面积 / MHz | opt |
 | --- | ---: | ---: | --- |
-| BPU训练寄存 `b80df1d` | 0.5274 / 0.5059 | 20,170.865 / 263.10 | 未运行 |
-| dispatch年龄预分配 | **0.5274 / 0.5059** | **20,231.241 / 279.78** | **未运行** |
+| dispatch年龄预分配 `d309093` | 0.5274 / 0.5059 | 20,231.241 / 279.78 | 未运行 |
+| 前端独立响应队列 | **0.5196 / 0.4990** | **20,397.453 / 284.44** | **未运行** |
 
-Fmax **+6.34%**、面积 **+0.30%**，全部correctness/perf周期与基线相同。
-W1/W2各19/19、最终run_all ALL PASS，backend增强测试539/541项通过。
-n_push计输入组、n_disp保留下发统计，LOCAL_STATS lint通过；最终报告24个输入hash一致。
-早期一次diagnose因统计口径修正而中断，最终只采用重启后一次完成的结果。
+频率+1.67%、面积+0.82%；W2 IPC -1.49%，`IPC×Fmax`仅+0.16%，整体收益很小。
+保留独立实验供后续组合验证，不据此单独合main。W1/W2各19/19、run_all ALL PASS，
+增强前端测试281/284项通过；一次diagnose，24个输入hash一致。
+新路径为squash索引→LSU/CDB→分支tag→ROB提交LSQ id→LSQ alloc_ready→IQ捕获。
+下一轮优先评估LSQ分配对当拍提交释放的组合依赖，保持表项复用与访存所有权。
 
-原序号计数器路径移出首位。新瓶颈为 **ROB redirect→cache0响应valid→cache1接收/ready
-→I-cache地址**，上游仍经过LSU/CDB。下一轮优先评估前端独立响应缓冲，保持use2、
-预测快照、配对顺序和redirect清理，不直接延迟redirect。
-
-本轮未跑opt、未合main、未推送；main为`bc795ae`。原取消opt无有效结果，产物在
+未跑opt、未合main、未推送；main仍为`bc795ae`。基线在
+`build/synth/frontend_response_baseline/`，详情见
+[前端响应队列实验](experiments/frontend-response-queues.md)。原取消opt产物在
 `build/synth/opt_cancelled_20261023/`，原main报告在`build/synth/frequency_checkpoint_baseline/`。
-基线报告/仿真器为`build/synth/dispatch_seq_baseline/`，详见
-[dispatch年龄预分配实验](experiments/dispatch-seq.md)。
 
 ## 最新检查点：ALU 乘法器共享（2026-10-23）
 

@@ -9,13 +9,14 @@ struct Record { uint32_t pc, target; bool taken; };
 struct Harness {
     Vfrontend_ooo& d;
     struct Memory { bool pending=false; uint32_t addr=0; int delay=0; } mem[2];
+    int latency[2]={2,2};
     unsigned checks=0, fails=0;
     std::vector<Record> records;
     void check(bool ok,const char* what) {
         ++checks;if(!ok){++fails;std::printf("FAIL: %s\n",what);}
     }
     static uint32_t instruction(uint32_t addr) {
-        return ((addr&0x1ff)==0)?0x1000006fu:0x00000013u;
+        return ((addr&0x1ff)==0)?0x1000006fu:(((addr>>2)&0x7ff)<<20)|0x13u;
     }
     template<class V> static uint32_t field(const V& v,int off,int width) {
         uint32_t x=0;for(int b=0;b<width;++b)x|=((v[(off+b)/32]>>((off+b)%32))&1u)<<b;
@@ -30,7 +31,7 @@ struct Harness {
             if(m.pending && (!valid || addr!=m.addr)) {
                 check(d.redirect_valid || !valid,"refill address stable");m.pending=false;
             }
-            if(!m.pending && valid){m.pending=true;m.addr=addr;m.delay=2;}
+            if(!m.pending && valid){m.pending=true;m.addr=addr;m.delay=latency[ch];}
             if(m.pending){if(m.delay)--m.delay;else drive[ch]=true;}
         }
         d.refill_resp_valid=drive[0];d.refill_resp_valid1=drive[1];
@@ -76,6 +77,46 @@ struct Harness {
                                  (!taken || records[0].target==target),"trained prediction metadata");
         d.backend_ready=0;d.rename_ready=0;
     }
+    void response_skew(int slow_bank) {
+        reset();latency[0]=slow_bank==0?9:0;latency[1]=slow_bank==1?9:0;
+        update(0,0x40);update(0x4c,0x90);update(0x90,0xc0);settle();redirect(0);
+        // Fill every level while rename stalls, without stalling cache supply.
+        d.backend_ready=1;d.rename_ready=0;
+        for(int i=0;i<128;++i)tick();
+        auto head=d.dec_uop;auto targets=d.dec_pred_target;
+        auto taken=d.dec_pred_taken;auto valid=d.dec_valid;
+        check(valid!=0,"stalled decode head is present");
+        for(int i=0;i<12;++i) {
+            tick();bool same=d.dec_valid==valid && d.dec_pred_taken==taken &&
+                            d.dec_pred_target==targets;
+            for(unsigned word=0;word<sizeof(head)/sizeof(uint32_t);++word)
+                same= same && d.dec_uop[word]==head[word];
+            check(same,"decode payload stable during rename stall");
+        }
+        for(int i=0;i<1024 && records.size()<24;++i) {
+            d.backend_ready=i%7!=0;d.rename_ready=i%5!=0;tick();
+        }
+        check(records.size()>=24,"skewed mixed requests make progress");
+        const uint32_t initial[]={0,0x40,0x44,0x48,0x4c,0x90};
+        for(unsigned i=0;i<24 && i<records.size();++i) {
+            uint32_t pc=i<6?initial[i]:0xc0+4*(i-6);
+            bool pred=pc==0 || pc==0x4c || pc==0x90;
+            uint32_t target=pc==0?0x40:pc==0x4c?0x90:0xc0;
+            if(records[i].pc!=pc)std::printf("slow=%d i=%u expected=%x got=%x\n",
+                                            slow_bank,i,pc,records[i].pc);
+            check(records[i].pc==pc,"single/dual response order");
+            check(records[i].taken==pred && (!pred || records[i].target==target),
+                  "skewed response retains prediction snapshot");
+        }
+        // Clear queued responses and an outstanding refill under backpressure.
+        d.rename_ready=0;d.backend_ready=1;
+        for(int i=0;i<17;++i)tick();
+        redirect(0x100);until(16);
+        for(unsigned i=0;i<16 && i<records.size();++i)
+            check(records[i].pc==0x100+4*i && !records[i].taken,
+                  "redirect discards all old response queues");
+        d.backend_ready=0;d.rename_ready=0;latency[0]=latency[1]=2;
+    }
 };
 int main(int argc,char** argv) {
     VerilatedContext context;context.threads(1);context.commandArgs(argc,argv);
@@ -110,6 +151,7 @@ int main(int argc,char** argv) {
     // Reset discards any pending training valid and predictor table state.
     d.backend_ready=0;d.rename_ready=0;h.update(0,0x100);h.reset();h.until(1);
     if(!h.records.empty())h.check(h.records[0].pc==0 && !h.records[0].taken,"reset drops pending training");
-    std::printf("BPU training W=%d checks=%u fails=%u\n",TB_W,h.checks,h.fails);
+    h.response_skew(0);h.response_skew(1);
+    std::printf("BPU training / response queues W=%d checks=%u fails=%u\n",TB_W,h.checks,h.fails);
     return h.fails?1:0;
 }

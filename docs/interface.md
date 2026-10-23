@@ -331,5 +331,13 @@ out_addr_only在无效时仍为0；IQ弹出/预填标记也仅在out_valid与out
 `feat/freq-bpu-training-pipe` 只在frontend的BPU训练入口寄存valid、PC、taken、target、
 is_uncond。训练相对输入晚一拍，连续每拍一笔可接收，reset清pending valid，
 redirect不丢已接受的训练。BPU独立模块同拍旁路协议保持不变。
+
+### 前端独立响应队列（频率实验）
+
+两路I-cache出口各接两槽PC/指令队列，fetch_resp_ready只依赖本路寄存占用，
+不借用当拍出队空间。无旁路，响应入队后下一拍才能参与配对。
+请求FIFO仍保存use2和预测快照；只有队首use2=1才消费第二路响应，单条请求
+不会误消费后续双条请求的第二路数据。decode FIFO空间只计实际rename出队。
+redirect/reset同拍清请求、响应和decode队列；I-cache原flush即时生效。
 ROB分支解析、redirect/squash的对外时序不变；请求FIFO保存发请求当拍的预测快照，
 后续训练不得改写在途指令的预测metadata。

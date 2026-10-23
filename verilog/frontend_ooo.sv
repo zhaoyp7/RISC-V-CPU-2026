@@ -120,6 +120,41 @@ module frontend_ooo #(
   logic fetch_fire;
   logic use2;
 
+  // 每路独立两槽响应队列：cache ready 只依赖寄存占用，消除跨 bank 响应依赖。
+  logic [1:0] cache_resp_valid, cache_resp_ready, resp_push, resp_pop;
+  logic [31:0] cache_resp_pc [0:1], cache_resp_inst [0:1];
+  logic [1:0] resp_head, resp_tail;
+  logic [1:0] resp_count [0:1];
+  logic [63:0] resp_pc_q [0:1], resp_inst_q [0:1];
+  assign resp_pop = {resp_accept1, resp_accept0};
+  assign resp0_valid = (resp_count[0] != 0);
+  assign resp1_valid = (resp_count[1] != 0);
+  assign resp0_pc = resp_pc_q[0][resp_head[0]*32 +: 32];
+  assign resp1_pc = resp_pc_q[1][resp_head[1]*32 +: 32];
+  assign resp0_inst = resp_inst_q[0][resp_head[0]*32 +: 32];
+  assign resp1_inst = resp_inst_q[1][resp_head[1]*32 +: 32];
+  generate
+    for (genvar bank = 0; bank < 2; bank = bank + 1) begin : gen_resp_queue
+      assign cache_resp_ready[bank] = (resp_count[bank] < 2);
+      assign resp_push[bank] = cache_resp_valid[bank] && cache_resp_ready[bank];
+      always_ff @(posedge clk) begin
+        if (reset || redirect_valid) begin
+          resp_head[bank] <= 1'b0;
+          resp_tail[bank] <= 1'b0;
+          resp_count[bank] <= '0;
+        end else begin
+          if (resp_push[bank]) begin
+            resp_pc_q[bank][resp_tail[bank]*32 +: 32] <= cache_resp_pc[bank];
+            resp_inst_q[bank][resp_tail[bank]*32 +: 32] <= cache_resp_inst[bank];
+            resp_tail[bank] <= !resp_tail[bank];
+          end
+          if (resp_pop[bank]) resp_head[bank] <= !resp_head[bank];
+          resp_count[bank] <= resp_count[bank] + {1'b0,resp_push[bank]} - {1'b0,resp_pop[bank]};
+        end
+      end
+    end
+  endgenerate
+
   // 两个 bank 是独立 Cache，不要求 8B 对齐；任意 pc/pc+4 都可成对取指。
   assign use2 = !p0_taken;
 
@@ -132,15 +167,17 @@ module frontend_ooo #(
   logic [FCW-1:0]                  fq_count;
 
   logic pop_fire;
-  logic [FCW-1:0] pop_n;
+  logic [FCW-1:0] pop_n, pop_credit;
 
   assign pop_n    = (fq_count >= W) ? W[FCW-1:0] : fq_count;
   assign pop_fire = (fq_count != 0) && rename_ready;
+  assign pop_credit = pop_fire ? pop_n : '0;
 
   // 空间保守计算：response 最多 2 条、fetch 最多 2 条。
   logic fq_space_fetch, fq_space_resp;
-  assign fq_space_fetch = (fq_count + 4 <= FDEPTH + pop_n) && (rq_count < RDEPTH);
-  assign fq_space_resp  = (fq_count + 2 <= FDEPTH + pop_n);
+  // rename 停顿时不能借用并未真正弹出的槽位。
+  assign fq_space_fetch = (fq_count + 4 <= FDEPTH + pop_credit) && (rq_count < RDEPTH);
+  assign fq_space_resp  = (fq_count + 2 <= FDEPTH + pop_credit);
 
   assign fetch_fire = backend_ready && !redirect_valid && fq_space_fetch &&
                       fetch_ready0 && (!use2 || fetch_ready1);
@@ -178,10 +215,10 @@ module frontend_ooo #(
     .fetch_valid       (fetch_fire),
     .fetch_pc          (pc_q),
     .fetch_ready       (fetch_ready0),
-    .fetch_resp_valid  (resp0_valid),
-    .fetch_resp_pc     (resp0_pc),
-    .fetch_inst        (resp0_inst),
-    .fetch_resp_ready  (resp_accept0),
+    .fetch_resp_valid  (cache_resp_valid[0]),
+    .fetch_resp_pc     (cache_resp_pc[0]),
+    .fetch_inst        (cache_resp_inst[0]),
+    .fetch_resp_ready  (cache_resp_ready[0]),
     .refill_valid      (refill_valid),
     .refill_addr       (refill_addr),
     .refill_resp_valid (refill_resp_valid),
@@ -198,10 +235,10 @@ module frontend_ooo #(
     .fetch_valid       (fetch_fire && use2),
     .fetch_pc          (pc1),
     .fetch_ready       (fetch_ready1),
-    .fetch_resp_valid  (resp1_valid),
-    .fetch_resp_pc     (resp1_pc),
-    .fetch_inst        (resp1_inst),
-    .fetch_resp_ready  (resp_accept1),
+    .fetch_resp_valid  (cache_resp_valid[1]),
+    .fetch_resp_pc     (cache_resp_pc[1]),
+    .fetch_inst        (cache_resp_inst[1]),
+    .fetch_resp_ready  (cache_resp_ready[1]),
     .refill_valid      (refill_valid1),
     .refill_addr       (refill_addr1),
     .refill_resp_valid (refill_resp_valid1),

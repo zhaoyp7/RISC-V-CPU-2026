@@ -457,3 +457,20 @@ diagnose早期中断以修正统计口径，仅采用重启后一次完成结果
 新路径经ROB redirect、cache0响应valid、cache1接收/ready到I-cache地址；下一轮
 优先研究前端响应缓冲和配对容量，保持即时redirect和预测快照对应。基线为
 `build/synth/dispatch_seq_baseline/`，详见 [dispatch-seq.md](dispatch-seq.md)。
+
+## 实验 19：前端独立响应队列（2026-10-24，小收益）
+
+`feat/freq-frontend-response-queues` / `freq-frontend-response-20261024`，基于`d309093`。
+两路I-cache各加两槽响应队列，ready只依赖本路寄存占用；请求FIFO的use2与预测快照
+保持配对，redirect同时清所有前端队列。修复rename未出队时错误借用decode空间。
+W1/W2各19/19、run_all ALL PASS，增强前端测试281/284项通过；恢复旧容量算法的
+临时源文件在同一W2测试中失败38项，确认修复有必要。
+
+diagnose **20,397.453 µm² / 284.44 MHz**，频率+1.67%、面积+0.82%；W2/W1 IPC
+为0.5196/0.4990，下降1.49%/1.37%，W2 `IPC×Fmax`仅+0.16%。保留为后续组合
+实验的独立起点，不据此单独合main。一次diagnose、24个输入hash一致，无opt、
+未合main、未推送；基线为`build/synth/frontend_response_baseline/`。
+
+原跨cache路径退出首位，新路径为ROB squash索引→LSU/CDB→分支tag→ROB提交LSQ id
+→LSQ alloc_ready→IQ捕获。下一轮优先评估LSQ对当拍提交释放空间的组合依赖，
+保持表项复用与访存所有权，重新测量分配停顿代价。详见 [前端响应队列实验](frontend-response-queues.md)。
