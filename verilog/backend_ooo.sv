@@ -834,10 +834,6 @@ module backend_ooo #(
         $display("[A1_PUSH] t=%0t seq=%0d pc=%08x accept=%0b sq=%0b",
                  $time, issue_seq[63:32], issue_uop[DW + `CPU_DISPATCH_PC_OFF +: 32],
                  a1_accept, sq_valid);
-      if (a1_valid_q)
-        $display("[A1_STATE] t=%0t seq=%0d pc=%08x rdy=%0b issue=%0b alu1v=%0b needs=%0b",
-                 $time, a1_seq_q, p_pc, a1_issue_ready, a1_issue,
-                 alu1_valid_q, p_needs_alu_result);
 `endif
 
       // ALU 结果
