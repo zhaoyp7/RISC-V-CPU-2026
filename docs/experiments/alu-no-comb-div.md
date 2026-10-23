@@ -98,3 +98,7 @@ Fmax +59.2%，W2/W1 IPC 不变。
 回退本轮时使用独立分支检出 `freq-alupipe-baseline-20261023`；
 回退非访存流水化时检出 `c2-area-baseline-20261023`。保留原分支、标签和报告，
 不要用破坏性 reset 覆盖已验证检查点。
+
+后续乘法共享实验已保存本阶段 opt 副本到
+`build/synth/shared_mul_baseline/opt_report.txt`、`opt_report.json`；默认
+`build/synth/opt/` 会随新实验更新，历史数字以该副本和本页检查点为准。

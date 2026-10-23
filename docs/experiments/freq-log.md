@@ -1,6 +1,6 @@
 # 频率实验记录
 
-> 最新主线结果见末尾实验 7：本地 main 为 18,955.7 µm² / 115.80 MHz（opt），
+> 最新主线结果见末尾实验 8：本地 main 为 17,895.8 µm² / 115.12 MHz（opt），
 > W2 IPC 0.6084；前面各实验的“未合并”描述保留为当时的历史状态。
 
 > 所有数字来自本仓库 `make perf` / `make synth MODE=diagnose`。
@@ -228,3 +228,21 @@ lane0 非访存路径。检查点 commit：`0621c83`。
 opt 相对流水基线：面积 -6.7%，Fmax +59.2%，IPC 不变。
 本轮保留；下一轮按新关键路径研究访存发射/LSQ 消歧，不叠加未经设计的旁路。
 详细记录：[alu-no-comb-div.md](alu-no-comb-div.md)。
+
+## 实验 8：ALU 乘法器共享（已验收）
+
+分支 `feat/alu-shared-mul` 基于 `3b3e467`（RTL `21fba79`），只改变组合乘法
+表达式，MUL/MULH/MULHSU/MULHU 共享无符号乘积和高位修正，不增加流水拍数。
+
+| 指标 | 原乘法表达式 | 共享乘法 |
+| --- | ---: | ---: |
+| W2 / W1 IPC | 0.6084 / 0.5759 | 0.6084 / 0.5759 |
+| diagnose 面积 / MHz | 19,777.030 / 99.38 | 18,603.442 / 99.38 |
+| opt 面积 / MHz | 18,955.695 / 115.80 | **17,895.831 / 115.12** |
+| W1 / W2 correctness | 各 19/19 | 各 19/19，周期数相同 |
+| run_all | ALL PASS | ALL PASS，新增 ALU 对拍 713,728 项 |
+
+opt 面积 -5.6%，Fmax -0.6%，保留并合入本地 main，tag `alu-shared-mul-20261023`，
+未推送。面积低于 18k，但 IPC / 300 MHz 未达阶段 2。本轮只跑一次 opt；
+后续小改动先用 diagnose 筛选，积累到阶段检查点再跑 opt。
+详见 [alu-shared-mul.md](alu-shared-mul.md)。

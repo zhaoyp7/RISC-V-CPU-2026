@@ -4,8 +4,8 @@
 // 覆盖 RV32I 整数运算与 M 扩展乘除法，全部在一个周期内组合完成。
 //
 // 设计要点：
-//   1. MULH/MULHSU/MULHU 需要 64 位乘积的高 32 位，因此先把操作数扩展到
-//      64 位再相乘（低 32 位结果对有无符号一致，MUL 直接用 32 位乘法）。
+//   1. MUL/MULH/MULHSU/MULHU 共享一个无符号乘积；有符号高位通过减去
+//      负操作数对应的修正项得到，低 32 位与符号无关。
 //   2. 除法的边界语义按 RISC-V 规范显式处理，不依赖主机 C++ 的除法行为：
 //        - 除零：DIV 返回 -1，REM 返回被除数；
 //        - INT_MIN / -1 溢出：DIV 返回 INT_MIN，REM 返回 0。
@@ -22,26 +22,22 @@ module alu #(
   output logic [31:0] y    // 运算结果
 );
 
-  // 64 位扩展操作数，用于取乘法高位
-  logic signed [63:0] a_s;   // a 符号扩展
-  logic signed [63:0] b_s;   // b 符号扩展
-  logic        [63:0] b_u;   // b 零扩展（MULHSU 用）
-  logic        [63:0] prod_ss;
-  logic        [63:0] prod_su;
-  logic        [63:0] prod_uu;
+  logic [63:0] mul_product;
+  logic [31:0] mul_high, mul_correct_a, mul_correct_b;
+
+  // signed(a) = unsigned(a) - a[31]*2^32。乘积的高半字因此只需减去
+  // a 为负时的 b，以及 b 为负时的 a；修正项按 32 位自然回绕。
+  assign mul_product = {32'b0, a} * {32'b0, b};
+  assign mul_correct_a = a[31] && ((op == `ALU_MULH) || (op == `ALU_MULHSU))
+                         ? b : 32'b0;
+  assign mul_correct_b = b[31] && (op == `ALU_MULH) ? a : 32'b0;
+  assign mul_high = mul_product[63:32] - mul_correct_a - mul_correct_b;
 
   // 除法结果缓存
   logic signed [31:0] quot_s;
   logic signed [31:0] rem_s;
   logic        [31:0] quot_u;
   logic        [31:0] rem_u;
-
-  assign a_s = {{32{a[31]}}, a};
-  assign b_s = {{32{b[31]}}, b};
-  assign b_u = {32'b0, b};
-  assign prod_ss = a_s * b_s;
-  assign prod_su = a_s * b_u;
-  assign prod_uu = {32'b0, a} * {32'b0, b};
 
   // 除法与取余：先处理除零与 INT_MIN / -1 两个边界，再走主机运算符。
   // 主机 C++ 的有符号除法向零截断，与 RISC-V 定义一致；边界单独处理
@@ -82,10 +78,10 @@ module alu #(
       `ALU_SRA:    y = $signed(a) >>> b[4:0];
       `ALU_OR:     y = a | b;
       `ALU_AND:    y = a & b;
-      `ALU_MUL:    y = a * b;
-      `ALU_MULH:   y = prod_ss[63:32];
-      `ALU_MULHSU: y = prod_su[63:32];
-      `ALU_MULHU:  y = prod_uu[63:32];
+      `ALU_MUL:    y = mul_product[31:0];
+      `ALU_MULH,
+      `ALU_MULHSU,
+      `ALU_MULHU:  y = mul_high;
       `ALU_DIV:    y = quot_s;
       `ALU_DIVU:   y = (b == 32'b0) ? 32'hffff_ffff : quot_u;
       `ALU_REM:    y = rem_s;
