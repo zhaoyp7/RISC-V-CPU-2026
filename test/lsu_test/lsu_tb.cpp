@@ -574,6 +574,47 @@ int main(int argc, char** argv) {
     h.commit(0, true, false);
     h.expect(h.wait_idle("format store drain"), "format idle");
 
+    // ---- consecutive forwarding uses response-stage metadata, not next q ---
+    h.reset();
+    h.expect(h.alloc(0, 1, true), "mixed format store alloc");
+    fs.lsq = 0; fs.rob = 1;
+    h.expect(h.issue(fs, 0xe000, 0x89abcdef), "mixed format store fill");
+    const uint32_t mixed_addr[] = {0xe001, 0xe003, 0xe002, 0xe000, 0xe000, 0xe002};
+    const uint32_t mixed_size[] = {BYTE, BYTE, HALF, HALF, WORD, BYTE};
+    const uint32_t mixed_uns[] = {0, 1, 0, 1, 0, 0};
+    const uint32_t mixed_value[] = {0xffffffcd, 0x89, 0xffff89ab, 0xcdef,
+                                    0x89abcdef, 0xffffffab};
+    for (int id = 1; id <= 6; ++id)
+        h.expect(h.alloc(id, id + 1, false), "mixed format load alloc");
+    for (int id = 1; id <= 6; ++id) {
+        Uop mixed;
+        mixed.dest = 45 + id; mixed.lsq = id; mixed.rob = id + 1; mixed.is_load = 1;
+        mixed.mem_size = mixed_size[id - 1]; mixed.mem_uns = mixed_uns[id - 1];
+        h.expect(h.issue(mixed, mixed_addr[id - 1], 0), "mixed load enqueue");
+    }
+    bool mixed_seen[6] = {};
+    int mixed_count = 0;
+    for (int cycle = 0; cycle < 128 && mixed_count < 6; ++cycle) {
+        dut.load_result_ready = 1;
+        h.tick();
+        while (!h.results.empty()) {
+            const auto result = h.results.front(); h.results.pop_front();
+            int id = int(result.first) - 46;
+            bool ok = id >= 0 && id < 6;
+            h.expect(ok && result.second == mixed_value[id], "mixed response metadata");
+            if (ok) {
+                h.expect(!mixed_seen[id], "mixed load completes once");
+                if (!mixed_seen[id]) ++mixed_count;
+                mixed_seen[id] = true;
+            }
+        }
+    }
+    h.clear_inputs();
+    h.expect(mixed_count == 6 && h.accepted_loads.empty(), "mixed loads all forward");
+    for (int id = 1; id <= 6; ++id) h.commit(id, false, true);
+    h.commit(0, true, false);
+    h.expect(h.wait_idle("mixed forwarding drain"), "mixed queues idle");
+
     // ---- result credits cover both in-flight requests and stalled results --
     if (TB_LSQ_DEPTH > 8) {
         h.reset();

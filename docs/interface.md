@@ -304,3 +304,16 @@ store 地址预填 / 数据填入仍在接收拍执行，前者保留 IQ 表项�
 load 内存 valid 独立于 ready，等待 ready 时地址稳定；查询 / 在途 / 结果
 均携带 seq 处理 squash。在途与结果队列共同预留 LDQ_DEPTH 个结果容量。
 详情见 `docs/plan/memory-query-pipeline.md`，该实验尚未合入 main。
+
+### LSQ 内部查询快照握手（频率实验分支）
+
+`feat/freq-lsq-snapshot` 把 LSU/LSQ 内部查询改为有反压的流水接口，外部
+issue、load/store 流与 AXI 口保持原协议。请求 `query_valid && query_ready`
+捕获匹配位、未知地址状态、候选 seq/data/full；下一拍
+`query_resp_valid` 标识 `query_blocked/query_fwd_valid/query_fwd_data` 有效。
+响应在 `query_resp_ready` 消费前保持不变，不再随 live store 表变化。
+
+`query_flush` 丢弃当前响应，LSU 用 r 级 load seq 判断该响应是否被 squash。
+消费或 flush 与新请求握手可同拍发生，新快照优先保存。LSU 的 r 级元数据
+使用相同握手，q/r id 均从等待表选择集合排除。阻塞响应被消费后留表重试，
+只有实际读请求握手或本地结果入队才释放等待表所有者。

@@ -1,32 +1,30 @@
 # RISC-V CPU 2026 — 协作者交接（P2 功能完成，性能优化中）
 
-## 当前频率实验：load 等待表与查询分级（独立分支）
+## 当前频率实验：LSQ 匹配快照与平衡选择树（独立分支）
 
-分支 `feat/freq-load-query-pipe`，tag `freq-load-query-pipe-20261023`，基于 `819ddd1`。
+分支 `feat/freq-lsq-snapshot`，tag `freq-lsq-snapshot-20261023`，基于 `eb36c43`。
 用户允许 IPC / 面积暂时越线，以正确性和频率为主。
 
 | 候选 | W2 / W1 IPC | diagnose 面积 / MHz | opt |
 | --- | ---: | ---: | --- |
-| 隔拍唤醒 `819ddd1` | 0.5727 / 0.5471 | 18,542.177 / 107.56 | 未运行 |
-| load 查询分级 | **0.5419 / 0.5205** | **19,706.842 / 156.31** | **未运行** |
+| load 查询分级 `eb36c43` | 0.5419 / 0.5205 | 19,706.842 / 156.31 | 未运行 |
+| LSQ 匹配快照 | **0.5274 / 0.5059** | **20,093.751 / 190.80** | **未运行** |
 
-同模式 Fmax **+45.3%**、面积 **+6.3%**、W2 IPC -5.4%；`IPC×Fmax`
-约 +37.5%（趋势比较）。W1/W2 各 19/19、完整 run_all ALL PASS，LSU
-W1/LSQ8 与 W2/LSQ16 分别 144 / 227 项通过。已超过本轮 150 MHz 诊断目标。
+同模式 Fmax **+22.1%**、面积 **+2.0%**，W2 IPC -2.7%；`IPC×Fmax` 约
+**+18.8%**（趋势比较）。W1/W2 各 19/19、完整 run_all ALL PASS；直接 LSQ
+深度8/16 为 151 / 207 项，LSU W1/LSQ8 与 W2/LSQ16 为 172 / 255 项通过。
+未到原先期望的 200 MHz，但收益明确，保留独立检查点。
 
-实现：load 按 LSQ id 预留等待槽位，按 seq 选择进入查询寄存器；阻塞时保留
-表项重试，store 独立填 LSQ，晚就绪老 load 不会被年轻请求挤占容量。
-在途与结果队列统一预留槽位，避免 CDB 反压时覆盖结果。第一条关键路径已
-不经过 IQ/PRF，现为 `ROB → LSU → LSQ → LSU`，LSQ 段约 4.6 ns。
+实现：LSQ 第一级保存完整匹配快照，第二级用平衡树选最年轻同字 store。
+LSU r 级同步保存 load 元数据，反压、store 释放复用、flush 同拍替换均已覆盖。
+新第一条路径为 **ROB → IQ → backend a1 捕获**，IQ 约 4.18 ns（周期约80%）；
+下一阶段应优化双 lane 最老候选选择，暂不继续给 LSQ 增级。
 
-**本轮仅跑一次 diagnose，没有运行 opt，未合入 main、未推送。** main 仍为
-`bc795ae` / `alu-shared-mul-20261023`；其 opt 115.12 MHz 不能与本候选的
-诊断频率直接比较。上一轮报告在 `build/synth/load_query_baseline/`；当前
-`build/synth/diagnose/` 为本候选，`build/synth/opt/` 仍是 main 的旧结果。
-
-详见 [实验记录](experiments/load-query-pipe.md) 和
-[请求所有权设计](plan/memory-query-pipeline.md)。后续按报告继续拆 LSQ 内部
-查询，积累到阶段检查点才跑 opt，不追加零散 opt。
+**本轮只跑一次 diagnose，未运行 opt，未合入 main、未推送。** main 仍为
+`bc795ae`，旧 opt 115.12 MHz 不能作为本候选结果。24 个报告输入 hash 已核对。
+上一轮报告/仿真器在 `build/synth/lsq_snapshot_baseline/`，本轮输出位于
+`build/synth/diagnose/`，`build/synth/opt/` 仍为 main 的旧结果。
+详见 [LSQ 快照实验](experiments/lsq-query-snapshot.md)。
 
 ## 最新检查点：ALU 乘法器共享（2026-10-23）
 

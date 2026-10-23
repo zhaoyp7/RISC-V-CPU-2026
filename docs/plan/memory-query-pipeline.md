@@ -70,3 +70,18 @@ flowchart LR
   面积 +6.3%；没有运行 opt，未合入 main，tag `freq-load-query-pipe-20261023`。
 - 第一条关键路径不再经过 IQ/PRF，LSQ 内部约 4.6 ns 查询及全局 squash
   路径仍需按时序报告继续评估。详见 `docs/experiments/load-query-pipe.md`。
+
+## LSQ 内部匹配快照阶段（后续实验）
+
+`feat/freq-lsq-snapshot` 基于上述检查点增加一级寄存器。q 级提交查询后，
+LSQ 保存每个匹配候选的 seq/data/full 和匹配位；r 级同步保存 load 元数据。
+平衡树只读快照，所有内存请求和本地结果只读 r 元数据。store 在跨拍期间
+写完、释放或复用槽位不会改变响应。
+
+q 与 r 可同拍推进；两级 id 都从等待表选择集合排除。消歧阻塞时释放 r
+和快照，保留等待项重新查询；反压时保持两者。q/r 分别按 seq squash，
+旧响应 flush 与新查询同时到达时新快照和新 r 优先，避免有效旧 load 被
+清除或错配。直接 LSQ 专项和连续混合宽度前递用于验证这些边界。
+
+本阶段测试与测量以 [LSQ 快照实验](../experiments/lsq-query-snapshot.md) 为准；
+上节 156.31 MHz 与 IPC 0.5419/0.5205 为 `eb36c43` 基线，不能当作本候选结果。

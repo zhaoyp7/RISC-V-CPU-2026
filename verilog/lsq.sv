@@ -66,6 +66,10 @@ module lsq #(
   input  logic                         query_valid,
   input  logic [31:0]                  query_seq,
   input  logic [31:0]                  query_addr,
+  output logic                         query_ready,
+  output logic                         query_resp_valid,
+  input  logic                         query_resp_ready,
+  input  logic                         query_flush,
   output logic                         query_blocked,
   output logic                         query_fwd_valid,
   output logic [31:0]                  query_fwd_data,
@@ -77,6 +81,7 @@ module lsq #(
   localparam integer RW = `CPU_ROB_TAG_W;
   localparam integer QW = (D > 1) ? $clog2(D) : 1;
   localparam integer FN = (D > 1) ? $clog2(D + 1) : 2;
+  localparam integer QLEAVES = 1 << $clog2(D);
 
   logic [D-1:0]    valid;
   logic [D-1:0]    is_store;
@@ -97,7 +102,7 @@ module lsq #(
   integer i, lane;
   integer i_commit, lane_commit;
   integer i_free, lane_free;
-  integer i_squash, i_drain, i_query, i_count, lane_count;
+  integer i_squash, i_drain, i_count, lane_count;
   logic [`CPU_LSQ_IDX_W-1:0] id;
 
   // ---- allocation ---------------------------------------------------------
@@ -193,38 +198,97 @@ module lsq #(
     end
   end
 
-  // ---- load ordering query + store-to-load forwarding ---------------------
+  // ---- query stage 1: independent comparisons and a coherent snapshot ------
+  // 不只保存 slot id：store 可在下一拍释放并复用。候选的 seq/data/full
+  // 必须随匹配结果一起保存，直到响应被消费。
+  logic [D-1:0] query_match, query_unknown, query_full;
+  logic snap_valid, snap_unknown;
+  logic [D-1:0] snap_match, snap_full;
+  logic [D*32-1:0] snap_seq, snap_data;
+  genvar qg;
+  generate
+    for (qg = 0; qg < D; qg = qg + 1) begin : gen_query_compare
+      wire older_store = valid[qg] && is_store[qg] &&
+                         (seq[qg*32 +: 32] < query_seq);
+      assign query_unknown[qg] = older_store && !addr_known[qg];
+      assign query_match[qg] = older_store && addr_known[qg] &&
+                               (addr[qg*32+2 +: 30] == query_addr[31:2]);
+      assign query_full[qg] = (wstrb[qg*4 +: 4] == 4'b1111);
+    end
+  endgenerate
+
+  assign query_ready = !snap_valid || query_resp_ready || query_flush;
+  assign query_resp_valid = snap_valid;
+  always_ff @(posedge clk) begin
+    if (reset) begin
+      snap_valid <= 1'b0;
+      snap_unknown <= 1'b0;
+      snap_match <= '0;
+      snap_full <= '0;
+    end else begin
+      if (query_resp_ready || query_flush)
+        snap_valid <= 1'b0;
+      // 新请求可在旧响应消费 / flush 的同拍进入，必须优先保留新快照。
+      if (query_valid && query_ready) begin
+        snap_valid <= 1'b1;
+        snap_unknown <= |query_unknown;
+        snap_match <= query_match;
+        snap_full <= query_full;
+        snap_seq <= seq;
+        snap_data <= wdata;
+      end
+    end
+  end
+
+  // ---- query stage 2: balanced youngest-match selection -------------------
+  wire qt_valid [0:2*QLEAVES-1] /* verilator split_var */;
+  wire qt_full [0:2*QLEAVES-1] /* verilator split_var */;
+  wire [31:0] qt_seq [0:2*QLEAVES-1] /* verilator split_var */;
+  wire [31:0] qt_data [0:2*QLEAVES-1] /* verilator split_var */;
+  assign qt_valid[0] = 1'b0;
+  assign qt_full[0] = 1'b0;
+  assign qt_seq[0] = '0;
+  assign qt_data[0] = '0;
+  generate
+    for (qg = 0; qg < QLEAVES; qg = qg + 1) begin : gen_query_leaf
+      if (qg < D) begin : gen_entry
+        assign qt_valid[QLEAVES+qg] = snap_match[qg];
+        assign qt_full[QLEAVES+qg] = snap_full[qg];
+        assign qt_seq[(QLEAVES+qg)] = snap_seq[qg*32 +: 32];
+        assign qt_data[(QLEAVES+qg)] = snap_data[qg*32 +: 32];
+      end else begin : gen_pad
+        assign qt_valid[QLEAVES+qg] = 1'b0;
+        assign qt_full[QLEAVES+qg] = 1'b0;
+        assign qt_seq[(QLEAVES+qg)] = '0;
+        assign qt_data[(QLEAVES+qg)] = '0;
+      end
+    end
+    for (qg = 1; qg < QLEAVES; qg = qg + 1) begin : gen_query_merge
+      // 相等 seq 时左侧优先，保持原扫描逻辑的低 slot 优先规则。
+      wire take_right = qt_valid[2*qg+1] &&
+                         (!qt_valid[2*qg] ||
+                          (qt_seq[(2*qg+1)] > qt_seq[2*qg]));
+      assign qt_valid[qg] = qt_valid[2*qg] || qt_valid[2*qg+1];
+      assign qt_full[qg] = take_right ? qt_full[2*qg+1] : qt_full[2*qg];
+      assign qt_seq[qg] = take_right ? qt_seq[(2*qg+1)] :
+                                               qt_seq[2*qg];
+      assign qt_data[qg] = take_right ? qt_data[(2*qg+1)] :
+                                                qt_data[2*qg];
+    end
+  endgenerate
+
   logic        any_unknown;
   logic        same_found, same_full;
   logic [31:0] same_seq, same_data;
 
-  always_comb begin
-    any_unknown  = 1'b0;
-    same_found   = 1'b0;
-    same_full    = 1'b0;
-    same_seq     = 32'b0;
-    same_data    = 32'b0;
-    for (i_query = 0; i_query < D; i_query = i_query + 1) begin
-      if (query_valid && valid[i_query] && is_store[i_query] &&
-          (seq[i_query*32 +: 32] < query_seq)) begin
-        if (!addr_known[i_query]) begin
-          any_unknown = 1'b1;
-        end else if ((addr[i_query*32 +: 32] & ~32'h3) ==
-                     (query_addr & ~32'h3)) begin
-          // 取最年轻的同字 store；整字写可直接前递。
-          if (!same_found || (seq[i_query*32 +: 32] > same_seq)) begin
-            same_found = 1'b1;
-            same_seq   = seq[i_query*32 +: 32];
-            same_full  = (wstrb[i_query*4 +: 4] == 4'b1111);
-            same_data  = wdata[i_query*32 +: 32];
-          end
-        end
-      end
-    end
-    query_blocked   = any_unknown || (same_found && !same_full);
-    query_fwd_valid = !any_unknown && same_found && same_full;
-    query_fwd_data  = same_data;
-  end
+  assign any_unknown = snap_unknown;
+  assign same_found = qt_valid[1];
+  assign same_full = qt_full[1];
+  assign same_seq = qt_seq[1];
+  assign same_data = qt_data[1];
+  assign query_blocked = snap_valid && (any_unknown || (same_found && !same_full));
+  assign query_fwd_valid = snap_valid && !any_unknown && same_found && same_full;
+  assign query_fwd_data = same_data;
 
   // ---- count --------------------------------------------------------------
   always_comb begin
@@ -330,12 +394,10 @@ module lsq #(
 `ifdef LOCAL_TRACE
   integer dbg_q = 0;
   always_ff @(posedge clk) begin
-    if (!reset && query_valid && query_blocked && dbg_q < 20) begin
-      for (i = 0; i < D; i = i + 1)
-        if (valid[i] && is_store[i] && (seq[i*32 +: 32] < query_seq))
-          $display("[LSQ_BLK] t=%0t qseq=%0d slot=%0d seq=%0d known=%0b addr=%08x committed=%0b sent=%0b",
-                   $time, query_seq, i, seq[i*32 +: 32], addr_known[i],
-                   addr[i*32 +: 32], committed[i], sent[i]);
+    if (!reset && query_resp_valid && query_resp_ready && !query_flush &&
+        query_blocked && dbg_q < 20) begin
+      $display("[LSQ_BLK] t=%0t unknown=%0b same=%0b full=%0b",
+               $time, snap_unknown, same_found, same_full);
       dbg_q <= dbg_q + 1;
     end
   end
@@ -367,7 +429,7 @@ module lsq #(
       if (!alloc_ready) st_full_cycles <= st_full_cycles + 1;
       if (alloc_ready && alloc_fire) st_alloc <= st_alloc + 1;
 
-      if (query_valid) begin
+      if (query_resp_valid && query_resp_ready && !query_flush) begin
         st_query <= st_query + 1;
         if (any_unknown)
           st_unknown <= st_unknown + 1;
@@ -378,7 +440,7 @@ module lsq #(
         else
           st_clear <= st_clear + 1;
       end
-      if (query_valid && query_blocked) st_blocked <= st_blocked + 1;
+      if (query_resp_valid && query_resp_ready && !query_flush && query_blocked) st_blocked <= st_blocked + 1;
     end
   end
 

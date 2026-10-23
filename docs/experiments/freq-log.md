@@ -1,6 +1,6 @@
 # 频率实验记录
 
-> 最新独立频率候选见实验 10：diagnose 156.31 MHz，W2 IPC 0.5419，未跑 opt、未合入 main。
+> 最新独立频率候选见实验 11：diagnose 190.80 MHz，W2 IPC 0.5274，未跑 opt、未合入 main。
 
 > 最新主线结果见末尾实验 8：本地 main 为 17,895.8 µm² / 115.12 MHz（opt），
 > W2 IPC 0.6084；前面各实验的“未合并”描述保留为当时的历史状态。
@@ -291,3 +291,25 @@ W1/W2 各 19/19、完整 run_all ALL PASS；LSU W1/LSQ8 144 项、W2/LSQ16
 +37.5%。按用户频率优先授权保留，未合入 main、未推送；本轮不跑 opt。
 新第一条关键路径 `ROB → LSU → LSQ → LSU`，LSQ 段约 4.6 ns，后续继续
 按报告分级。详见 [load-query-pipe.md](load-query-pipe.md)。
+
+## 实验 11：LSQ 匹配快照 / 平衡选择树（独立检查点）
+
+分支 `feat/freq-lsq-snapshot`，基于 `eb36c43`，tag `freq-lsq-snapshot-20261023`。
+LSQ 并行匹配后保存 seq/data/full 与匹配位，下一拍平衡树选择最年轻同字
+store。LSU r 级同步保存 load 元数据，q/r 两级都从等待表选择集合中排除。
+store 释放复用不影响快照；阻塞释放响应留表重试，反压保持，squash 支持同拍替换。
+
+| 指标 | load 查询分级 | LSQ 匹配快照 |
+| --- | ---: | ---: |
+| W2 / W1 IPC | 0.5419 / 0.5205 | **0.5274 / 0.5059** |
+| diagnose 面积 / MHz | 19,706.842 / 156.31 | **20,093.751 / 190.80** |
+| opt | 未运行 | **未运行** |
+
+W1/W2 各 19/19、run_all ALL PASS；直接 LSQ 151/207、LSU 172/255 项通过。
+Fmax +22.1%、面积 +2.0%、W2 IPC -2.7%，`IPC×Fmax` 约 +18.8%。未达期望
+200 MHz，保留为独立检查点，未合入 main、未推送；只跑一次 diagnose，无 opt。
+24 个输入 hash 与 RTL 一致，基线报告与仿真器在 `build/synth/lsq_snapshot_baseline/`。
+
+新路径 `ROB → IQ → backend a1 捕获`，IQ 约 4.18 ns（周期约80%）。下一阶段
+优先把双 lane 串行最老选择改为平衡候选选择，保留 store 预填、lane 排除、
+未握手留队和 squash 语义。详见 [lsq-query-snapshot.md](lsq-query-snapshot.md)。

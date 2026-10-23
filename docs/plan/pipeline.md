@@ -435,3 +435,20 @@ diagnose **19,706.842 µm² / 156.31 MHz**，相对 `819ddd1` Fmax +45.3%，
 第一条路径不再经过 IQ/PRF；LSQ 的匹配和最年轻 store 选择仍占约 4.6 ns。
 下一阶段针对 LSQ 查询内部继续分级，并检查全局 squash 对查询级的组合门控。
 具体所有权、容量和恢复不变量见 `docs/plan/memory-query-pipeline.md`。
+
+
+## 15. LSQ 匹配快照检查点（2026-10-23）
+
+`feat/freq-lsq-snapshot` / `freq-lsq-snapshot-20261023` 基于 `eb36c43`，在 LSQ
+并行比较与平衡 youngest-store 选择之间保存完整快照，LSU r 级同步保存 load
+元数据。store 槽位释放复用、反压和 flush 同拍替换均有专项测试覆盖。
+
+W1/W2 各 19/19、run_all ALL PASS；IPC 0.5274 / 0.5059，diagnose
+**20,093.751 µm² / 190.80 MHz**。相对基线 Fmax +22.1%、面积 +2.0%、W2
+IPC -2.7%，`IPC×Fmax` 约 +18.8%。未到期望 200 MHz，保留独立检查点；
+未跑 opt、未合入 main、未推送，不把旧 main opt 当作本候选结果。
+
+关键路径已转到 `ROB → IQ → backend a1 捕获`，IQ 内部约4.18 ns，占周期约80%。
+下一阶段优先优化 IQ 最老候选/双 lane 排除的串行选择结构，再按报告评估
+squash 控制分级，暂不继续给 LSQ 增级。完整测量见
+[LSQ 快照实验](../experiments/lsq-query-snapshot.md)。

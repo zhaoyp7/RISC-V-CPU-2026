@@ -3,7 +3,7 @@
 //
 // load：
 //   - IQ 接收后进入按 LSQ id 预留槽位的等待表，地址已在入口计算；
-//   - 按年龄选择 -> 查询寄存器 -> LSQ 消歧/请求；阻塞的 load 留表重试；
+//   - 按年龄选择 -> 查询寄存器 -> LSQ 匹配快照 -> 前递选择/请求；阻塞的 load 留表重试；
 //   - 最多 LDQ_DEPTH 笔在途，元数据按序入队；响应按序返回并格式化；
 //   - 结果进入结果 FIFO，经 CDB 写回；
 //   - squash 按 seq 标记丢弃；已发出的请求等响应到达后静默丢弃。
@@ -190,10 +190,21 @@ module lsu #(
   logic [PW-1:0]             q_tag;
   logic [1:0]                q_size;
   logic                      q_unsigned, q_illegal;
+  // r 元数据与 LSQ 匹配快照同拍捕获；完整响应被消费前保持不变。
+  logic                      r_valid, r_squashed, r_active, r_accept;
+  logic [LW-1:0]             r_id;
+  logic [31:0]               r_addr, r_seq;
+  logic [PW-1:0]             r_tag;
+  logic [1:0]                r_size;
+  logic                      r_unsigned, r_illegal;
+  logic                      lsq_query_ready, lsq_query_resp_valid, query_send;
   logic                      query_ready, load_enqueue;
 
   assign q_squashed = q_valid && squash_valid && (q_seq > squash_seq);
   assign q_active = q_valid && !q_squashed;
+  assign query_send = q_active && lsq_query_ready;
+  assign r_squashed = r_valid && squash_valid && (r_seq > squash_seq);
+  assign r_active = r_valid && !r_squashed && lsq_query_resp_valid;
 
   always_comb begin
     lp_select_valid = 1'b0;
@@ -202,6 +213,7 @@ module lsu #(
     for (lp_select_i = 0; lp_select_i < LP_DEPTH; lp_select_i = lp_select_i + 1) begin
       if (lp_valid[lp_select_i] &&
           !(q_valid && (q_id == lp_select_i[LW-1:0])) &&
+          !(r_valid && (r_id == lp_select_i[LW-1:0])) &&
           !(squash_valid && (lp_seq[lp_select_i*32 +: 32] > squash_seq)) &&
           (!lp_select_valid || (lp_seq[lp_select_i*32 +: 32] < lp_best_seq))) begin
         lp_select_valid = 1'b1;
@@ -218,8 +230,8 @@ module lsu #(
   logic query_blocked;
   logic ld_fwd;
   logic [31:0] ld_fwd_data;
-  assign query_blocked = q_active && !q_illegal && lsq_query_blocked;
-  assign ld_fwd        = q_active && !q_illegal &&
+  assign query_blocked = r_active && !r_illegal && lsq_query_blocked;
+  assign ld_fwd        = r_active && !r_illegal &&
                          !lsq_query_blocked && lsq_query_fwd_valid;
   assign ld_fwd_data   = lsq_query_fwd_data;
 
@@ -240,8 +252,8 @@ module lsu #(
 
   always_comb begin
     query_ready = 1'b0;
-    if (q_active) begin
-      if (q_illegal) begin
+    if (r_active) begin
+      if (r_illegal) begin
         // 非法 load 走结果队列，不能和已有响应同拍压入。
         query_ready = illegal_slot_ok;
       end else if (ld_fwd) begin
@@ -254,18 +266,19 @@ module lsu #(
   end
 
   logic load_issue, store_issue, store_addr_issue;
-  assign load_issue       = q_active && query_ready;
+  assign load_issue       = r_active && query_ready;
   assign store_addr_issue = issue_valid && issue_ready && issue_is_store &&
                             issue_addr_only;
   assign store_issue      = issue_valid && issue_ready && issue_is_store &&
                             !issue_addr_only;
 
-  assign ld_req_valid = q_active && !q_illegal && !query_blocked && !ld_fwd && ld_space;
-  assign ld_req_addr  = q_addr;
+  assign ld_req_valid = r_active && !r_illegal && !query_blocked && !ld_fwd && ld_space;
+  assign ld_req_addr  = r_addr;
 
   // 消歧阻塞时释放查询级，但不删除等待表项；内存 valid 等待 ready 时保留
   // 查询级，保证请求地址稳定。store 始终能通过独立入口填入 LSQ。
-  assign q_accept = !q_valid || q_squashed || query_blocked || load_issue;
+  assign r_accept = !r_valid || r_squashed || query_blocked || load_issue;
+  assign q_accept = !q_valid || q_squashed || query_send;
 
   // address-only：只把 store 地址写进 LSQ，不产生 complete，也不触发写。
   logic        prefill_valid;
@@ -326,9 +339,13 @@ module lsu #(
     .drain_wstrb     (drain_wstrb),
     .drain_fire      (drain_fire),
     .store_resp_valid(st_resp_valid),
-    .query_valid     (q_active && !q_illegal),
+    .query_valid     (q_active),
     .query_seq       (q_seq),
     .query_addr      (q_addr),
+    .query_ready     (lsq_query_ready),
+    .query_resp_valid(lsq_query_resp_valid),
+    .query_resp_ready(r_accept),
+    .query_flush     (r_squashed),
     .query_blocked   (lsq_query_blocked),
     .query_fwd_valid (lsq_query_fwd_valid),
     .query_fwd_data  (lsq_query_fwd_data),
@@ -346,7 +363,7 @@ module lsu #(
                         !(squash_valid &&
                           (md_seq[md_head*32 +: 32] > squash_seq));
   assign rq_push = md_resp_keep ||
-                   (load_issue && (q_illegal || ld_fwd));
+                   (load_issue && (r_illegal || ld_fwd));
   assign rq_pop  = (rq_count != 0) &&
                    (rq_discard[rq_head] || load_result_ready);
 
@@ -371,7 +388,7 @@ module lsu #(
   assign store_complete_tag       = store_complete_tag_q;
   assign store_complete_exception = store_complete_exc_q;
 
-  assign busy = (|lp_valid) || q_valid ||
+  assign busy = (|lp_valid) || q_valid || r_valid ||
                 (ld_count != 0) || (rq_count != 0) || (lsq_count != 0);
 
   always_ff @(posedge clk) begin
@@ -385,13 +402,21 @@ module lsu #(
       q_size <= '0;
       q_unsigned <= 1'b0;
       q_illegal <= 1'b0;
+      r_valid <= 1'b0;
+      r_id <= '0;
+      r_addr <= '0;
+      r_seq <= '0;
+      r_tag <= '0;
+      r_size <= '0;
+      r_unsigned <= 1'b0;
+      r_illegal <= 1'b0;
     end else begin
       for (lp_squash_i = 0; lp_squash_i < LP_DEPTH; lp_squash_i = lp_squash_i + 1)
         if (squash_valid && lp_valid[lp_squash_i] &&
             (lp_seq[lp_squash_i*32 +: 32] > squash_seq))
           lp_valid[lp_squash_i] <= 1'b0;
       if (load_issue)
-        lp_valid[q_id] <= 1'b0;
+        lp_valid[r_id] <= 1'b0;
       if (load_enqueue) begin
         lp_valid[issue_lsq] <= 1'b1;
         lp_addr[issue_lsq*32 +: 32] <= issue_addr;
@@ -400,6 +425,19 @@ module lsu #(
         lp_size[issue_lsq*2 +: 2] <= issue_mem_size;
         lp_unsigned[issue_lsq] <= issue_mem_unsigned;
         lp_illegal[issue_lsq] <= issue_illegal;
+      end
+      if (r_accept)
+        r_valid <= 1'b0;
+      // 消费/flush 旧快照与捕获新请求可同拍发生，新请求优先。
+      if (query_send) begin
+        r_valid <= 1'b1;
+        r_id <= q_id;
+        r_addr <= q_addr;
+        r_seq <= q_seq;
+        r_tag <= q_tag;
+        r_size <= q_size;
+        r_unsigned <= q_unsigned;
+        r_illegal <= q_illegal;
       end
       if (q_accept) begin
         q_valid <= lp_select_valid;
@@ -436,14 +474,14 @@ module lsu #(
       store_complete_valid_q <= 1'b0;
 
       // ---- load issue：入元数据队列 --------------------------------------
-      if (load_issue && !q_illegal && !ld_fwd) begin
+      if (load_issue && !r_illegal && !ld_fwd) begin
         md_valid[md_tail]         <= 1'b1;
-        md_tag[md_tail*PW +: PW]  <= q_tag;
-        md_seq[md_tail*32 +: 32]  <= q_seq;
-        md_lsq[md_tail*LW +: LW]  <= q_id;
-        md_off[md_tail*2 +: 2]    <= q_addr[1:0];
-        md_size[md_tail*2 +: 2]   <= q_size;
-        md_unsigned[md_tail]      <= q_unsigned;
+        md_tag[md_tail*PW +: PW]  <= r_tag;
+        md_seq[md_tail*32 +: 32]  <= r_seq;
+        md_lsq[md_tail*LW +: LW]  <= r_id;
+        md_off[md_tail*2 +: 2]    <= r_addr[1:0];
+        md_size[md_tail*2 +: 2]   <= r_size;
+        md_unsigned[md_tail]      <= r_unsigned;
         md_discard[md_tail]       <= 1'b0;
         md_tail <= (md_tail == LDQ_DEPTH - 1) ? '0 : md_tail + 1'b1;
       end
@@ -454,20 +492,20 @@ module lsu #(
 
       if (rq_push) begin
         rq_valid[rq_tail]          <= 1'b1;
-        rq_tag[rq_tail*PW +: PW]   <= (load_issue && (q_illegal || ld_fwd)) ?
-                                      q_tag : md_tag[md_head*PW +: PW];
+        rq_tag[rq_tail*PW +: PW]   <= (load_issue && (r_illegal || ld_fwd)) ?
+                                      r_tag : md_tag[md_head*PW +: PW];
         rq_value[rq_tail*32 +: 32] <=
-            (load_issue && q_illegal) ? 32'b0 :
+            (load_issue && r_illegal) ? 32'b0 :
             (load_issue && ld_fwd) ?
-              format_load(ld_fwd_data, q_size, q_addr[1:0], q_unsigned) :
+              format_load(ld_fwd_data, r_size, r_addr[1:0], r_unsigned) :
               format_load(ld_resp_rdata, md_size[md_head*2 +: 2],
                           md_off[md_head*2 +: 2], md_unsigned[md_head]);
-        rq_seq[rq_tail*32 +: 32]   <= (load_issue && (q_illegal || ld_fwd)) ?
-                                      q_seq : md_seq[md_head*32 +: 32];
-        rq_exc[rq_tail]            <= load_issue && q_illegal;
+        rq_seq[rq_tail*32 +: 32]   <= (load_issue && (r_illegal || ld_fwd)) ?
+                                      r_seq : md_seq[md_head*32 +: 32];
+        rq_exc[rq_tail]            <= load_issue && r_illegal;
         rq_discard[rq_tail]        <= squash_valid &&
-                                      (((load_issue && (q_illegal || ld_fwd)) ?
-                                        q_seq : md_seq[md_head*32 +: 32])
+                                      (((load_issue && (r_illegal || ld_fwd)) ?
+                                        r_seq : md_seq[md_head*32 +: 32])
                                        > squash_seq);
         rq_tail <= (rq_tail == LDQ_DEPTH - 1) ? '0 : rq_tail + 1'b1;
       end
@@ -488,7 +526,7 @@ module lsu #(
 
       // ---- 计数 -----------------------------------------------------------
       ld_count <= ld_count +
-                  ((load_issue && !q_illegal && !ld_fwd) ? 1'b1 : 1'b0) -
+                  ((load_issue && !r_illegal && !ld_fwd) ? 1'b1 : 1'b0) -
                   (md_resp_fire ? 1'b1 : 1'b0);
       rq_count <= rq_count + (rq_push ? 1'b1 : 1'b0) -
                              (rq_pop  ? 1'b1 : 1'b0);
@@ -555,7 +593,7 @@ module lsu #(
       st_cycles <= st_cycles + 1;
       if (load_issue) st_ld_issue <= st_ld_issue + 1;
       if (load_issue && ld_fwd) st_ld_fwd <= st_ld_fwd + 1;
-      if (load_issue && q_illegal) st_illegal_ld <= st_illegal_ld + 1;
+      if (load_issue && r_illegal) st_illegal_ld <= st_illegal_ld + 1;
       if (md_resp_fire) st_ld_resp <= st_ld_resp + 1;
       if (load_result_valid && !load_result_ready)
         st_load_result_wait <= st_load_result_wait + 1;
