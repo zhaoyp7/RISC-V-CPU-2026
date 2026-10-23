@@ -13,3 +13,5 @@ APPIMAGE_EXTRACT_AND_RUN=1 sh test/alu_test/run.sh
 
 `alu_test_top.sv` 仅供测试，不能加入官方 `verilog/filelist.f`。
 本测试已接入 `sh test/run_all.sh`。
+
+纯组合 ALU 测试显式使用单线程 VerilatedContext，避免无谓的工作线程池。

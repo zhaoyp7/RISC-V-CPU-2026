@@ -35,8 +35,10 @@ static uint32_t reference(uint32_t a, uint32_t b, unsigned op) {
 }
 
 int main(int argc, char** argv) {
-    Verilated::commandArgs(argc, argv);
-    Valu_test_top dut;
+    VerilatedContext context;
+    context.threads(1);  // a combinational ALU needs no worker thread pool
+    context.commandArgs(argc, argv);
+    Valu_test_top dut{&context};
     uint64_t checks = 0;
     auto check_pair = [&](uint32_t a, uint32_t b) {
         const unsigned count = TB_ENABLE_DIV ? 18 : 14;

@@ -368,53 +368,15 @@ module backend_ooo #(
   logic [31:0] issue_src1, issue_src2;
   logic [31:0] p_src1, p_src2;
   logic [31:0] a0_src1, a0_src2;
-  logic        cdb_bypass1, cdb_bypass2;
-  logic        cdb_bypass3, cdb_bypass4, cdb_bypass5, cdb_bypass6;
-  logic [31:0] cdb_bp1, cdb_bp2, cdb_bp3, cdb_bp4, cdb_bp5, cdb_bp6;
-  integer ib;
-
-  // 同拍 CDB 旁路（R 条 CDB 都要检查；lane 0 优先）。
-  always_comb begin
-    cdb_bypass1 = 1'b0; cdb_bp1 = 32'b0;
-    cdb_bypass2 = 1'b0; cdb_bp2 = 32'b0;
-    cdb_bypass3 = 1'b0; cdb_bp3 = 32'b0;
-    cdb_bypass4 = 1'b0; cdb_bp4 = 32'b0;
-    cdb_bypass5 = 1'b0; cdb_bp5 = 32'b0;
-    cdb_bypass6 = 1'b0; cdb_bp6 = 32'b0;
-    for (ib = 0; ib < R; ib = ib + 1) begin
-      if (cdb[ib*CW + `CPU_CDB_VALID_OFF] &&
-          (cdb[ib*CW + `CPU_CDB_TAG_OFF +: PW] == i_src1_tag)) begin
-        cdb_bypass1 = 1'b1; cdb_bp1 = cdb[ib*CW + `CPU_CDB_VALUE_OFF +: 32];
-      end
-      if (cdb[ib*CW + `CPU_CDB_VALID_OFF] &&
-          (cdb[ib*CW + `CPU_CDB_TAG_OFF +: PW] == i_src2_tag)) begin
-        cdb_bypass2 = 1'b1; cdb_bp2 = cdb[ib*CW + `CPU_CDB_VALUE_OFF +: 32];
-      end
-      if (cdb[ib*CW + `CPU_CDB_VALID_OFF] &&
-          (cdb[ib*CW + `CPU_CDB_TAG_OFF +: PW] == p_src1_tag)) begin
-        cdb_bypass3 = 1'b1; cdb_bp3 = cdb[ib*CW + `CPU_CDB_VALUE_OFF +: 32];
-      end
-      if (cdb[ib*CW + `CPU_CDB_VALID_OFF] &&
-          (cdb[ib*CW + `CPU_CDB_TAG_OFF +: PW] == p_src2_tag)) begin
-        cdb_bypass4 = 1'b1; cdb_bp4 = cdb[ib*CW + `CPU_CDB_VALUE_OFF +: 32];
-      end
-      if (cdb[ib*CW + `CPU_CDB_VALID_OFF] &&
-          (cdb[ib*CW + `CPU_CDB_TAG_OFF +: PW] == a0_src1_tag)) begin
-        cdb_bypass5 = 1'b1; cdb_bp5 = cdb[ib*CW + `CPU_CDB_VALUE_OFF +: 32];
-      end
-      if (cdb[ib*CW + `CPU_CDB_VALID_OFF] &&
-          (cdb[ib*CW + `CPU_CDB_TAG_OFF +: PW] == a0_src2_tag)) begin
-        cdb_bypass6 = 1'b1; cdb_bp6 = cdb[ib*CW + `CPU_CDB_VALUE_OFF +: 32];
-      end
-    end
-  end
-
-  assign issue_src1 = cdb_bypass1 ? cdb_bp1 : prf_rdata[0 +: 32];
-  assign issue_src2 = cdb_bypass2 ? cdb_bp2 : prf_rdata[32 +: 32];
-  assign p_src1 = cdb_bypass3 ? cdb_bp3 : prf_rdata[2*32 +: 32];
-  assign p_src2 = cdb_bypass4 ? cdb_bp4 : prf_rdata[3*32 +: 32];
-  assign a0_src1 = cdb_bypass5 ? cdb_bp5 : prf_rdata[4*32 +: 32];
-  assign a0_src2 = cdb_bypass6 ? cdb_bp6 : prf_rdata[5*32 +: 32];
+  // IQ 只按寄存后的 ready 位选择，操作数在选择前的时钟沿已写入 PRF。
+  // a0/a1 还会再缓冲一拍，因此六个读口均不需要当前拍 CDB 数据旁路。
+  // dispatch/skid/IQ 入队的同拍 wake 匹配仍保留，防止漏掉唯一一次广播。
+  assign issue_src1 = prf_rdata[0 +: 32];
+  assign issue_src2 = prf_rdata[32 +: 32];
+  assign p_src1 = prf_rdata[2*32 +: 32];
+  assign p_src2 = prf_rdata[3*32 +: 32];
+  assign a0_src1 = prf_rdata[4*32 +: 32];
+  assign a0_src2 = prf_rdata[5*32 +: 32];
 
   always_comb begin
     for (i = 0; i < R; i = i + 1) begin

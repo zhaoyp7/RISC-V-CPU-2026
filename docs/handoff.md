@@ -1,5 +1,24 @@
 # RISC-V CPU 2026 — 协作者交接（P2 功能完成，性能优化中）
 
+## 当前频率实验：隔拍唤醒（独立分支，未合入 main）
+
+用户允许为提高频率暂时放宽 IPC / 面积限制；正确性仍为硬约束。
+分支 `feat/freq-registered-wake`，检查点 tag `freq-registered-wake-20261023`，基于 `bc795ae`。
+W1/W2 各 19/19、完整单元回归 ALL PASS；W2 IPC **0.5727**、W1 **0.5471**。
+同模式 diagnose 从 18,603.442 µm² / 99.38 MHz 变为 **18,542.177 µm² /
+107.56 MHz**，Fmax **+8.2%**、W2 IPC -5.9%；`IPC×Fmax` 约
++1.9%（仅同模式趋势比较）。
+
+本轮只做了一次 diagnose，**没有运行 opt**。`build/synth/opt/` 仍是 main 的
+旧报告，不是候选结果；不能把候选 diagnose 107.56 MHz 与 main 的 opt
+115.12 MHz 直接比较。main 仍为 `bc795ae` / `alu-shared-mul-20261023`。
+原 main 的 diagnose / opt 报告已备份到 `build/synth/registered_wake_baseline/`。
+
+候选切断了同拍 CDB→IQ select / 操作数旁路，关键路径变为
+`ROB → IQ → PRF → LSU/LSQ`；IQ 段约 2.4 ns、LSQ 段约 4.5 ns，仍需后续
+结构性分级。保留为下一阶段检查点，暂不替换 main，不追加 opt。
+详见 [隔拍唤醒实验](experiments/registered-wake.md)。
+
 ## 最新检查点：ALU 乘法器共享（2026-10-23）
 
 本地 `main` 已纳入乘法器共享，检查点 tag `alu-shared-mul-20261023`，未推送远端。

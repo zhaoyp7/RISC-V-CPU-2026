@@ -165,15 +165,14 @@ module issue_queue #(
     cand_issue   = '0;
     cand_prefill = '0;
     cand_lane0   = '0;
-    // 源在本拍 CDB 上广播时可直接发射（后端 PRF 读口做同拍旁路）。
+    // 只使用已寄存的 ready 位选择。CDB 本拍写 PRF / 更新 ready，下一拍
+    // 才参与选择，切断 CDB -> select -> PRF/LSQ 的组合长路径。
     for (i = 0; i < D; i = i + 1) begin
       cand_issue[i] = valid[i] && !squash_mask[i] &&
-                      (src1_ready[i] || tag_hit(src1_tag[i*PW +: PW])) &&
-                      (src2_ready[i] || tag_hit(src2_tag[i*PW +: PW]));
+                      src1_ready[i] && src2_ready[i];
       cand_prefill[i] = valid[i] && !squash_mask[i] && !addr_sent[i] &&
                         uop[i*DW + `CPU_DISPATCH_IS_STORE_OFF] &&
-                        (src1_ready[i] || tag_hit(src1_tag[i*PW +: PW])) &&
-                        !(src2_ready[i] || tag_hit(src2_tag[i*PW +: PW]));
+                        src1_ready[i] && !src2_ready[i];
       cand_lane0[i] = cand_issue[i] || cand_prefill[i];
     end
 

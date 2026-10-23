@@ -21,3 +21,4 @@ run_one() {
 
 run_one 1 1
 run_one 2 1
+run_one 2 2

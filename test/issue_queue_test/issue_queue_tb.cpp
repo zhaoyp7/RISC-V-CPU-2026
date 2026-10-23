@@ -245,10 +245,14 @@ int main(int argc, char** argv) {
     h.clear_inputs();
     dut.wake_valid = 1;
     dut.wake_tag = 7;
+    dut.out_ready = 1;
+    dut.eval();
+    h.expect(!h.out_valid(), "wake does not issue before ready is registered");
     h.tick();
     h.clear_inputs();
     dut.eval();
     h.expect(h.out_valid(), "woken after CDB");
+    h.expect(dut.count == 1, "wake does not pop entry on broadcast edge");
     h.issue_one();
 
     // ---- dispatch + CDB same-cycle bypass --------------------------------
@@ -258,6 +262,7 @@ int main(int argc, char** argv) {
     h.clear_inputs();
     h.pack(0, c);
     dut.in_valid = 1;
+    dut.in_alloc_mask = 1;
     dut.wake_valid = 1;
     dut.wake_tag = 9;
     dut.eval();
@@ -267,6 +272,65 @@ int main(int argc, char** argv) {
     dut.eval();
     h.expect(h.out_valid(), "dispatch bypass wake");
     h.issue_one();
+
+    // ---- store address/data wake: retain the store until full issue --------
+    h.reset();
+    Uop store;
+    store.pc = 0x340; store.dest = 17; store.rob = 4;
+    store.is_store = 1;
+    store.src1 = 21; store.src1_ready = 0;
+    store.src2 = 22; store.src2_ready = 0;
+    h.expect(h.dispatch_one(store), "store wake dispatch");
+    dut.wake_valid = 1; dut.wake_tag = 21; dut.out_ready = 1;
+    dut.eval();
+    h.expect(!h.out_valid(), "store address wake waits for edge");
+    h.tick();
+    h.clear_inputs(); dut.eval();
+    h.expect(h.out_valid() && dut.out_addr_only, "registered address enables prefill");
+    h.issue_one(); dut.eval();
+    h.expect(dut.count == 1, "prefill retains store ownership in IQ");
+    h.expect(!h.out_valid(), "address-only prefill is not repeated");
+    dut.wake_valid = 1; dut.wake_tag = 22; dut.out_ready = 1;
+    dut.eval();
+    h.expect(!h.out_valid(), "store data wake waits for edge");
+    h.tick();
+    h.clear_inputs(); dut.eval();
+    h.expect(h.out_valid() && !dut.out_addr_only, "registered data enables full store");
+    h.expect(dut.count == 1, "store not removed on data wake edge");
+    h.issue_one();
+    h.expect(dut.count == 0, "full store issue releases IQ entry");
+
+    // ---- squash wins over wake, even with the consumer ready ---------------
+    h.reset();
+    h.seq_base = 2;
+    Uop killed;
+    killed.pc = 0x380; killed.dest = 18; killed.rob = 5;
+    killed.src1 = 23; killed.src1_ready = 0;
+    h.expect(h.dispatch_one(killed), "squash wake dispatch");
+    dut.wake_valid = 1; dut.wake_tag = 23;
+    dut.squash_valid = 1; dut.squash_seq = 1; dut.out_ready = 1;
+    dut.eval();
+    h.expect(!h.out_valid(), "squashed wake cannot issue");
+    h.tick();
+    h.clear_inputs(); dut.eval();
+    h.expect(dut.count == 0 && !h.out_valid(), "squash wake does not resurrect entry");
+
+    if (R > 1) {
+        h.reset();
+        Uop dual;
+        dual.pc = 0x3c0; dual.dest = 19;
+        dual.src1 = 5; dual.src1_ready = 0;
+        dual.src2 = 6; dual.src2_ready = 0;
+        h.expect(h.dispatch_one(dual), "dual wake dispatch");
+        dut.wake_valid = 3; dut.wake_tag = 5 | (6 << PRF); dut.out_ready = 1;
+        dut.eval();
+        h.expect(!h.out_valid(), "dual wake waits for edge");
+        h.tick();
+        h.clear_inputs(); dut.eval();
+        h.expect(h.out_valid() && dut.count == 1, "both sources ready after dual CDB");
+        h.issue_one();
+        h.expect(dut.count == 0, "dual wake consumer issues once");
+    }
 
     // ---- age order --------------------------------------------------------
     h.reset();

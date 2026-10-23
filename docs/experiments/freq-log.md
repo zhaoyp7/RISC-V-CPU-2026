@@ -1,5 +1,7 @@
 # 频率实验记录
 
+> 最新独立频率候选见实验 9：diagnose 107.56 MHz，W2 IPC 0.5727，未跑 opt、未合入 main。
+
 > 最新主线结果见末尾实验 8：本地 main 为 17,895.8 µm² / 115.12 MHz（opt），
 > W2 IPC 0.6084；前面各实验的“未合并”描述保留为当时的历史状态。
 
@@ -246,3 +248,25 @@ opt 面积 -5.6%，Fmax -0.6%，保留并合入本地 main，tag `alu-shared-mul
 未推送。面积低于 18k，但 IPC / 300 MHz 未达阶段 2。本轮只跑一次 opt；
 后续小改动先用 diagnose 筛选，积累到阶段检查点再跑 opt。
 详见 [alu-shared-mul.md](alu-shared-mul.md)。
+
+## 实验 9：CDB 唤醒 / IQ 选择隔拍（独立检查点）
+
+用户明确允许频率优先，IPC / 面积暂时越线；不沿用 IPC ≥0.60 的旧候选门槛。
+基线 main `bc795ae`，分支 `feat/freq-registered-wake`，tag `freq-registered-wake-20261023`。
+
+- IQ 只按已寄存 ready 选择；CDB 数据先写 PRF，下一拍才选择消费者。
+- 移除六个操作数读口的当前拍 CDB 数据旁路，保留入队 / skid 的 wake 匹配。
+- store 地址预填仍留在 IQ，完整 store 才删除，访存请求所有权不变。
+- W1/W2 各 19/19、IQ/backend 测试 PASS、完整 run_all 重跑 ALL PASS。
+
+| 指标 | main 基线 | 隔拍唤醒候选 |
+| --- | ---: | ---: |
+| W2 / W1 IPC | 0.6084 / 0.5759 | 0.5727 / 0.5471 |
+| diagnose 面积 / MHz | 18,603.442 / 99.38 | **18,542.177 / 107.56** |
+| opt 面积 / MHz | 17,895.831 / 115.12 | **未运行** |
+
+同模式 Fmax +8.2%，W2 IPC -5.9%，面积 -0.3%；`IPC×Fmax` 约
++1.9%。新路径 `ROB → IQ → PRF → LSU/LSQ`，已移除 CDB，但 IQ
+和 LSQ 仍长。保留为后续结构分级的独立起点，未合入 main，未推送。
+本轮没有跑 opt，继续遵守“diagnose 筛选、阶段检查点才 opt”的要求。
+详见 [registered-wake.md](registered-wake.md)。
