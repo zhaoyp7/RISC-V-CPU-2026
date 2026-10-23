@@ -75,14 +75,15 @@ make test MAX_CYCLES=50000000
 
 | 指标 | 当前值 | 阶段 1 门槛 | 阶段 2 门槛 |
 | --- | ---: | ---: | ---: |
-| IPC GEOMEAN | **0.7295**（LSQ32，`116cbb8`） | ≥ 0.6000 | ≥ 0.8450 |
-| 面积（diagnose） | **28,444.5 µm²**（LSQ32；opt 待测） | ≤ 9,000 µm² | ≤ 18,000 µm² |
-| 频率（diagnose） | **54.27 MHz**（LSQ32；opt 待测） | ≥ 300 MHz | ≥ 300 MHz |
+| IPC GEOMEAN | **0.7563**（LSQ32 + tournament gshare，`9666237`） | ≥ 0.6000 | ≥ 0.8450 |
+| 面积（diagnose） | 28,444.5 µm² + gshare 增量待测 | ≤ 9,000 µm² | ≤ 18,000 µm² |
+| 频率（diagnose） | 54.27 MHz（LSQ32；gshare 待测） | ≥ 300 MHz | ≥ 300 MHz |
 
 P2 基线 `a95a938` 的 IPC 为 0.5507；`a56cca6` 加入 store 地址预填后
 提升到 0.6380。2026-10-23 将默认 LSQ 深度提高到 32（`116cbb8`），IPC
-进一步提升到 **0.7295**（qsort 0.5100、rsort 0.8622、vvadd 1.1447）。
-W=1 档为 **19/19 PASS，IPC 0.6336**。perf 明细、参数敏感度和 synth
+提升到 0.7295；再加入 tournament gshare + GHR 快照（`9666237`），W=2 IPC
+达到 **0.7563**（median 0.6082、qsort 0.5042、rsort 0.8619、towers 0.5856）。
+W=1 档为 **19/19 PASS，IPC 0.6562**。perf 明细、参数敏感度和 synth
 breakdown 见 `docs/perf-log.md` 与 `docs/integration-status.md`。
 
 2026-10-22 还修复了 ROB16 的恢复竞态（`ab00273`），现在 ROB16 配置可用。

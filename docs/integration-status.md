@@ -11,9 +11,10 @@
 - `tools/config_gen.py --check`：up to date（默认值已切到 P2 双发射配置）。
 - perf（官方 OoO filelist，W=2）：P2 基线 IPC geomean **0.5507**；W=1 为
   0.5017。2026-10-22 加入 store 地址预填后，W=2 IPC 提升到 **0.6380**。
-  2026-10-23 默认 LSQ 提高到 32（`116cbb8`），W=2 IPC 进一步提升到
-  **0.7295**（qsort 0.5100、rsort 0.8622、vvadd 1.1447）；W=1 复测
-  19/19 PASS、IPC **0.6336**。LSQ 16/32/64 的扫描显示 32 已饱和。
+  2026-10-23 默认 LSQ 提高到 32（`116cbb8`），W=2 IPC 提升到 **0.7295**。
+  再加入 tournament gshare + GHR 快照（`9666237`），W=2 IPC 达到
+  **0.7563**（median 0.6082、qsort 0.5042、rsort 0.8619、towers 0.5856）；
+  W=1 复测 19/19 PASS、IPC **0.6562**。LSQ 16/32/64 的扫描显示 32 已饱和。
 - synth（ASAP7，2 ns 目标）：P2 基线 opt **24,288.346 µm² / 56.08 MHz**；
   diagnose 25,025.438 µm² / 53.93 MHz。LSQ8 的 opt 为
   **24,468.759 µm² / 56.72 MHz**。LSQ32 默认的 diagnose 为
