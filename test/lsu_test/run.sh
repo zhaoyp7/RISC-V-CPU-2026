@@ -12,4 +12,5 @@ exec python3 "$root/tools/unit/build.py" \
               "$root/verilog/if_defs.sv" "$root/verilog/lsq.sv" \
               "$root/verilog/lsu.sv" \
     --define "CPU_LSQ_DEPTH=8" \
+    --define "CPU_PRF_SIZE=64" --define "CPU_ROB_DEPTH=32" \
     "$@"

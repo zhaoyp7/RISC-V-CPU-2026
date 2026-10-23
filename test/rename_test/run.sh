@@ -40,6 +40,7 @@ printf '%s\n' "$w" > "$marker"
 "$VERILATOR" --cc --exe --build --assert -Wall -Wno-fatal \
     --top-module rename -Mdir "$out" \
     -DCPU_ISSUE_WIDTH="$w" -DCPU_LSQ_DEPTH=8 \
+    -DCPU_PRF_SIZE=64 -DCPU_ROB_DEPTH=32 \
     "$root/verilog/cpu_config.sv" "$root/verilog/if_defs.sv" \
     "$root/verilog/rename.sv" "$here/rename_tb.cpp" \
     -CFLAGS "-std=c++17 -DTB_W=$w" -o "$out/tb"
