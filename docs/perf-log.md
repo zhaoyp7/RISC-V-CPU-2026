@@ -1,28 +1,28 @@
 # 性能记录
 
-## 当前频率实验：BPU 训练入口寄存（独立分支，小收益）
+## 当前频率实验：dispatch 接收时预分配年龄（独立分支）
 
-`feat/freq-bpu-training-pipe`，tag `freq-bpu-training-20261023`，基于`43b84ac`。
-只寄存frontend内BPU训练字段，ROB解析、redirect和squash即时处理，BPU同拍旁路保留。
+`feat/freq-dispatch-seq`，tag `freq-dispatch-seq-20261024`，基于`b80df1d`。
+next-free序号在缓冲接收时递增，前后槽保存年龄，IQ/LSQ用前槽seq；ROB映射仍实际下发建立。
 
 | 候选 | W2 / W1 IPC | diagnose 面积 / MHz | opt |
 | --- | ---: | ---: | --- |
-| IQ末端squash `43b84ac` | 0.5274 / 0.5059 | 20,162.350 / 261.69 | 未运行 |
-| BPU训练入口寄存 | **0.5274 / 0.5059** | **20,170.865 / 263.10** | **未运行** |
+| BPU训练寄存 `b80df1d` | 0.5274 / 0.5059 | 20,170.865 / 263.10 | 未运行 |
+| dispatch年龄预分配 | **0.5274 / 0.5059** | **20,231.241 / 279.78** | **未运行** |
 
-Fmax仅 **+0.54%**、面积 **+0.04%**，全部correctness/perf周期与基线相同。
-W1/W2各19/19、run_all ALL PASS，新训练测试35/39项、backend各502项通过。
-24个报告输入hash一致。保留独立实验起点供后续组合验证，不将0.54%的诊断收益
-单独作为合main依据，不宣称显著提频；回滚基线为`43b84ac`。
+Fmax **+6.34%**、面积 **+0.30%**，全部correctness/perf周期与基线相同。
+W1/W2各19/19、最终run_all ALL PASS，backend增强测试539/541项通过。
+n_push计输入组、n_disp保留下发统计，LOCAL_STATS lint通过；最终报告24个输入hash一致。
+早期一次diagnose因统计口径修正而中断，最终只采用重启后一次完成的结果。
 
-BPU路径已移出第一条路径，新瓶颈为 **squash→LSU/CDB→ROB提交→LSQ分配ready
-→skid_drain→disp_seq[31]捕获**。下一轮先分析解析/结果资源耦合与seq分配使能，
-保持IQ/LSQ/ROB年龄一致，不直接延迟计数器。
+原序号计数器路径移出首位。新瓶颈为 **ROB redirect→cache0响应valid→cache1接收/ready
+→I-cache地址**，上游仍经过LSU/CDB。下一轮优先评估前端独立响应缓冲，保持use2、
+预测快照、配对顺序和redirect清理，不直接延迟redirect。
 
-本轮仅一次diagnose，未跑opt、未合main、未推送；main为`bc795ae`。
-此前取消opt（130）无有效结果，产物在`build/synth/opt_cancelled_20261023/`；
-原main opt报告为`build/synth/frequency_checkpoint_baseline/`，基线报告/仿真器为
-`build/synth/bpu_training_baseline/`。详见 [BPU训练寄存实验](experiments/bpu-training-pipe.md)。
+本轮未跑opt、未合main、未推送；main为`bc795ae`。原取消opt无有效结果，产物在
+`build/synth/opt_cancelled_20261023/`，原main报告在`build/synth/frequency_checkpoint_baseline/`。
+基线报告/仿真器为`build/synth/dispatch_seq_baseline/`，详见
+[dispatch年龄预分配实验](experiments/dispatch-seq.md)。
 
 ## 最新检查点：ALU 乘法器共享（2026-10-23）
 
@@ -81,6 +81,7 @@ load/store 放入旧的 a0/a1 缓冲。优先做分析和方案设计，单次�
 | 2026-10-23 | `freq-dispatch-buffer-20261023` | W2/16/48/8/2/16/1KB×2 | **0.5274** | **20,103.272 (diag)** | **251.29 (diag)** | 双槽dispatch；opt未运行、未合入main |
 | 2026-10-23 | `freq-iq-late-squash-20261023` | W2/16/48/8/2/16/1KB×2 | **0.5274** | **20,162.350 (diag)** | **261.69 (diag)** | IQ末端取消；opt未运行、未合入main |
 | 2026-10-23 | `freq-bpu-training-20261023` | W2/16/48/8/2/16/1KB×2 | **0.5274** | **20,170.865 (diag)** | **263.10 (diag)** | BPU训练寄存；仅+0.54%，独立实验，opt未运行 |
+| 2026-10-24 | `freq-dispatch-seq-20261024` | W2/16/48/8/2/16/1KB×2 | **0.5274** | **20,231.241 (diag)** | **279.78 (diag)** | 接收时预分配年龄；opt未运行、未合main |
 
 P2 基线 opt 综合：comb 16,361.326、seq 5,648.117、SRAM 2,278.903 µm²，
 min period 17.8320 ns（目标 2 ns，WNS −15.8320 ns）。diagnose 为 25,025.438 µm²、
@@ -216,6 +217,7 @@ ALU，必须先确认 IPC 不低于 0.60。
 | 双槽dispatch缓冲（未合并） | `freq-dispatch-buffer-20261023` | **0.5274** | **0.5059** | **20,103.3** | **251.29** | **未运行** | **未运行** |
 | IQ末端squash（未合并） | `freq-iq-late-squash-20261023` | **0.5274** | **0.5059** | **20,162.4** | **261.69** | **未运行** | **未运行** |
 | BPU训练寄存（独立实验） | `freq-bpu-training-20261023` | **0.5274** | **0.5059** | **20,170.9** | **263.10** | **未运行** | **未运行** |
+| dispatch年龄预分配（未合并） | `freq-dispatch-seq-20261024` | **0.5274** | **0.5059** | **20,231.2** | **279.78** | **未运行** | **未运行** |
 
 lane0 非访存流水版相对 C2 opt：面积 **+547.3 µm²（+2.8%）**，Fmax **+31.1%**，IPC **-3.6%**；
 `IPC × Fmax` **+26.4%**。W2/W1 均 19/19，`run_all` ALL PASS。
@@ -263,6 +265,20 @@ W2 使用标准 `make perf MAX_CYCLES=50000000 SIM="$REPO_ROOT/build/sim"` 复�
 | perf_towers | 5,278 | 11,102 | 0.4754 | 11,352 | 0.4649 |
 | perf_vvadd | 4,524 | 5,738 | 0.7884 | 5,647 | 0.8011 |
 | **GEOMEAN** | | | **0.6084** | | **0.5759** |
+
+## 分 benchmark（dispatch年龄预分配候选，未合入main）
+
+latency=10，MAX_CYCLES=50,000,000；两档全部correctness和六个perf周期与基线相同。
+
+| benchmark | instructions | W2 cycles | W2 IPC | W1 cycles | W1 IPC |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| perf_median | 6,961 | 17,827 | 0.3905 | 18,439 | 0.3775 |
+| perf_multiply | 21,722 | 23,161 | 0.9379 | 28,938 | 0.7506 |
+| perf_qsort | 139,900 | 375,920 | 0.3722 | 383,094 | 0.3652 |
+| perf_rsort | 195,719 | 362,998 | 0.5392 | 355,734 | 0.5502 |
+| perf_towers | 5,278 | 12,379 | 0.4264 | 12,411 | 0.4253 |
+| perf_vvadd | 4,524 | 6,584 | 0.6871 | 6,536 | 0.6922 |
+| **GEOMEAN** | | | **0.5274** | | **0.5059** |
 
 ## 分 benchmark（BPU训练入口寄存候选，未合入main）
 

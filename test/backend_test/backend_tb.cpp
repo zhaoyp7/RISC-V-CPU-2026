@@ -562,6 +562,51 @@ int main(int argc, char** argv) {
         h.expect(dut.backend_ready, "dispatch buffer recovers after drain");
     }
 
+    // ---- seq follows each buffered group across stalls and squash gaps ----
+    h.auto_respond=true;h.reset();h.auto_respond=false;
+    h.write_word(0x7200,100,15);
+    Uop age_producer;
+    age_producer.dest=40;age_producer.rob=1;age_producer.reg_we=1;
+    age_producer.is_load=1;age_producer.wb_sel=WB_MEM;age_producer.imm=0x7200;
+    h.expect(h.dispatch_one(age_producer), "age producer accepted");
+    for(int i=0;i<32 && h.ld_pending.empty();++i)h.tick();
+    h.expect(h.ld_pending.size()==1, "age producer waits for response");
+    auto age_uop = [&](int n) {
+        Uop u;u.dest=10+n;u.rob=2+n;u.reg_we=1;u.b_sel=B_IMM;u.imm=n;
+        u.src1=(n<8+W)?40:63;u.src1_ready=0;return u;
+    };
+    for(int n=0;n<8;++n)h.expect(h.dispatch_one(age_uop(n)), "mixed single-lane groups accepted");
+    for(int base=8;base<8+2*W;base+=W) {
+        Uop group[W];for(int l=0;l<W;++l)group[l]=age_uop(base+l);
+        h.expect(h.dispatch_group(group), "buffered age group accepted");
+    }
+    h.expect(!dut.backend_ready, "age test fills both dispatch slots");
+    bool age_seen[8+W]={};bool boundary_seen=false,age_prod_seen=false,fresh_age_seen=false;
+    auto age_results = [&]() {
+        while(!h.cdb_q.empty()) {
+            auto r=h.cdb_q.front();h.cdb_q.pop_front();
+            if(r.first==40) {h.expect(!age_prod_seen && r.second==100,"age producer completes once");age_prod_seen=true;}
+            else if(r.first==63) {h.expect(!fresh_age_seen && r.second==7,"post-squash producer completes once");fresh_age_seen=true;}
+            else {
+                int n=int(r.first)-10;bool ok=n>=0 && n<8+W;
+                h.expect(ok && r.second==100u+n,"only pre-boundary owners complete");
+                if(ok){h.expect(!age_seen[n],"retained owner completes once");age_seen[n]=true;}
+                if(r.first==17+W)boundary_seen=true;
+            }
+        }
+    };
+    h.auto_respond=true;
+    for(int i=0;i<256 && !boundary_seen;++i){h.tick();age_results();}
+    h.expect(boundary_seen,"head-group boundary reached execution");
+    h.squash_one(9+W);
+    Uop fresh_age;fresh_age.dest=63;fresh_age.rob=30;fresh_age.reg_we=1;
+    fresh_age.a_sel=A_ZERO;fresh_age.b_sel=B_IMM;fresh_age.imm=7;
+    h.expect(h.dispatch_one(fresh_age),"dispatch accepted after discarded sequence gap");
+    for(int i=0;i<256;++i){h.tick();age_results();}
+    bool all_age=true;for(bool seen:age_seen)all_age &= seen;
+    h.expect(all_age && age_prod_seen && fresh_age_seen,"saved group ages preserve exact squash boundary");
+    h.expect(dut.backend_ready,"age buffer fully recovers");
+
     // ---- W=2 dispatch absorption -----------------------------------------
     if (W == 2) {
         h.reset();

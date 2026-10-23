@@ -1,28 +1,28 @@
 # 集成状态（P1 完成，P2 进入性能优化）
 
-## 当前频率实验：BPU 训练入口寄存（独立分支，小收益）
+## 当前频率实验：dispatch 接收时预分配年龄（独立分支）
 
-`feat/freq-bpu-training-pipe`，tag `freq-bpu-training-20261023`，基于`43b84ac`。
-只寄存frontend内BPU训练字段，ROB解析、redirect和squash即时处理，BPU同拍旁路保留。
+`feat/freq-dispatch-seq`，tag `freq-dispatch-seq-20261024`，基于`b80df1d`。
+next-free序号在缓冲接收时递增，前后槽保存年龄，IQ/LSQ用前槽seq；ROB映射仍实际下发建立。
 
 | 候选 | W2 / W1 IPC | diagnose 面积 / MHz | opt |
 | --- | ---: | ---: | --- |
-| IQ末端squash `43b84ac` | 0.5274 / 0.5059 | 20,162.350 / 261.69 | 未运行 |
-| BPU训练入口寄存 | **0.5274 / 0.5059** | **20,170.865 / 263.10** | **未运行** |
+| BPU训练寄存 `b80df1d` | 0.5274 / 0.5059 | 20,170.865 / 263.10 | 未运行 |
+| dispatch年龄预分配 | **0.5274 / 0.5059** | **20,231.241 / 279.78** | **未运行** |
 
-Fmax仅 **+0.54%**、面积 **+0.04%**，全部correctness/perf周期与基线相同。
-W1/W2各19/19、run_all ALL PASS，新训练测试35/39项、backend各502项通过。
-24个报告输入hash一致。保留独立实验起点供后续组合验证，不将0.54%的诊断收益
-单独作为合main依据，不宣称显著提频；回滚基线为`43b84ac`。
+Fmax **+6.34%**、面积 **+0.30%**，全部correctness/perf周期与基线相同。
+W1/W2各19/19、最终run_all ALL PASS，backend增强测试539/541项通过。
+n_push计输入组、n_disp保留下发统计，LOCAL_STATS lint通过；最终报告24个输入hash一致。
+早期一次diagnose因统计口径修正而中断，最终只采用重启后一次完成的结果。
 
-BPU路径已移出第一条路径，新瓶颈为 **squash→LSU/CDB→ROB提交→LSQ分配ready
-→skid_drain→disp_seq[31]捕获**。下一轮先分析解析/结果资源耦合与seq分配使能，
-保持IQ/LSQ/ROB年龄一致，不直接延迟计数器。
+原序号计数器路径移出首位。新瓶颈为 **ROB redirect→cache0响应valid→cache1接收/ready
+→I-cache地址**，上游仍经过LSU/CDB。下一轮优先评估前端独立响应缓冲，保持use2、
+预测快照、配对顺序和redirect清理，不直接延迟redirect。
 
-本轮仅一次diagnose，未跑opt、未合main、未推送；main为`bc795ae`。
-此前取消opt（130）无有效结果，产物在`build/synth/opt_cancelled_20261023/`；
-原main opt报告为`build/synth/frequency_checkpoint_baseline/`，基线报告/仿真器为
-`build/synth/bpu_training_baseline/`。详见 [BPU训练寄存实验](experiments/bpu-training-pipe.md)。
+本轮未跑opt、未合main、未推送；main为`bc795ae`。原取消opt无有效结果，产物在
+`build/synth/opt_cancelled_20261023/`，原main报告在`build/synth/frequency_checkpoint_baseline/`。
+基线报告/仿真器为`build/synth/dispatch_seq_baseline/`，详见
+[dispatch年龄预分配实验](experiments/dispatch-seq.md)。
 
 ## 最新检查点：ALU 乘法器共享（2026-10-23）
 

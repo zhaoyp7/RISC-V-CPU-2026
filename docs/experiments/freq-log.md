@@ -1,6 +1,6 @@
 # 频率实验记录
 
-> 最新独立实验见实验 17：diagnose 263.10 MHz（仅+0.54%，小收益），W2 IPC 0.5274，未跑 opt、未合入 main。
+> 最新独立实验见实验 18：diagnose 279.78 MHz，W2 IPC 0.5274，未跑 opt、未合入 main。
 
 > 最新主线结果见末尾实验 8：本地 main 为 17,895.8 µm² / 115.12 MHz（opt），
 > W2 IPC 0.6084；前面各实验的“未合并”描述保留为当时的历史状态。
@@ -437,3 +437,23 @@ W1/W2各19/19、run_all ALL PASS，新增训练测试35/39项、backend各502项
 BPU路径移出首位，新路径经LSU/CDB、ROB提交、LSQ alloc_ready到skid_drain和
 backend disp_seq[31]捕获。下一轮先分析解析/结果资源耦合与seq使能，保持
 IQ/LSQ/ROB年龄一致。详见 [bpu-training-pipe.md](bpu-training-pipe.md)。
+
+## 实验 18：dispatch 接收时预分配年龄（2026-10-24检查点）
+
+`feat/freq-dispatch-seq`，基于`b80df1d`，tag `freq-dispatch-seq-20261024`。
+next-free seq在缓冲接收时递增，前后槽保存seq，IQ/LSQ用前槽seq，ROB映射仍下发
+时建立；squash后保留年龄空洞而不回退。n_push与原下发统计n_disp分开。
+
+| 指标 | BPU训练寄存 | dispatch年龄预分配 |
+| --- | ---: | ---: |
+| W2 / W1 IPC | 0.5274 / 0.5059 | **0.5274 / 0.5059** |
+| diagnose 面积 / MHz | 20,170.865 / 263.10 | **20,231.241 / 279.78** |
+| opt | 未运行 | **未运行** |
+
+两档19/19、最终run_all ALL PASS，全部correctness/perf周期相同，backend539/541项
+通过，LOCAL_STATS lint通过。Fmax+6.34%、面积+0.30%，24个输入hash一致。前一项
+diagnose早期中断以修正统计口径，仅采用重启后一次完成结果；无opt、未合main、未推送。
+
+新路径经ROB redirect、cache0响应valid、cache1接收/ready到I-cache地址；下一轮
+优先研究前端响应缓冲和配对容量，保持即时redirect和预测快照对应。基线为
+`build/synth/dispatch_seq_baseline/`，详见 [dispatch-seq.md](dispatch-seq.md)。

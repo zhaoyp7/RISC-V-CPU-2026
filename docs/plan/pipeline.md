@@ -535,3 +535,16 @@ W1/W2各19/19、run_all ALL PASS，新训练测试35/39项通过；全部correct
 原本接近上限。下一轮先分析分支解析与结果接收的耦合、序号分配/递增使能，
 保持两个dispatch槽及IQ/LSQ/ROB的seq一致；不能只延迟计数器。
 详见 [BPU训练寄存实验](../experiments/bpu-training-pipe.md)。
+
+## 22. dispatch 年龄预分配检查点（2026-10-24）
+
+`feat/freq-dispatch-seq` / `freq-dispatch-seq-20261024` 基于`b80df1d`。序号在缓冲
+接收时分配并随两槽保存，进入IQ/LSQ用保存年龄，ROB映射仍在实际下发时建立；
+squash允许年龄空洞，保持比较次序和恢复一致。
+W1/W2各19/19、最终run_all ALL PASS，backend539/541项通过，全部correctness/perf
+周期不变。diagnose **20,231.241 µm² / 279.78 MHz**，频率+6.34%、面积+0.30%，
+IPC仍0.5274/0.5059。n_push/n_disp统计分开，LOCAL_STATS lint通过；无opt、未合main、未推送。
+
+新瓶颈为redirect经cache0响应valid到cache1接收/ready及地址端。下一轮优先研究
+独立响应缓冲，保留请求FIFO use2/预测快照、响应顺序、反压及redirect清理；
+不直接延迟redirect本身。详见 [年龄预分配实验](../experiments/dispatch-seq.md)。

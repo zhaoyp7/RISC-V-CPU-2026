@@ -77,17 +77,22 @@ module backend_ooo #(
   logic [W*DW-1:0]      tail_uop, tail_uop_next;
 
   // unified dispatch sequence for IQ/LSQ squash
+  // next free seq 在接收 dispatch 时递增；每槽保存自己的组首年龄。
   logic [31:0]          disp_seq;
+  logic [31:0]          skid_seq, tail_seq;
   logic [31:0]          rob_seq [0:`CPU_ROB_DEPTH-1];
   logic [31:0]          squash_seq;
-  logic [3:0]           n_disp;
+  logic [3:0]           n_disp, n_push;
 
   assign squash_seq = rob_seq[sq_rob];
 
   always_comb begin
     n_disp = '0;
-    for (i = 0; i < W; i = i + 1)
+    n_push = '0;
+    for (i = 0; i < W; i = i + 1) begin
       if (skid_vmask[i]) n_disp = n_disp + 1'b1;
+      if (disp_valid[i]) n_push = n_push + 1'b1;
+    end
   end
 
   always_comb begin
@@ -184,7 +189,7 @@ module backend_ooo #(
     .in_ready       (iq_in_ready),
     .wake_valid     (cdb_wake_valid),
     .wake_tag       (cdb_wake_tag),
-    .seq_base       (disp_seq),
+    .seq_base       (skid_seq),
     .squash_valid   (sq_valid),
     .squash_seq     (squash_seq),
     .out_valid      (iq_out_valid),
@@ -587,7 +592,7 @@ module backend_ooo #(
     .alloc_is_store       (skid_is_store),
     .alloc_ready          (lsu_alloc_ready),
     .alloc_fire           (skid_drain),
-    .seq_base             (disp_seq),
+    .seq_base             (skid_seq),
     .squash_seq           (squash_seq),
     .issue_valid          (iq_out_valid[0] && issue_ready[0] && i_is_mem),
     .issue_uop            (issue_uop[DW-1:0]),
@@ -722,6 +727,8 @@ module backend_ooo #(
       tail_vmask <= '0;
       tail_uop <= '0;
       disp_seq   <= '0;
+      skid_seq <= '0;
+      tail_seq <= '0;
       for (i = 0; i < `CPU_ROB_DEPTH; i = i + 1)
         rob_seq[i] <= '0;
     end else begin
@@ -729,13 +736,15 @@ module backend_ooo #(
         skid_valid <= 1'b0;
         for (i = 0; i < W; i = i + 1)
           if (skid_vmask[i])
-            rob_seq[skid_rob[i*RW +: RW]] <= disp_seq + i;
-        disp_seq <= disp_seq + n_disp;
+            rob_seq[skid_rob[i*RW +: RW]] <= skid_seq + i;
+
 `ifdef LOCAL_TRACE
         $display("[SKID_DRAIN] t=%0t seq=%0d rob=%0d mask=%b",
-                 $time, disp_seq, skid_rob[0 +: RW], skid_vmask);
+                 $time, skid_seq, skid_rob[0 +: RW], skid_vmask);
 `endif
       end
+      if (skid_push && !sq_valid)
+        disp_seq <= disp_seq + n_push;
       if (sq_valid) begin
         skid_valid <= 1'b0;
         skid_vmask <= '0;
@@ -747,7 +756,10 @@ module backend_ooo #(
         if (skid_drain) begin
           skid_valid <= tail_valid;
           skid_vmask <= tail_valid ? tail_vmask : '0;
-          if (tail_valid) skid_uop <= tail_uop_next;
+          if (tail_valid) begin
+            skid_uop <= tail_uop_next;
+            skid_seq <= tail_seq;
+          end
           tail_valid <= 1'b0;
           tail_vmask <= '0;
         end
@@ -756,10 +768,12 @@ module backend_ooo #(
             skid_valid <= 1'b1;
             skid_vmask <= disp_valid;
             skid_uop <= disp_uop_woken;
+            skid_seq <= disp_seq;
           end else begin
             tail_valid <= 1'b1;
             tail_vmask <= disp_valid;
             tail_uop <= disp_uop_woken;
+            tail_seq <= disp_seq;
           end
         end
       end
