@@ -25,7 +25,7 @@ DEFAULTS = {
     "prf": 64,
     "rs": 8,
     "cdb_num": 2,
-    "lsq": 8,
+    "lsq": 32,
     "icache_index_bits": 9,
     "icache_ways": 1,
     "icache_line_bytes": 4,

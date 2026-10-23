@@ -39,7 +39,7 @@ printf '%s\n' "$w" > "$marker"
 
 "$VERILATOR" --cc --exe --build --assert -Wall -Wno-fatal \
     --top-module rob -Mdir "$out" \
-    -DCPU_ISSUE_WIDTH="$w" \
+    -DCPU_ISSUE_WIDTH="$w" -DCPU_LSQ_DEPTH=8 \
     "$root/verilog/cpu_config.sv" "$root/verilog/if_defs.sv" \
     "$root/verilog/commit.sv" "$root/verilog/rob.sv" "$here/rob_tb.cpp" \
     -CFLAGS "-std=c++17 -DTB_W=$w" -o "$out/tb"

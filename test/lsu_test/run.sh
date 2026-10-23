@@ -11,4 +11,5 @@ exec python3 "$root/tools/unit/build.py" \
     --sources "$root/verilog/rv32_defs.sv" "$root/verilog/cpu_config.sv" \
               "$root/verilog/if_defs.sv" "$root/verilog/lsq.sv" \
               "$root/verilog/lsu.sv" \
+    --define "CPU_LSQ_DEPTH=8" \
     "$@"

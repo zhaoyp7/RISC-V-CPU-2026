@@ -14,6 +14,7 @@ run_one() {
         --sources "$root/verilog/rv32_defs.sv" "$root/verilog/cpu_config.sv" \
                   "$root/verilog/if_defs.sv" "$root/verilog/issue_queue.sv" \
         --define "CPU_ISSUE_WIDTH=$w" --define "CPU_CDB_NUM=$r" \
+        --define "CPU_LSQ_DEPTH=8" \
         --cxx-define "TB_W=$w" --cxx-define "TB_R=$r"
 }
 

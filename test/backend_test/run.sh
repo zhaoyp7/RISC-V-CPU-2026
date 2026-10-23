@@ -17,6 +17,7 @@ run_one() {
                   "$root/verilog/lsq.sv" "$root/verilog/lsu.sv" \
                   "$root/verilog/backend_ooo.sv" \
         --define "CPU_ISSUE_WIDTH=$w" \
+        --define "CPU_LSQ_DEPTH=8" \
         --cxx-define "TB_W=$w"
 }
 
