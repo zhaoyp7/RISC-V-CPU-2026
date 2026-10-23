@@ -49,7 +49,7 @@ git checkout -- verilog/cpu_config.sv
 | W=2/W=1 correctness | 19/19 | 19/19 |
 | diagnose 面积 | 25,134.9 µm² | **20,262.8 µm²** |
 | diagnose Fmax | 53.96 MHz | 53.44 MHz |
-| opt 面积/Fmax | 24,468.8 µm² / 56.72 MHz | 待重测 |
+| opt 面积/Fmax | 24,468.8 µm² / 56.72 MHz | **19,759.4 µm² / 55.47 MHz** |
 
 C2 的 IPC 分项：median 0.4616、multiply 1.0572、qsort 0.4640、
 rsort 0.7659、towers 0.4817、vvadd 0.7563。
