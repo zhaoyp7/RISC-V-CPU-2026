@@ -267,6 +267,9 @@ load 响应 → 结果队列 → CDB
 - 先只拆 IQ select 和 PRF read；
 - 保留 EX 和 CDB 不变；
 - 观察 Fmax 和 IPC。
+- 已做的 WIP 实验见 `docs/plan/replay.md`：Fmax +29.8%，但会因
+  load/store issue 死锁；正式实现必须先做 store 地址预填 + retain-entry
+  IQ/replay。
 
 ### Step 2：WB1 / WB2 分开
 
