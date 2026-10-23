@@ -1,6 +1,6 @@
 # 频率实验记录
 
-> 最新独立频率候选见实验 16：diagnose 261.69 MHz，W2 IPC 0.5274，未跑 opt、未合入 main。
+> 最新独立实验见实验 17：diagnose 263.10 MHz（仅+0.54%，小收益），W2 IPC 0.5274，未跑 opt、未合入 main。
 
 > 最新主线结果见末尾实验 8：本地 main 为 17,895.8 µm² / 115.12 MHz（opt），
 > W2 IPC 0.6084；前面各实验的“未合并”描述保留为当时的历史状态。
@@ -417,3 +417,23 @@ IQ增强对拍1,466,671项、原185项通过，backend各502项通过。Fmax+4.1
 新路径是ROB分支类型→BPU同拍训练旁路→预测方向→第二路取指/I-cache地址。
 下一轮优先仅寄存BPU训练入口，保持分支恢复即时处理。详见
 [iq-late-squash.md](iq-late-squash.md)。
+
+## 实验 17：BPU 训练入口寄存（独立实验，小收益）
+
+`feat/freq-bpu-training-pipe`，基于`43b84ac`，tag `freq-bpu-training-20261023`。
+只寄存frontend BPU训练字段，BPU同拍旁路保留；ROB解析/redirect/squash不延迟。
+
+| 指标 | IQ末端squash | BPU训练寄存 |
+| --- | ---: | ---: |
+| W2 / W1 IPC | 0.5274 / 0.5059 | **0.5274 / 0.5059** |
+| diagnose 面积 / MHz | 20,162.350 / 261.69 | **20,170.865 / 263.10** |
+| opt | 未运行 | **未运行** |
+
+W1/W2各19/19、run_all ALL PASS，新增训练测试35/39项、backend各502项通过，
+全部correctness/perf周期与基线相同。24个输入hash一致。Fmax仅+0.54%、面积+0.04%，
+保留独立实验起点供组合验证，不作为单独合main的充分依据；一次diagnose，无opt、
+未合main、未推送。基线报告/仿真器为`build/synth/bpu_training_baseline/`。
+
+BPU路径移出首位，新路径经LSU/CDB、ROB提交、LSQ alloc_ready到skid_drain和
+backend disp_seq[31]捕获。下一轮先分析解析/结果资源耦合与seq使能，保持
+IQ/LSQ/ROB年龄一致。详见 [bpu-training-pipe.md](bpu-training-pipe.md)。

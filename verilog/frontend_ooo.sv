@@ -68,6 +68,27 @@ module frontend_ooo #(
   logic p0_taken, p1_taken;
   logic [31:0] p0_target, p1_target;
 
+  // 只隔离预测器训练，不延迟 ROB 的 redirect/squash。
+  logic bpu_upd_valid_q, bpu_upd_taken_q, bpu_upd_uncond_q;
+  logic [31:0] bpu_upd_pc_q, bpu_upd_target_q;
+  always_ff @(posedge clk) begin
+    if (reset) begin
+      bpu_upd_valid_q <= 1'b0;
+      bpu_upd_pc_q <= '0;
+      bpu_upd_taken_q <= 1'b0;
+      bpu_upd_target_q <= '0;
+      bpu_upd_uncond_q <= 1'b0;
+    end else begin
+      bpu_upd_valid_q <= br_update_valid;
+      if (br_update_valid) begin
+        bpu_upd_pc_q <= br_update_pc;
+        bpu_upd_taken_q <= br_update_taken;
+        bpu_upd_target_q <= br_update_target;
+        bpu_upd_uncond_q <= br_update_uncond;
+      end
+    end
+  end
+
   bpu u_bpu (
     .clk             (clk),
     .reset           (reset),
@@ -77,11 +98,11 @@ module frontend_ooo #(
     .fetch_pc2       (pc1),
     .predict_taken2  (p1_taken),
     .predict_target2 (p1_target),
-    .upd_valid       (br_update_valid),
-    .upd_pc          (br_update_pc),
-    .upd_taken       (br_update_taken),
-    .upd_target      (br_update_target),
-    .upd_is_uncond   (br_update_uncond)
+    .upd_valid       (bpu_upd_valid_q),
+    .upd_pc          (bpu_upd_pc_q),
+    .upd_taken       (bpu_upd_taken_q),
+    .upd_target      (bpu_upd_target_q),
+    .upd_is_uncond   (bpu_upd_uncond_q)
   );
 
   // ---- 请求 FIFO（预测/配对信息） ----------------------------------------

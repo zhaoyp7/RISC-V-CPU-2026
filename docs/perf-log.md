@@ -1,26 +1,28 @@
 # 性能记录
 
-## 当前频率实验：IQ 末端 squash 过滤（独立分支）
+## 当前频率实验：BPU 训练入口寄存（独立分支，小收益）
 
-`feat/freq-iq-late-squash`，tag `freq-iq-late-squash-20261023`，基于`c74d4e2`。
-IQ按年龄预选，再取消年轻项valid；tag/uop数据不经squash，弹出和写状态均受valid控制。
+`feat/freq-bpu-training-pipe`，tag `freq-bpu-training-20261023`，基于`43b84ac`。
+只寄存frontend内BPU训练字段，ROB解析、redirect和squash即时处理，BPU同拍旁路保留。
 
 | 候选 | W2 / W1 IPC | diagnose 面积 / MHz | opt |
 | --- | ---: | ---: | --- |
-| 双槽dispatch缓冲 `c74d4e2` | 0.5274 / 0.5059 | 20,103.272 / 251.29 | 未运行 |
-| IQ末端squash | **0.5274 / 0.5059** | **20,162.350 / 261.69** | **未运行** |
+| IQ末端squash `43b84ac` | 0.5274 / 0.5059 | 20,162.350 / 261.69 | 未运行 |
+| BPU训练入口寄存 | **0.5274 / 0.5059** | **20,170.865 / 263.10** | **未运行** |
 
-Fmax **+4.14%**、面积 **+0.29%**，IPC不变；两档全部correctness/perf周期与基线相同。
-W1/W2各19/19、run_all ALL PASS，IQ增强参考对拍1,466,671项、原185项通过，
-backend各502项通过。无新增流水拍数，24个报告输入hash一致，保留独立检查点。
+Fmax仅 **+0.54%**、面积 **+0.04%**，全部correctness/perf周期与基线相同。
+W1/W2各19/19、run_all ALL PASS，新训练测试35/39项、backend各502项通过。
+24个报告输入hash一致。保留独立实验起点供后续组合验证，不将0.54%的诊断收益
+单独作为合main依据，不宣称显著提频；回滚基线为`43b84ac`。
 
-新瓶颈为 **squash→LSU/CDB→ROB br_update_uncond→BPU同拍训练旁路→I-cache地址**。
-下一轮优先评估只寄存BPU训练入口，保持redirect/squash即时处理，不延迟整条恢复总线。
+BPU路径已移出第一条路径，新瓶颈为 **squash→LSU/CDB→ROB提交→LSQ分配ready
+→skid_drain→disp_seq[31]捕获**。下一轮先分析解析/结果资源耦合与seq分配使能，
+保持IQ/LSQ/ROB年龄一致，不直接延迟计数器。
 
-本轮只跑一次diagnose，未跑opt、未合main、未推送；main为`bc795ae`。
-此前取消的opt（130）无有效结果，产物为`build/synth/opt_cancelled_20261023/`，
-原main opt报告在`build/synth/frequency_checkpoint_baseline/`。基线报告/仿真器为
-`build/synth/iq_late_squash_baseline/`。详见 [IQ末端过滤实验](experiments/iq-late-squash.md)。
+本轮仅一次diagnose，未跑opt、未合main、未推送；main为`bc795ae`。
+此前取消opt（130）无有效结果，产物在`build/synth/opt_cancelled_20261023/`；
+原main opt报告为`build/synth/frequency_checkpoint_baseline/`，基线报告/仿真器为
+`build/synth/bpu_training_baseline/`。详见 [BPU训练寄存实验](experiments/bpu-training-pipe.md)。
 
 ## 最新检查点：ALU 乘法器共享（2026-10-23）
 
@@ -78,6 +80,7 @@ load/store 放入旧的 a0/a1 缓冲。优先做分析和方案设计，单次�
 | 2026-10-23 | `freq-store-tree-20261023` | W2/16/48/8/2/16/1KB×2 | **0.5274** | **19,952.559 (diag)** | **240.60 (diag)** | store 排空选择树；opt 未运行、未合入 main |
 | 2026-10-23 | `freq-dispatch-buffer-20261023` | W2/16/48/8/2/16/1KB×2 | **0.5274** | **20,103.272 (diag)** | **251.29 (diag)** | 双槽dispatch；opt未运行、未合入main |
 | 2026-10-23 | `freq-iq-late-squash-20261023` | W2/16/48/8/2/16/1KB×2 | **0.5274** | **20,162.350 (diag)** | **261.69 (diag)** | IQ末端取消；opt未运行、未合入main |
+| 2026-10-23 | `freq-bpu-training-20261023` | W2/16/48/8/2/16/1KB×2 | **0.5274** | **20,170.865 (diag)** | **263.10 (diag)** | BPU训练寄存；仅+0.54%，独立实验，opt未运行 |
 
 P2 基线 opt 综合：comb 16,361.326、seq 5,648.117、SRAM 2,278.903 µm²，
 min period 17.8320 ns（目标 2 ns，WNS −15.8320 ns）。diagnose 为 25,025.438 µm²、
@@ -212,6 +215,7 @@ ALU，必须先确认 IPC 不低于 0.60。
 | store 排空选择树（未合并） | `freq-store-tree-20261023` | **0.5274** | **0.5059** | **19,952.6** | **240.60** | **未运行** | **未运行** |
 | 双槽dispatch缓冲（未合并） | `freq-dispatch-buffer-20261023` | **0.5274** | **0.5059** | **20,103.3** | **251.29** | **未运行** | **未运行** |
 | IQ末端squash（未合并） | `freq-iq-late-squash-20261023` | **0.5274** | **0.5059** | **20,162.4** | **261.69** | **未运行** | **未运行** |
+| BPU训练寄存（独立实验） | `freq-bpu-training-20261023` | **0.5274** | **0.5059** | **20,170.9** | **263.10** | **未运行** | **未运行** |
 
 lane0 非访存流水版相对 C2 opt：面积 **+547.3 µm²（+2.8%）**，Fmax **+31.1%**，IPC **-3.6%**；
 `IPC × Fmax` **+26.4%**。W2/W1 均 19/19，`run_all` ALL PASS。
@@ -259,6 +263,20 @@ W2 使用标准 `make perf MAX_CYCLES=50000000 SIM="$REPO_ROOT/build/sim"` 复�
 | perf_towers | 5,278 | 11,102 | 0.4754 | 11,352 | 0.4649 |
 | perf_vvadd | 4,524 | 5,738 | 0.7884 | 5,647 | 0.8011 |
 | **GEOMEAN** | | | **0.6084** | | **0.5759** |
+
+## 分 benchmark（BPU训练入口寄存候选，未合入main）
+
+latency=10，MAX_CYCLES=50,000,000；两档全部correctness和六个perf周期与基线相同。
+
+| benchmark | instructions | W2 cycles | W2 IPC | W1 cycles | W1 IPC |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| perf_median | 6,961 | 17,827 | 0.3905 | 18,439 | 0.3775 |
+| perf_multiply | 21,722 | 23,161 | 0.9379 | 28,938 | 0.7506 |
+| perf_qsort | 139,900 | 375,920 | 0.3722 | 383,094 | 0.3652 |
+| perf_rsort | 195,719 | 362,998 | 0.5392 | 355,734 | 0.5502 |
+| perf_towers | 5,278 | 12,379 | 0.4264 | 12,411 | 0.4253 |
+| perf_vvadd | 4,524 | 6,584 | 0.6871 | 6,536 | 0.6922 |
+| **GEOMEAN** | | | **0.5274** | | **0.5059** |
 
 ## 分 benchmark（IQ末端squash候选，未合入main）
 

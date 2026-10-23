@@ -522,3 +522,16 @@ IPC仍0.5274/0.5059。未跑opt、未合main、未推送。
 下一轮优先只给BPU训练入口寄存整组字段，保留redirect/squash即时处理，验证
 连续/同索引训练与预测快照配对，不延迟整条恢复总线。
 详见 [IQ末端过滤实验](../experiments/iq-late-squash.md)。
+
+## 21. BPU 训练入口寄存实验（2026-10-23，小收益）
+
+`feat/freq-bpu-training-pipe` / `freq-bpu-training-20261023` 基于`43b84ac`。
+只延迟预测器训练一拍，完整捕获valid/PC/taken/target/is_uncond，保持分支恢复即时。
+W1/W2各19/19、run_all ALL PASS，新训练测试35/39项通过；全部correctness/perf
+周期不变，IPC仍0.5274/0.5059。diagnose **20,170.865 µm² / 263.10 MHz**，
+仅频率+0.54%、面积+0.04%；保留独立实验起点，不据此单独合main，不追加opt。
+
+新路径由squash经LSU/CDB、ROB提交和LSQ ready到disp_seq[31]捕获，说明两条路径
+原本接近上限。下一轮先分析分支解析与结果接收的耦合、序号分配/递增使能，
+保持两个dispatch槽及IQ/LSQ/ROB的seq一致；不能只延迟计数器。
+详见 [BPU训练寄存实验](../experiments/bpu-training-pipe.md)。

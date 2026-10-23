@@ -164,7 +164,9 @@ void setup_branch() {
 }
 
 bool test_straight() {
-    Vfrontend_subsystem dut;
+    VerilatedContext context;
+    context.threads(1);
+    Vfrontend_subsystem dut{&context};
     Harness h;
     h.dut = &dut;
     setup_straight();
@@ -198,7 +200,9 @@ bool test_straight() {
 }
 
 bool test_branch() {
-    Vfrontend_subsystem dut;
+    VerilatedContext context;
+    context.threads(1);
+    Vfrontend_subsystem dut{&context};
     Harness h;
     h.dut = &dut;
     setup_branch();

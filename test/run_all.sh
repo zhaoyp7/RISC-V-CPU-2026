@@ -74,6 +74,7 @@ run "rob W=1" env ROB_W=1 sh test/rob_test/run.sh $quick --seed "$seed"
 run "rob W=2" env ROB_W=2 sh test/rob_test/run.sh $quick --seed "$seed"
 run "frontend W=1" env FRONTEND_W=1 sh test/frontend_test/run.sh
 run "frontend W=2" env FRONTEND_W=2 sh test/frontend_test/run.sh
+run "BPU training pipeline W1/W2" sh test/bpu_training_test/run.sh
 run "LSQ query snapshot depth8/depth16" sh test/lsq_query_test/run.sh
 run "lsu v2" sh test/lsu_test/run.sh
 run "mem_subsystem v2" sh test/mem_subsystem_test/run.sh

@@ -1,26 +1,28 @@
 # RISC-V CPU 2026 — 协作者交接（P2 功能完成，性能优化中）
 
-## 当前频率实验：IQ 末端 squash 过滤（独立分支）
+## 当前频率实验：BPU 训练入口寄存（独立分支，小收益）
 
-`feat/freq-iq-late-squash`，tag `freq-iq-late-squash-20261023`，基于`c74d4e2`。
-IQ按年龄预选，再取消年轻项valid；tag/uop数据不经squash，弹出和写状态均受valid控制。
+`feat/freq-bpu-training-pipe`，tag `freq-bpu-training-20261023`，基于`43b84ac`。
+只寄存frontend内BPU训练字段，ROB解析、redirect和squash即时处理，BPU同拍旁路保留。
 
 | 候选 | W2 / W1 IPC | diagnose 面积 / MHz | opt |
 | --- | ---: | ---: | --- |
-| 双槽dispatch缓冲 `c74d4e2` | 0.5274 / 0.5059 | 20,103.272 / 251.29 | 未运行 |
-| IQ末端squash | **0.5274 / 0.5059** | **20,162.350 / 261.69** | **未运行** |
+| IQ末端squash `43b84ac` | 0.5274 / 0.5059 | 20,162.350 / 261.69 | 未运行 |
+| BPU训练入口寄存 | **0.5274 / 0.5059** | **20,170.865 / 263.10** | **未运行** |
 
-Fmax **+4.14%**、面积 **+0.29%**，IPC不变；两档全部correctness/perf周期与基线相同。
-W1/W2各19/19、run_all ALL PASS，IQ增强参考对拍1,466,671项、原185项通过，
-backend各502项通过。无新增流水拍数，24个报告输入hash一致，保留独立检查点。
+Fmax仅 **+0.54%**、面积 **+0.04%**，全部correctness/perf周期与基线相同。
+W1/W2各19/19、run_all ALL PASS，新训练测试35/39项、backend各502项通过。
+24个报告输入hash一致。保留独立实验起点供后续组合验证，不将0.54%的诊断收益
+单独作为合main依据，不宣称显著提频；回滚基线为`43b84ac`。
 
-新瓶颈为 **squash→LSU/CDB→ROB br_update_uncond→BPU同拍训练旁路→I-cache地址**。
-下一轮优先评估只寄存BPU训练入口，保持redirect/squash即时处理，不延迟整条恢复总线。
+BPU路径已移出第一条路径，新瓶颈为 **squash→LSU/CDB→ROB提交→LSQ分配ready
+→skid_drain→disp_seq[31]捕获**。下一轮先分析解析/结果资源耦合与seq分配使能，
+保持IQ/LSQ/ROB年龄一致，不直接延迟计数器。
 
-本轮只跑一次diagnose，未跑opt、未合main、未推送；main为`bc795ae`。
-此前取消的opt（130）无有效结果，产物为`build/synth/opt_cancelled_20261023/`，
-原main opt报告在`build/synth/frequency_checkpoint_baseline/`。基线报告/仿真器为
-`build/synth/iq_late_squash_baseline/`。详见 [IQ末端过滤实验](experiments/iq-late-squash.md)。
+本轮仅一次diagnose，未跑opt、未合main、未推送；main为`bc795ae`。
+此前取消opt（130）无有效结果，产物在`build/synth/opt_cancelled_20261023/`；
+原main opt报告为`build/synth/frequency_checkpoint_baseline/`，基线报告/仿真器为
+`build/synth/bpu_training_baseline/`。详见 [BPU训练寄存实验](experiments/bpu-training-pipe.md)。
 
 ## 最新检查点：ALU 乘法器共享（2026-10-23）
 
