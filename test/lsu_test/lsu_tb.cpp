@@ -652,6 +652,76 @@ int main(int argc, char** argv) {
         h.expect(h.wait_idle("credit drain"), "credit queues idle");
     }
 
+    // ---- queued arbitration: physical slot order differs from seq order ---
+    // Hold r at memory and q behind it, then enqueue all remaining ages in
+    // reverse order. Selection must exclude q/r and drain the table by seq.
+    for (int round = 0; round < 3; ++round) {
+        h.reset();
+        h.seq_base = 0x90000000u + 100 * round;
+        const uint32_t first_seq = h.seq_base;
+        const int keep = (round == 1) ? TB_LSQ_DEPTH / 2 : TB_LSQ_DEPTH;
+        for (int age = 0; age < TB_LSQ_DEPTH; ++age) {
+            const int id = (5 * age + 3) % TB_LSQ_DEPTH;
+            if (round == 2) h.seq_base = first_seq; // equal seq: low id wins
+            h.write_word(0xf000 + 4 * id, 0xb2000000u + id, 0xf);
+            h.expect(h.alloc(id, age + 1, false), "tree arbitration alloc");
+        }
+        h.load_ready = false;
+        auto enqueue_age = [&](int age) {
+            const int id = (5 * age + 3) % TB_LSQ_DEPTH;
+            Uop queued;
+            queued.dest = 16 + id; queued.is_load = 1; queued.lsq = id; queued.rob = age + 1;
+            h.expect(h.issue(queued, 0xf000 + 4 * id, 0), "tree arbitration enqueue");
+        };
+        enqueue_age(0);
+        for (int i = 0; i < 8; ++i) h.tick();
+        enqueue_age(1);
+        for (int i = 0; i < 8; ++i) h.tick();
+        for (int age = TB_LSQ_DEPTH - 1; age >= 2; --age) enqueue_age(age);
+        if (round == 1) h.squash(first_seq + keep - 1);
+        for (int i = 0; i < 4; ++i) h.tick();
+        h.expect(h.accepted_loads.empty(), "tree requests wait for memory ready");
+        bool seen[TB_LSQ_DEPTH] = {};
+        int received = 0;
+        h.load_ready = true;
+        for (int cycle = 0; cycle < 512 && received < keep; ++cycle) {
+            dut.load_result_ready = 1;
+            h.tick();
+            while (!h.results.empty()) {
+                const auto result = h.results.front(); h.results.pop_front();
+                const int id = int(result.first) - 16;
+                const bool valid_id = id >= 0 && id < TB_LSQ_DEPTH;
+                h.expect(valid_id && result.second == 0xb2000000u + id,
+                         "tree result retains tag and data");
+                if (valid_id) {
+                    h.expect(!seen[id], "tree load completes once");
+                    if (!seen[id]) ++received;
+                    seen[id] = true;
+                }
+            }
+        }
+        for (int i = 0; i < 16; ++i) h.tick();
+        h.expect(received == keep && h.accepted_loads.size() == size_t(keep),
+                 "tree request count after squash and q/r exclusion");
+        std::vector<int> expected_ids;
+        expected_ids.push_back(3);
+        expected_ids.push_back(8 % TB_LSQ_DEPTH);
+        if (round == 2) {
+            for (int id = 0; id < TB_LSQ_DEPTH; ++id)
+                if (id != expected_ids[0] && id != expected_ids[1]) expected_ids.push_back(id);
+        } else {
+            for (int age = 2; age < keep; ++age) expected_ids.push_back((5 * age + 3) % TB_LSQ_DEPTH);
+        }
+        for (int pos = 0; pos < keep; ++pos)
+            h.expect(h.accepted_loads.size() > size_t(pos) &&
+                     h.accepted_loads[pos] == 0xf000u + 4 * expected_ids[pos],
+                     "tree chooses oldest seq then lowest physical id");
+        h.expect(h.results.empty(), "tree has no duplicate trailing result");
+        h.clear_inputs();
+        for (int id : expected_ids) h.commit(id, false, true);
+        h.expect(h.wait_idle("tree arbitration drain"), "tree arbitration idle");
+    }
+
     // ---- reset -----------------------------------------------------------
     h.reset();
     h.expect(!dut.load_result_valid, "reset load result");

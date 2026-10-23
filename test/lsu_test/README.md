@@ -1,0 +1,12 @@
+# LSU / LSQ 集成回归
+
+运行 `APPIMAGE_EXTRACT_AND_RUN=1 sh test/lsu_test/run.sh`，已接入 run_all。
+矩阵为 W1/LSQ8 与 W2/LSQ16，固定 PRF64/ROB32，不修改默认核参数。
+
+覆盖 store 预填/提交/写完成、load 格式化与前递、未知/部分 store 重试、
+晚就绪老 load 的预留容量、q/r 排除、内存与 CDB 反压、各阶段 squash、
+槽位复用，以及在途与结果队列的共同容量预留。
+
+选择专项先填满等待表并反压 r/q，将物理槽位置换、其余请求按反向年龄入队，
+放行后从外部内存请求顺序检查最老选择。另两轮覆盖批量 squash 和相同 seq
+时低 id 优先；核对每笔结果的 tag/data、无重复及最终 idle，不读取内部信号。

@@ -89,6 +89,7 @@ module lsu #(
   localparam integer DW = `CPU_DISPATCH_W;
   localparam integer MDW = (LDQ_DEPTH > 1) ? $clog2(LDQ_DEPTH) : 1;
   localparam integer LP_DEPTH = `CPU_LSQ_DEPTH;
+  localparam integer LP_LEAVES = 1 << $clog2(LP_DEPTH);
 
   // ---- issue uop 解包 ------------------------------------------------------
   logic [31:0] issue_pc, issue_imm, issue_inst;
@@ -182,7 +183,7 @@ module lsu #(
   logic                      lp_select_valid;
   logic [LW-1:0]             lp_select_id;
   logic [31:0]               lp_best_seq;
-  integer                    lp_select_i, lp_squash_i;
+  integer                    lp_squash_i;
 
   logic                      q_valid, q_squashed, q_active, q_accept;
   logic [LW-1:0]             q_id;
@@ -206,22 +207,41 @@ module lsu #(
   assign r_squashed = r_valid && squash_valid && (r_seq > squash_seq);
   assign r_active = r_valid && !r_squashed && lsq_query_resp_valid;
 
-  always_comb begin
-    lp_select_valid = 1'b0;
-    lp_select_id = '0;
-    lp_best_seq = 32'hffff_ffff;
-    for (lp_select_i = 0; lp_select_i < LP_DEPTH; lp_select_i = lp_select_i + 1) begin
-      if (lp_valid[lp_select_i] &&
-          !(q_valid && (q_id == lp_select_i[LW-1:0])) &&
-          !(r_valid && (r_id == lp_select_i[LW-1:0])) &&
-          !(squash_valid && (lp_seq[lp_select_i*32 +: 32] > squash_seq)) &&
-          (!lp_select_valid || (lp_seq[lp_select_i*32 +: 32] < lp_best_seq))) begin
-        lp_select_valid = 1'b1;
-        lp_select_id = lp_select_i[LW-1:0];
-        lp_best_seq = lp_seq[lp_select_i*32 +: 32];
+  // 平衡最老选择：候选仅携带 valid/seq/id，元数据仍由获胜 id 读取。
+  // 左子树覆盖低 id，相等 seq 时保留左侧，保持旧扫描的优先规则。
+  wire lp_tree_valid [0:2*LP_LEAVES-1] /* verilator split_var */;
+  wire [31:0] lp_tree_seq [0:2*LP_LEAVES-1] /* verilator split_var */;
+  wire [LW-1:0] lp_tree_id [0:2*LP_LEAVES-1] /* verilator split_var */;
+  assign lp_tree_valid[0] = 1'b0;
+  assign lp_tree_seq[0] = '0;
+  assign lp_tree_id[0] = '0;
+  generate
+    for (genvar g = 0; g < LP_LEAVES; g = g + 1) begin : gen_lp_leaf
+      if (g < LP_DEPTH) begin : gen_entry
+        assign lp_tree_valid[LP_LEAVES+g] = lp_valid[g] &&
+            !(q_valid && (q_id == LW'(g))) &&
+            !(r_valid && (r_id == LW'(g))) &&
+            !(squash_valid && (lp_seq[g*32 +: 32] > squash_seq));
+        assign lp_tree_seq[LP_LEAVES+g] = lp_seq[g*32 +: 32];
+        assign lp_tree_id[LP_LEAVES+g] = LW'(g);
+      end else begin : gen_pad
+        assign lp_tree_valid[LP_LEAVES+g] = 1'b0;
+        assign lp_tree_seq[LP_LEAVES+g] = '0;
+        assign lp_tree_id[LP_LEAVES+g] = '0;
       end
     end
-  end
+    for (genvar g = 1; g < LP_LEAVES; g = g + 1) begin : gen_lp_merge
+      wire take_right = lp_tree_valid[2*g+1] &&
+                         (!lp_tree_valid[2*g] ||
+                          lp_tree_seq[2*g+1] < lp_tree_seq[2*g]);
+      assign lp_tree_valid[g] = lp_tree_valid[2*g] || lp_tree_valid[2*g+1];
+      assign lp_tree_seq[g] = take_right ? lp_tree_seq[2*g+1] : lp_tree_seq[2*g];
+      assign lp_tree_id[g] = take_right ? lp_tree_id[2*g+1] : lp_tree_id[2*g];
+    end
+  endgenerate
+  assign lp_select_valid = lp_tree_valid[1];
+  assign lp_select_id = lp_tree_valid[1] ? lp_tree_id[1] : '0;
+  assign lp_best_seq = lp_tree_valid[1] ? lp_tree_seq[1] : 32'hffff_ffff;
 
   // ---- LSQ 查询 -----------------------------------------------------------
   logic lsq_query_blocked;
@@ -444,7 +464,7 @@ module lsu #(
         if (lp_select_valid) begin
           q_id <= lp_select_id;
           q_addr <= lp_addr[lp_select_id*32 +: 32];
-          q_seq <= lp_seq[lp_select_id*32 +: 32];
+          q_seq <= lp_best_seq;
           q_tag <= lp_tag[lp_select_id*PW +: PW];
           q_size <= lp_size[lp_select_id*2 +: 2];
           q_unsigned <= lp_unsigned[lp_select_id];

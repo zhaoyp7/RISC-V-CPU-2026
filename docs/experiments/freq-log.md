@@ -1,6 +1,6 @@
 # 频率实验记录
 
-> 最新独立频率候选见实验 12：diagnose 197.11 MHz，W2 IPC 0.5274，未跑 opt、未合入 main。
+> 最新独立频率候选见实验 13：diagnose 232.04 MHz，W2 IPC 0.5274，未跑 opt、未合入 main。
 
 > 最新主线结果见末尾实验 8：本地 main 为 17,895.8 µm² / 115.12 MHz（opt），
 > W2 IPC 0.6084；前面各实验的“未合并”描述保留为当时的历史状态。
@@ -334,3 +334,25 @@ Fmax +3.31%、面积 -0.18%、IPC不变，收益虽小但无测得 IPC 代价，
 新路径 ROB → LSU 查询级 q_seq 捕获，LSU 段约4.43 ns（周期约87%）。下一轮
 优先优化16项等待 load 最老选择及捕获门控，不继续叠加 IQ 流水拍数。基线报告
 与仿真器为 `build/synth/iq_tree_baseline/`，详见 [iq-select-tree.md](iq-select-tree.md)。
+
+## 实验 13：LSU 等待 load 平衡最老选择（独立检查点）
+
+分支 `feat/freq-lsu-select-tree`，基于 `a239510`，tag `freq-lsu-tree-20261023`。
+等待表最老选择改为平衡树，保持候选过滤、q/r排除和同龄低id优先；获胜seq
+直接进入q_seq，不增加拍数或寄存器，不改请求所有权、重试、容量与恢复语义。
+
+| 指标 | IQ 双候选树 | LSU 最老选择树 |
+| --- | ---: | ---: |
+| W2 / W1 IPC | 0.5274 / 0.5059 | **0.5274 / 0.5059** |
+| diagnose 面积 / MHz | 20,057.360 / 197.11 | **19,980.042 / 232.04** |
+| opt | 未运行 | **未运行** |
+
+W1/W2各19/19、run_all ALL PASS，全部correctness/perf周期与基线相同。
+LSU 292/483项通过，覆盖置换物理槽位、逆龄入队、同龄、批量squash、反压及
+无重复执行。Fmax+17.72%、面积-0.39%、IPC不变，超过200 MHz诊断目标，保留
+独立检查点，未合入main、未推送；一次diagnose，无opt。24个输入hash与RTL一致。
+
+新瓶颈为LSQ已提交store选择→AXI写请求捕获，LSQ段约4.11 ns；出口确认是
+`drain_addr[29]`。下一阶段针对store drain线性最老选择，保持提交/发送顺序和
+sent FIFO/B响应对应。基线报告/仿真器为 `build/synth/lsu_tree_baseline/`，详见
+[lsu-select-tree.md](lsu-select-tree.md)。

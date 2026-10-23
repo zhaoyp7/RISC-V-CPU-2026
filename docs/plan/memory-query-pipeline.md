@@ -85,3 +85,14 @@ q 与 r 可同拍推进；两级 id 都从等待表选择集合排除。消歧�
 
 本阶段测试与测量以 [LSQ 快照实验](../experiments/lsq-query-snapshot.md) 为准；
 上节 156.31 MHz 与 IPC 0.5419/0.5205 为 `eb36c43` 基线，不能当作本候选结果。
+
+## 等待 load 的平衡选择（后续组合优化）
+
+`feat/freq-lsu-select-tree` 基于 `a239510`，将等待表逐项更新最老 seq/id 的扫描
+改为平衡树。候选集合仍排除 q/r 已持有 id 和本拍 squash 的年轻项；同龄低 id
+优先。树直接提供获胜 seq 给 q_seq，其他元数据按获胜 id 读取，不增加拍数。
+
+反压填满、逆龄入队、置换物理 id、同龄及批量 squash 的专项测试检查外部请求
+顺序、tag/data、无重复和可排空。测量结果以
+[LSU 选择树实验](../experiments/lsu-select-tree.md) 为准；不改变本页的请求所有权、
+预留容量、阻塞重试和恢复不变量。

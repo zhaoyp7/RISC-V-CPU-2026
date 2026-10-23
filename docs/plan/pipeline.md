@@ -467,3 +467,17 @@ IPC仍0.5274/0.5059。虽未达到200 MHz，但无测得IPC代价，保留独立
 ROB → LSU q_seq 捕获，LSU段约4.43 ns。下一轮优先检查16项load等待表的
 线性最老选择及q捕获门控，保持预留容量、q/r排除、重试和squash不变量。
 详见 [IQ 选择树实验](../experiments/iq-select-tree.md)。
+
+
+## 17. LSU 等待 load 平衡选择检查点（2026-10-23）
+
+`feat/freq-lsu-select-tree` / `freq-lsu-tree-20261023` 基于 `a239510`，将等待表最老
+选择改为平衡树，并直接传递seq；不增加拍数，保留q/r排除、预留容量、重试与squash。
+W1/W2各19/19、run_all ALL PASS；LSU专项292/483项通过，全部correctness/perf
+周期与基线相同，IPC仍0.5274/0.5059。
+
+diagnose **19,980.042 µm² / 232.04 MHz**，频率+17.72%、面积-0.39%、IPC不变，
+已过200 MHz诊断阶段目标。未跑opt、未合入main、未推送。新瓶颈为LSQ已提交
+store选择→AXI写请求捕获，LSQ段约4.11 ns。下一轮先优化store drain的16项
+线性最老选择，保持提交后发送、按序、反压与sent FIFO/B响应释放语义。
+详见 [LSU 选择树实验](../experiments/lsu-select-tree.md)。

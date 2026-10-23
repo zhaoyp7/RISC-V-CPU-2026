@@ -1,29 +1,28 @@
 # RISC-V CPU 2026 — 协作者交接（P2 功能完成，性能优化中）
 
-## 当前频率实验：IQ 双候选平衡选择树（独立分支）
+## 当前频率实验：LSU 等待 load 的平衡最老选择（独立分支）
 
-分支 `feat/freq-iq-select-tree`，tag `freq-iq-tree-20261023`，基于 `5c2b07c`。
-只改组合选择结构，不增加流水拍数。用户允许 IPC/面积暂时越线，以频率为主。
+分支 `feat/freq-lsu-select-tree`，tag `freq-lsu-tree-20261023`，基于 `a239510`。
+等待表线性扫描改为平衡树，直接传递获胜seq，不增加流水拍数。
 
 | 候选 | W2 / W1 IPC | diagnose 面积 / MHz | opt |
 | --- | ---: | ---: | --- |
-| LSQ 匹配快照 `5c2b07c` | 0.5274 / 0.5059 | 20,093.751 / 190.80 | 未运行 |
-| IQ 双候选树 | **0.5274 / 0.5059** | **20,057.360 / 197.11** | **未运行** |
+| IQ 双候选树 `a239510` | 0.5274 / 0.5059 | 20,057.360 / 197.11 | 未运行 |
+| LSU 最老选择树 | **0.5274 / 0.5059** | **19,980.042 / 232.04** | **未运行** |
 
-同模式 Fmax **+3.31%**、面积 **-0.18%**，IPC 不变，`IPC×Fmax` 约 +3.31%。
-仍未达到200 MHz；因没有增加拍数或测得 IPC 代价且面积略降，保留独立检查点。
-W1/W2 各19/19、完整 run_all ALL PASS；两档全部正确性及六个 perf 周期均与
-基线相同。新 IQ 对拍5档共200,035周期、1,466,117项通过，旧185项仍通过。
+同模式Fmax **+17.72%**、面积 **-0.39%**，IPC不变，`IPC×Fmax`约+17.72%。
+已超过200 MHz诊断阶段目标，保留独立检查点。W1/W2各19/19、run_all ALL PASS，
+全部correctness和两档六个perf周期与基线相同。LSU W1/LSQ8为292项、W2/LSQ16为
+483项通过，新增逆龄入队、置换物理id、同龄优先、q/r排除和批量squash检查。
 
-树同时求完整候选前两名与最老预填候选，省去 lane1 等待 lane0 后重新扫描；
-seq 沿树直接传递。新第一条路径 **ROB → LSU 查询级 q_seq 捕获**，已不经过
-IQ/PRF/LSQ。LSU 段约4.43 ns，下一步针对16项等待 load 的最老选择及捕获门控。
+新第一条路径为 **LSQ已提交store选择 → AXI写请求捕获**，LSQ段约4.11 ns；
+已移出load等待表选择。下一阶段优先优化store drain的16项线性最老选择，
+保持提交后发送、发送顺序和sent FIFO/B响应释放语义。
 
-**本轮只跑一次 diagnose，未跑 opt、未合入 main、未推送**。main 仍是
-`bc795ae`；24个报告输入 hash 已核对。基线报告/仿真器位于
-`build/synth/iq_tree_baseline/`，当前报告位于 `build/synth/diagnose/`。
-`build/synth/opt/` 仍为 main 的旧结果，不能作为本候选结果。
-详见 [IQ 选择树实验](experiments/iq-select-tree.md)。
+**本轮只跑一次diagnose，未跑opt、未合入main、未推送**。main仍为`bc795ae`；
+24个报告输入hash已核对。基线报告/仿真器在 `build/synth/lsu_tree_baseline/`，
+本轮报告位于 `build/synth/diagnose/`；`build/synth/opt/` 仍为main旧结果。
+详见 [LSU 选择树实验](experiments/lsu-select-tree.md)。
 
 ## 最新检查点：ALU 乘法器共享（2026-10-23）
 
