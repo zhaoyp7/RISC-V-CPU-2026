@@ -152,54 +152,111 @@ module issue_queue #(
   // 这样后面的 load 不会被一个地址未知的 store 长期阻塞。
   logic [D-1:0] cand_issue;
   logic [D-1:0] cand_prefill;
-  logic [D-1:0] cand_lane0;
-  logic [D-1:0] chosen;
   logic [IW-1:0] sel_valid;
   logic [IW-1:0] sel_addr_only;
-  logic [7:0]   sel_idx [0:IW-1];
-  logic [31:0]  best_seq;
-  logic [7:0]   best_idx;
-  logic         found;
+  logic [7:0] sel_idx [0:IW-1];
+  logic [31:0] sel_seq [0:IW-1];
 
   always_comb begin
-    cand_issue   = '0;
+    cand_issue = '0;
     cand_prefill = '0;
-    cand_lane0   = '0;
-    // 只使用已寄存的 ready 位选择。CDB 本拍写 PRF / 更新 ready，下一拍
-    // 才参与选择，切断 CDB -> select -> PRF/LSQ 的组合长路径。
+    // CDB 本拍只更新 ready，下一拍才参与选择。
     for (i = 0; i < D; i = i + 1) begin
       cand_issue[i] = valid[i] && !squash_mask[i] &&
                       src1_ready[i] && src2_ready[i];
       cand_prefill[i] = valid[i] && !squash_mask[i] && !addr_sent[i] &&
                         uop[i*DW + `CPU_DISPATCH_IS_STORE_OFF] &&
                         src1_ready[i] && !src2_ready[i];
-      cand_lane0[i] = cand_issue[i] || cand_prefill[i];
-    end
-
-    chosen = '0;
-    for (lane = 0; lane < IW; lane = lane + 1) begin
-      sel_valid[lane] = 1'b0;
-      sel_addr_only[lane] = 1'b0;
-      sel_idx[lane] = '0;
-      best_seq = 32'hffff_ffff;
-      best_idx = '0;
-      found = 1'b0;
-      for (i = 0; i < D; i = i + 1) begin
-        if (((lane == 0) ? cand_lane0[i] : cand_issue[i]) &&
-            !chosen[i] && (!found || (seq[i*32 +: 32] < best_seq))) begin
-          found = 1'b1;
-          best_seq = seq[i*32 +: 32];
-          best_idx = i[7:0];
-        end
-      end
-      if (found) begin
-        sel_valid[lane] = 1'b1;
-        sel_idx[lane] = best_idx;
-        sel_addr_only[lane] = cand_prefill[best_idx] && !cand_issue[best_idx];
-        chosen[best_idx] = 1'b1;
-      end
     end
   end
+
+  generate
+    if (IW <= 2) begin : gen_select_tree
+      localparam integer LEAVES = 1 << $clog2(D);
+      // 扁平候选字段：valid[40] / seq[39:8] / slot[7:0]。
+      // 避免综合前端把 unpacked struct 数组字段误解析为独立无驱动信号。
+      localparam integer CW = 41;
+      // 调用时 lhs 总来自物理 slot 更低的左子树，相等 seq 时保留 lhs。
+      function automatic [CW-1:0] oldest(input logic [CW-1:0] lhs,
+                                             input logic [CW-1:0] rhs);
+        oldest = (rhs[40] && (!lhs[40] || rhs[39:8] < lhs[39:8])) ? rhs : lhs;
+      endfunction
+      wire [CW-1:0] first [0:2*LEAVES-1] /* verilator split_var */;
+      wire [CW-1:0] second [0:2*LEAVES-1] /* verilator split_var */;
+      wire [CW-1:0] prefill [0:2*LEAVES-1] /* verilator split_var */;
+      assign first[0] = '0;
+      assign second[0] = '0;
+      assign prefill[0] = '0;
+      for (genvar g = 0; g < LEAVES; g = g + 1) begin : gen_leaf
+        if (g < D) begin : gen_entry
+          assign first[LEAVES+g] = {cand_issue[g], seq[g*32 +: 32], 8'(g)};
+          assign prefill[LEAVES+g] = {cand_prefill[g], seq[g*32 +: 32], 8'(g)};
+        end else begin : gen_pad
+          assign first[LEAVES+g] = '0;
+          assign prefill[LEAVES+g] = '0;
+        end
+        assign second[LEAVES+g] = '0;
+      end
+      for (genvar g = 1; g < LEAVES; g = g + 1) begin : gen_merge
+        wire right_first = first[2*g+1][40] &&
+                            (!first[2*g][40] ||
+                             first[2*g+1][39:8] < first[2*g][39:8]);
+        assign first[g] = right_first ? first[2*g+1] : first[2*g];
+        // 第二名必为胜方的第二名或败方的第一名；两种比较并行进行。
+        assign second[g] = right_first ? oldest(first[2*g], second[2*g+1]) :
+                                                oldest(second[2*g], first[2*g+1]);
+        assign prefill[g] = oldest(prefill[2*g], prefill[2*g+1]);
+      end
+      wire take_prefill = prefill[1][40] &&
+                           (!first[1][40] || prefill[1][39:8] < first[1][39:8] ||
+                            ((prefill[1][39:8] == first[1][39:8]) &&
+                             (prefill[1][7:0] < first[1][7:0])));
+      // lane0 先预填时，lane1 取完整候选第一名；否则取第二名。
+      // 不再等 lane0 选中后重新扫描整队列，输出 seq 直接沿选择树传递。
+      assign sel_valid[0] = first[1][40] || prefill[1][40];
+      assign sel_addr_only[0] = take_prefill;
+      assign sel_idx[0] = take_prefill ? prefill[1][7:0] : first[1][7:0];
+      assign sel_seq[0] = take_prefill ? prefill[1][39:8] : first[1][39:8];
+      if (IW == 2) begin : gen_lane1
+        assign sel_valid[1] = take_prefill ? first[1][40] : second[1][40];
+        assign sel_addr_only[1] = 1'b0;
+        assign sel_idx[1] = take_prefill ? first[1][7:0] : second[1][7:0];
+        assign sel_seq[1] = take_prefill ? first[1][39:8] : second[1][39:8];
+      end
+    end else begin : gen_select_wide
+      // 保留 IW>2 的通用逐 lane 选择语义；默认后端使用 IW=2。
+      logic [D-1:0] chosen;
+      logic [31:0] best_seq;
+      logic [7:0] best_idx;
+      logic found;
+      integer l, j;
+      always_comb begin
+        chosen = '0;
+        sel_valid = '0;
+        sel_addr_only = '0;
+        for (l = 0; l < IW; l = l + 1) begin
+          best_seq = 32'hffff_ffff;
+          best_idx = '0;
+          found = 1'b0;
+          for (j = 0; j < D; j = j + 1) begin
+            if ((cand_issue[j] || ((l == 0) && cand_prefill[j])) &&
+                !chosen[j] && (!found || seq[j*32 +: 32] < best_seq)) begin
+              found = 1'b1;
+              best_seq = seq[j*32 +: 32];
+              best_idx = j[7:0];
+            end
+          end
+          sel_valid[l] = found;
+          sel_idx[l] = best_idx;
+          sel_seq[l] = best_seq;
+          if (found) begin
+            sel_addr_only[l] = cand_prefill[best_idx] && !cand_issue[best_idx];
+            chosen[best_idx] = 1'b1;
+          end
+        end
+      end
+    end
+  endgenerate
 
   always_comb begin
     out_valid = sel_valid;
@@ -209,7 +266,7 @@ module issue_queue #(
     for (lane = 0; lane < IW; lane = lane + 1) begin
       if (sel_valid[lane]) begin
         out_uop[lane*DW +: DW] = uop[sel_idx[lane]*DW +: DW];
-        out_seq[lane*32 +: 32] = seq[sel_idx[lane]*32 +: 32];
+        out_seq[lane*32 +: 32] = sel_seq[lane];
       end
     end
   end

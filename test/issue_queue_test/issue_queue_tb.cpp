@@ -212,8 +212,10 @@ struct Harness {
 }  // namespace
 
 int main(int argc, char** argv) {
-    Verilated::commandArgs(argc, argv);
-    Vissue_queue dut;
+    VerilatedContext context;
+    context.threads(1);
+    context.commandArgs(argc, argv);
+    Vissue_queue dut{&context};
     Harness h;
     h.dut = &dut;
     h.reset();

@@ -452,3 +452,18 @@ IPC -2.7%，`IPC×Fmax` 约 +18.8%。未到期望 200 MHz，保留独立检查�
 下一阶段优先优化 IQ 最老候选/双 lane 排除的串行选择结构，再按报告评估
 squash 控制分级，暂不继续给 LSQ 增级。完整测量见
 [LSQ 快照实验](../experiments/lsq-query-snapshot.md)。
+
+
+## 16. IQ 双候选平衡树检查点（2026-10-23）
+
+`feat/freq-iq-select-tree` / `freq-iq-tree-20261023` 基于 `5c2b07c`，只调整组合
+选择，平衡树同时给出完整候选前两名和最老 store 预填；seq 直接沿树传递。
+W1/W2各19/19、run_all ALL PASS，全部 correctness/perf 周期与基线相同。
+新IQ对拍5档200,035周期、1,466,117检查通过。
+
+diagnose **20,057.360 µm² / 197.11 MHz**，相对基线频率+3.31%、面积-0.18%，
+IPC仍0.5274/0.5059。虽未达到200 MHz，但无测得IPC代价，保留独立检查点；
+未跑opt、未合入main、未推送。新第一条路径不经过IQ/PRF/LSQ，转到
+ROB → LSU q_seq 捕获，LSU段约4.43 ns。下一轮优先检查16项load等待表的
+线性最老选择及q捕获门控，保持预留容量、q/r排除、重试和squash不变量。
+详见 [IQ 选择树实验](../experiments/iq-select-tree.md)。

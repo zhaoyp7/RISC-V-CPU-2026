@@ -1,6 +1,6 @@
 # 频率实验记录
 
-> 最新独立频率候选见实验 11：diagnose 190.80 MHz，W2 IPC 0.5274，未跑 opt、未合入 main。
+> 最新独立频率候选见实验 12：diagnose 197.11 MHz，W2 IPC 0.5274，未跑 opt、未合入 main。
 
 > 最新主线结果见末尾实验 8：本地 main 为 17,895.8 µm² / 115.12 MHz（opt），
 > W2 IPC 0.6084；前面各实验的“未合并”描述保留为当时的历史状态。
@@ -313,3 +313,24 @@ Fmax +22.1%、面积 +2.0%、W2 IPC -2.7%，`IPC×Fmax` 约 +18.8%。未达期�
 新路径 `ROB → IQ → backend a1 捕获`，IQ 约 4.18 ns（周期约80%）。下一阶段
 优先把双 lane 串行最老选择改为平衡候选选择，保留 store 预填、lane 排除、
 未握手留队和 squash 语义。详见 [lsq-query-snapshot.md](lsq-query-snapshot.md)。
+
+## 实验 12：IQ 双候选平衡选择树（独立检查点）
+
+分支 `feat/freq-iq-select-tree`，基于 `5c2b07c`，tag `freq-iq-tree-20261023`。
+平衡树同时求完整 ready 前两名及最老 store 预填候选，两个 lane 直接选择；
+省去 lane1 依赖 lane0 后重新扫描及 seq 按 id 再读取。保持拍数、唤醒和握手语义。
+
+| 指标 | LSQ 匹配快照 | IQ 双候选树 |
+| --- | ---: | ---: |
+| W2 / W1 IPC | 0.5274 / 0.5059 | **0.5274 / 0.5059** |
+| diagnose 面积 / MHz | 20,093.751 / 190.80 | **20,057.360 / 197.11** |
+| opt | 未运行 | **未运行** |
+
+两档19/19、run_all ALL PASS，全部 correctness/perf 周期与基线相同。
+新独立 IQ scoreboard 5档200,035周期、1,466,117检查通过，原185检查仍通过。
+Fmax +3.31%、面积 -0.18%、IPC不变，收益虽小但无测得 IPC 代价，保留独立
+检查点；未合入 main、未推送，只跑一次 diagnose、无 opt。24个输入 hash 一致。
+
+新路径 ROB → LSU 查询级 q_seq 捕获，LSU 段约4.43 ns（周期约87%）。下一轮
+优先优化16项等待 load 最老选择及捕获门控，不继续叠加 IQ 流水拍数。基线报告
+与仿真器为 `build/synth/iq_tree_baseline/`，详见 [iq-select-tree.md](iq-select-tree.md)。

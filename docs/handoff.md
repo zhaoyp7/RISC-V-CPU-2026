@@ -1,30 +1,29 @@
 # RISC-V CPU 2026 — 协作者交接（P2 功能完成，性能优化中）
 
-## 当前频率实验：LSQ 匹配快照与平衡选择树（独立分支）
+## 当前频率实验：IQ 双候选平衡选择树（独立分支）
 
-分支 `feat/freq-lsq-snapshot`，tag `freq-lsq-snapshot-20261023`，基于 `eb36c43`。
-用户允许 IPC / 面积暂时越线，以正确性和频率为主。
+分支 `feat/freq-iq-select-tree`，tag `freq-iq-tree-20261023`，基于 `5c2b07c`。
+只改组合选择结构，不增加流水拍数。用户允许 IPC/面积暂时越线，以频率为主。
 
 | 候选 | W2 / W1 IPC | diagnose 面积 / MHz | opt |
 | --- | ---: | ---: | --- |
-| load 查询分级 `eb36c43` | 0.5419 / 0.5205 | 19,706.842 / 156.31 | 未运行 |
-| LSQ 匹配快照 | **0.5274 / 0.5059** | **20,093.751 / 190.80** | **未运行** |
+| LSQ 匹配快照 `5c2b07c` | 0.5274 / 0.5059 | 20,093.751 / 190.80 | 未运行 |
+| IQ 双候选树 | **0.5274 / 0.5059** | **20,057.360 / 197.11** | **未运行** |
 
-同模式 Fmax **+22.1%**、面积 **+2.0%**，W2 IPC -2.7%；`IPC×Fmax` 约
-**+18.8%**（趋势比较）。W1/W2 各 19/19、完整 run_all ALL PASS；直接 LSQ
-深度8/16 为 151 / 207 项，LSU W1/LSQ8 与 W2/LSQ16 为 172 / 255 项通过。
-未到原先期望的 200 MHz，但收益明确，保留独立检查点。
+同模式 Fmax **+3.31%**、面积 **-0.18%**，IPC 不变，`IPC×Fmax` 约 +3.31%。
+仍未达到200 MHz；因没有增加拍数或测得 IPC 代价且面积略降，保留独立检查点。
+W1/W2 各19/19、完整 run_all ALL PASS；两档全部正确性及六个 perf 周期均与
+基线相同。新 IQ 对拍5档共200,035周期、1,466,117项通过，旧185项仍通过。
 
-实现：LSQ 第一级保存完整匹配快照，第二级用平衡树选最年轻同字 store。
-LSU r 级同步保存 load 元数据，反压、store 释放复用、flush 同拍替换均已覆盖。
-新第一条路径为 **ROB → IQ → backend a1 捕获**，IQ 约 4.18 ns（周期约80%）；
-下一阶段应优化双 lane 最老候选选择，暂不继续给 LSQ 增级。
+树同时求完整候选前两名与最老预填候选，省去 lane1 等待 lane0 后重新扫描；
+seq 沿树直接传递。新第一条路径 **ROB → LSU 查询级 q_seq 捕获**，已不经过
+IQ/PRF/LSQ。LSU 段约4.43 ns，下一步针对16项等待 load 的最老选择及捕获门控。
 
-**本轮只跑一次 diagnose，未运行 opt，未合入 main、未推送。** main 仍为
-`bc795ae`，旧 opt 115.12 MHz 不能作为本候选结果。24 个报告输入 hash 已核对。
-上一轮报告/仿真器在 `build/synth/lsq_snapshot_baseline/`，本轮输出位于
-`build/synth/diagnose/`，`build/synth/opt/` 仍为 main 的旧结果。
-详见 [LSQ 快照实验](experiments/lsq-query-snapshot.md)。
+**本轮只跑一次 diagnose，未跑 opt、未合入 main、未推送**。main 仍是
+`bc795ae`；24个报告输入 hash 已核对。基线报告/仿真器位于
+`build/synth/iq_tree_baseline/`，当前报告位于 `build/synth/diagnose/`。
+`build/synth/opt/` 仍为 main 的旧结果，不能作为本候选结果。
+详见 [IQ 选择树实验](experiments/iq-select-tree.md)。
 
 ## 最新检查点：ALU 乘法器共享（2026-10-23）
 
