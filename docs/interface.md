@@ -354,11 +354,19 @@ seq_pending保存上一拍实际接收的有效lane数，disp_seq_next=disp_seq+
 当前接收数量留给下一拍结算。组首数值、接收时机、ROB映射建立点及squash空洞
 规则与原实现完全相同，不改变外部dispatch/ready协议。
 
-### I-cache SRAM 地址预选择（频率实验）
+### I-cache SRAM 地址预选择（freq-icache-read-address检查点）
 
 lookup_room只由本地容量和s2接收条件产生，用于提前选择读地址；未使能时addr
 可以变化。read_en有效时仍读取本拍接收的新PC、pending重放或停顿s1的原地址。
 REFILL提前选refill_index，写入仍受原响应与flush条件控制；没有额外读写访问，
 外部取指、响应、refill和flush时序保持原协议。
+
+### I-cache 本地预读（频率实验）
+
+`feat/freq-icache-local-read`在NORMAL且未flush时，lookup_room可触发本地SRAM读，
+无需当拍fetch_valid。只有accept_fetch才建立有效s1；空读数据不进入指令流，
+也不会单独发起refill。所有原有真实读访问仍存在，s1停顿重读、pending重放、
+写使能及flush清理条件不变。此版本增加内部只读访问，不能沿用上一检查点
+“所有SRAM访问次数相同”的等价性结论；外部接受/响应/回填时序保持原协议。
 ROB分支解析、redirect/squash的对外时序不变；请求FIFO保存发请求当拍的预测快照，
 后续训练不得改写在途指令的预测metadata。

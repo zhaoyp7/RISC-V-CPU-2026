@@ -154,12 +154,12 @@ module icache_pipe #(
 
   assign accept_fetch = (state == ST_NORMAL) && !flush && fetch_valid && fetch_ready;
 
-  // 本拍给 SRAM 的读地址：优先新接收的 PC；否则保持 s1 以便 s2 反压时重读。
+  // 有本地容量时预读PC；只有accept_fetch才建立有效s1，空读结果不会进入流水。
+  // s1停顿重读与pending重放仍用原条件，flush当拍仍禁止SRAM访问。
   assign read_en    = (state == ST_NORMAL) && !flush &&
-                      (accept_fetch || load_pending ||
+                      (lookup_room || load_pending ||
                        (s1_valid && !s2_accept));
-  // lookup_room=1 且 read_en=1 时必然接收新PC；否则该预选地址不被使用。
-  // 地址不等待当前 fetch_valid/flush，所有实际读使能仍沿用原握手。
+  // lookup_room时可读未接收PC，结果仅在真正接收且下一拍s1_valid时使用。
   assign read_index = lookup_room ? fetch_index :
                       (load_pending ? pending_pc[INDEX_BITS+1:2] : s1_index);
 

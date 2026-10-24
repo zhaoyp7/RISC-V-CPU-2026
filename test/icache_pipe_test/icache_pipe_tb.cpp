@@ -228,6 +228,14 @@ bool run_directed(Harness& h) {
     h.reset();
     h.fixed_refill_latency = 1;
 
+    // Local SRAM pre-reads must never create accepted instructions or refills.
+    long idle_accepts=h.accepts,idle_responses=h.responses,idle_refills=h.refills;
+    for(int i=0;i<64;++i)h.step(false,0xdead0000u+4*i,bool(i&1));
+    if(h.accepts!=idle_accepts || h.responses!=idle_responses || h.refills!=idle_refills ||
+       h.dut->refill_valid || h.dut->fetch_resp_valid) {
+        h.report("idle pre-read","inactive PCs must not create transactions",0,1,0);ok=false;
+    }
+
     const uint32_t a = 0x00001000u;
     const uint32_t b = 0x00001004u;
     const uint32_t c = 0x00002000u;
@@ -325,6 +333,20 @@ bool run_directed(Harness& h) {
         ok = false;
     }
     printf("hit throughput: %zu instructions in %ld cycles\n", seq.size(), cycles);
+
+    // Bubble reads can overwrite the RAM output, but a real s1 must always
+    // retain the data from its own preceding enabled access.
+    long bubble_refills=h.refills;
+    for(size_t i=0;i<seq.size();++i) {
+        ok &= h.issue(seq[i],true);
+        h.step(false,0xbeef0000u+4*uint32_t(i),true);
+        if(i%2==0)h.step(false,0xcafe0000u+4*uint32_t(i),false);
+    }
+    ok &= h.drain();
+    if(h.refills!=bubble_refills) {
+        h.report("bubble pre-read","idle reads must not evict or corrupt warmed hits",0,
+                 uint32_t(h.refills-bubble_refills),0);ok=false;
+    }
 
     // Hold a hit in s2 and a different hit in s1; inactive fetch PCs must not
     // replace the s1 reread while the response is stalled.
