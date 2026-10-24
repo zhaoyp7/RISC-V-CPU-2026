@@ -1,30 +1,28 @@
 # RISC-V CPU 2026 — 协作者交接（P2 功能完成，性能优化中）
 
-## 当前状态：地址分组进位实验已回退
+## 当前组合检查点：接收数量寄存＋地址分组进位（小收益）
 
-工作分支`feat/freq-lsu-address-prefix`，评审tag `freq-lsu-address-review-20261024`。
-地址加法器候选`bf08056`保存在`freq-lsu-address-prefix-trial-20261024`；收益不足，
-已恢复`5c921b7`的RTL，保留新增LSU地址参考测试。
+`feat/freq-seq-count-pipe`，tag `freq-seq-count-pipe-20261024`，基于`a050c13`。
+seq_pending寄存上一拍实际接收数，disp_seq+seq_pending提前给出本拍组首年龄，
+数值与旧实现完全一致；同时重用已验证的地址分组进位，缩短数据和控制两条路径。
 
-| 版本 | W2 / W1 IPC | diagnose 面积 / MHz |
+| 候选 | W2 / W1 IPC | diagnose 面积 / MHz |
 | --- | ---: | ---: |
-| **当前选定：LSQ寄存占用＋响应队列** | **0.5195 / 0.4989** | **20,389.871 / 290.50** |
-| 分组进位候选（已回退） | 0.5195 / 0.4989 | 20,442.024 / 290.83 |
+| 选定基线 `a050c13` / `5c921b7` | 0.5195 / 0.4989 | 20,389.871 / 290.50 |
+| 地址进位单项（已回退） | 0.5195 / 0.4989 | 20,442.024 / 290.83 |
+| 接收数量寄存＋地址进位组合 | **0.5195 / 0.4989** | **20,441.659 / 293.07** |
 
-候选频率仅+0.114%、面积+0.256%，周期仅改善3.906 ps，不纳入当前候选。
-W1/W2各19/19，全部correctness/perf周期与基线相同；候选最终run_all ALL PASS。
-新增每档4231组操作数通过实际load/store端口对拍，检查进位、回绕、负偏移及反压，
-共63757/63948项检查；回退后的最终run_all也为ALL PASS。
+组合频率+0.887%、面积+0.254%，全部correctness/perf周期不变，整体收益仍小。
+保存独立中间检查点继续筛选，不据此单独合main。W1/W2各19/19、run_all ALL PASS，
+增强backend566/592项及LSU63757/63948项通过；LOCAL_STATS lint通过。
+一次diagnose、24个输入hash一致；基线在`build/synth/seq_count_pipe_baseline/`，
+候选完整报告/仿真器在`build/synth/seq_count_pipe_candidate/`。
 
-地址路径退出首位后，ROB squash→LSU/CDB→分支tag→ROB in_ready→dispatch有效位
-→backend捕获成为最长链。后续需同时考虑IQ/PRF/地址数据通路与ROB接收控制链，
-不再仅凭单条路径退出首位就判定整体有效。
-
-候选一次diagnose，24个输入hash一致；归档`build/synth/lsu_address_prefix_trial/`，
-基线`build/synth/lsu_address_prefix_baseline/`。默认RTL、仿真器、diagnose报告已恢复
-选定版并再次核对24个hash。详见[地址分组进位实验](experiments/lsu-address-prefix.md)。
-未opt、未合main、未推送，main仍为`bc795ae`；当前选定RTL检查点仍为
-`freq-lsq-registered-alloc-20261024`。原opt和历史main报告的归档位置不变。
+年龄与地址加法退出首位，新路径为ROB redirect→cache1 fetch_ready→frontend
+fetch_fire→cache0 SRAM地址。下一轮优先验证读地址预选择，保持所有使能访问的
+地址正确，并保持read_en、写使能、flush与refill排空语义。
+详见[接收数量寄存组合实验](experiments/seq-count-pipe.md)。未opt、未合main、未推送，
+main仍`bc795ae`；原opt及历史报告归档位置不变。
 
 ## 最新检查点：ALU 乘法器共享（2026-10-23）
 

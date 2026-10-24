@@ -517,3 +517,21 @@ diagnose **20,442.024 µm² / 290.83 MHz**，相对基线仅+0.114%频率、+0.2
 后续同时评估数据与控制路径；未合main、未推送，评审tag为
 `freq-lsu-address-review-20261024`。
 详见 [地址分组进位实验](lsu-address-prefix.md)。
+
+## 实验 22：接收数量寄存＋地址进位组合（小收益）
+
+`feat/freq-seq-count-pipe` / `freq-seq-count-pipe-20261024`，基于`a050c13`。
+将输入接收数量寄存为seq_pending，disp_seq+seq_pending提前准备本拍组首，保持
+每组年龄数值不变；同时重用已验证的地址分组进位，处理两条相近瓶颈。
+W1/W2各19/19、run_all ALL PASS，全部correctness/perf周期相同，IPC0.5195/0.4989；
+增强backend566/592项、LSU63757/63948项通过，LOCAL_STATS lint通过。
+
+diagnose **20,441.659 µm² / 293.07 MHz**，相对基线频率+0.887%、面积+0.254%。
+收益仍小，保存独立中间检查点供后续组合，不据此单独合main；一次diagnose，
+24个输入hash一致，无opt、未合main、未推送。候选归档`build/synth/seq_count_pipe_candidate/`，
+基线为`seq_count_pipe_baseline/`。
+
+年龄与地址加法退出首位，新路径经ROB redirect、cache1 ready、frontend fetch_fire
+到cache0 SRAM地址，累计2.647/2.868/3.096/3.312 ns。下一轮优先评估读地址预选择，
+保持所有使能访问和refill/flush语义。
+详见 [组合实验](seq-count-pipe.md)。

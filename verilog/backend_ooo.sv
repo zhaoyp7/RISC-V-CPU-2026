@@ -77,14 +77,17 @@ module backend_ooo #(
   logic [W*DW-1:0]      tail_uop, tail_uop_next;
 
   // unified dispatch sequence for IQ/LSQ squash
-  // next free seq 在接收 dispatch 时递增；每槽保存自己的组首年龄。
+  // 接收数量寄存一拍；本拍组首年龄由寄存状态提前计算，数值与原实现一致。
   logic [31:0]          disp_seq;
+  logic [31:0]          disp_seq_next;
+  logic [3:0]           seq_pending;
   logic [31:0]          skid_seq, tail_seq;
   logic [31:0]          rob_seq [0:`CPU_ROB_DEPTH-1];
   logic [31:0]          squash_seq;
   logic [3:0]           n_disp, n_push;
 
   assign squash_seq = rob_seq[sq_rob];
+  assign disp_seq_next = disp_seq + seq_pending;
 
   always_comb begin
     n_disp = '0;
@@ -727,6 +730,7 @@ module backend_ooo #(
       tail_vmask <= '0;
       tail_uop <= '0;
       disp_seq   <= '0;
+      seq_pending <= '0;
       skid_seq <= '0;
       tail_seq <= '0;
       for (i = 0; i < `CPU_ROB_DEPTH; i = i + 1)
@@ -743,8 +747,10 @@ module backend_ooo #(
                  $time, skid_seq, skid_rob[0 +: RW], skid_vmask);
 `endif
       end
-      if (skid_push && !sq_valid)
-        disp_seq <= disp_seq + n_push;
+      // 结算上一拍已接收的数量；当前ready只进入小的pending寄存器，
+      // 不穿过32位进位链。squash不退回已分配年龄，保留原来的空洞语义。
+      disp_seq <= disp_seq_next;
+      seq_pending <= (skid_push && !sq_valid) ? n_push : '0;
       if (sq_valid) begin
         skid_valid <= 1'b0;
         skid_vmask <= '0;
@@ -768,12 +774,12 @@ module backend_ooo #(
             skid_valid <= 1'b1;
             skid_vmask <= disp_valid;
             skid_uop <= disp_uop_woken;
-            skid_seq <= disp_seq;
+            skid_seq <= disp_seq_next;
           end else begin
             tail_valid <= 1'b1;
             tail_vmask <= disp_valid;
             tail_uop <= disp_uop_woken;
-            tail_seq <= disp_seq;
+            tail_seq <= disp_seq_next;
           end
         end
       end

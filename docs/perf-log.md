@@ -1,30 +1,28 @@
 # 性能记录
 
-## 当前状态：地址分组进位实验已回退
+## 当前组合检查点：接收数量寄存＋地址分组进位（小收益）
 
-工作分支`feat/freq-lsu-address-prefix`，评审tag `freq-lsu-address-review-20261024`。
-地址加法器候选`bf08056`保存在`freq-lsu-address-prefix-trial-20261024`；收益不足，
-已恢复`5c921b7`的RTL，保留新增LSU地址参考测试。
+`feat/freq-seq-count-pipe`，tag `freq-seq-count-pipe-20261024`，基于`a050c13`。
+seq_pending寄存上一拍实际接收数，disp_seq+seq_pending提前给出本拍组首年龄，
+数值与旧实现完全一致；同时重用已验证的地址分组进位，缩短数据和控制两条路径。
 
-| 版本 | W2 / W1 IPC | diagnose 面积 / MHz |
+| 候选 | W2 / W1 IPC | diagnose 面积 / MHz |
 | --- | ---: | ---: |
-| **当前选定：LSQ寄存占用＋响应队列** | **0.5195 / 0.4989** | **20,389.871 / 290.50** |
-| 分组进位候选（已回退） | 0.5195 / 0.4989 | 20,442.024 / 290.83 |
+| 选定基线 `a050c13` / `5c921b7` | 0.5195 / 0.4989 | 20,389.871 / 290.50 |
+| 地址进位单项（已回退） | 0.5195 / 0.4989 | 20,442.024 / 290.83 |
+| 接收数量寄存＋地址进位组合 | **0.5195 / 0.4989** | **20,441.659 / 293.07** |
 
-候选频率仅+0.114%、面积+0.256%，周期仅改善3.906 ps，不纳入当前候选。
-W1/W2各19/19，全部correctness/perf周期与基线相同；候选最终run_all ALL PASS。
-新增每档4231组操作数通过实际load/store端口对拍，检查进位、回绕、负偏移及反压，
-共63757/63948项检查；回退后的最终run_all也为ALL PASS。
+组合频率+0.887%、面积+0.254%，全部correctness/perf周期不变，整体收益仍小。
+保存独立中间检查点继续筛选，不据此单独合main。W1/W2各19/19、run_all ALL PASS，
+增强backend566/592项及LSU63757/63948项通过；LOCAL_STATS lint通过。
+一次diagnose、24个输入hash一致；基线在`build/synth/seq_count_pipe_baseline/`，
+候选完整报告/仿真器在`build/synth/seq_count_pipe_candidate/`。
 
-地址路径退出首位后，ROB squash→LSU/CDB→分支tag→ROB in_ready→dispatch有效位
-→backend捕获成为最长链。后续需同时考虑IQ/PRF/地址数据通路与ROB接收控制链，
-不再仅凭单条路径退出首位就判定整体有效。
-
-候选一次diagnose，24个输入hash一致；归档`build/synth/lsu_address_prefix_trial/`，
-基线`build/synth/lsu_address_prefix_baseline/`。默认RTL、仿真器、diagnose报告已恢复
-选定版并再次核对24个hash。详见[地址分组进位实验](experiments/lsu-address-prefix.md)。
-未opt、未合main、未推送，main仍为`bc795ae`；当前选定RTL检查点仍为
-`freq-lsq-registered-alloc-20261024`。原opt和历史main报告的归档位置不变。
+年龄与地址加法退出首位，新路径为ROB redirect→cache1 fetch_ready→frontend
+fetch_fire→cache0 SRAM地址。下一轮优先验证读地址预选择，保持所有使能访问的
+地址正确，并保持read_en、写使能、flush与refill排空语义。
+详见[接收数量寄存组合实验](experiments/seq-count-pipe.md)。未opt、未合main、未推送，
+main仍`bc795ae`；原opt及历史报告归档位置不变。
 
 ## 最新检查点：ALU 乘法器共享（2026-10-23）
 
@@ -88,6 +86,7 @@ load/store 放入旧的 a0/a1 缓冲。优先做分析和方案设计，单次�
 | 2026-10-24 | 本轮无响应队列对照（已撤回） | W2/16/48/8/2/16/1KB×2 | 0.5272 | 20,261.932 (diag) | 262.23 (diag) | 同一LSQ修改、保留容量修复；见本轮实验说明 |
 | 2026-10-24 | `freq-lsq-registered-alloc-20261024` | W2/16/48/8/2/16/1KB×2 | **0.5195** | **20,389.871 (diag)** | **290.50 (diag)** | LSQ寄存占用＋响应队列；opt未运行、未合main |
 | 2026-10-24 | `freq-lsu-address-prefix-trial-20261024` | W2/16/48/8/2/16/1KB×2 | 0.5195 | 20,442.024 (diag) | 290.83 (diag) | 已回退；仅+0.114%，保留新增测试，opt未运行 |
+| 2026-10-24 | `freq-seq-count-pipe-20261024` | W2/16/48/8/2/16/1KB×2 | 0.5195 | 20,441.659 (diag) | 293.07 (diag) | 接收数量寄存＋地址进位组合；小收益，独立检查点、无opt |
 
 P2 基线 opt 综合：comb 16,361.326、seq 5,648.117、SRAM 2,278.903 µm²，
 min period 17.8320 ns（目标 2 ns，WNS −15.8320 ns）。diagnose 为 25,025.438 µm²、
@@ -228,6 +227,7 @@ ALU，必须先确认 IPC 不低于 0.60。
 | LSQ寄存占用/无响应队列（撤回对照） | 本轮实验说明 | 0.5272 | 0.5057 | 20,261.9 | 262.23 | 未运行 | 未运行 |
 | LSQ寄存占用＋响应队列（选定） | `freq-lsq-registered-alloc-20261024` | **0.5195** | **0.4989** | **20,389.9** | **290.50** | **未运行** | **未运行** |
 | LSU地址分组进位（已回退） | `freq-lsu-address-prefix-trial-20261024` | 0.5195 | 0.4989 | 20,442.0 | 290.83 | 未运行 | 未运行 |
+| 接收数量寄存＋地址进位（组合候选） | `freq-seq-count-pipe-20261024` | 0.5195 | 0.4989 | 20,441.7 | 293.07 | 未运行 | 未运行 |
 
 lane0 非访存流水版相对 C2 opt：面积 **+547.3 µm²（+2.8%）**，Fmax **+31.1%**，IPC **-3.6%**；
 `IPC × Fmax` **+26.4%**。W2/W1 均 19/19，`run_all` ALL PASS。
@@ -292,6 +292,9 @@ latency=10、MAX_CYCLES=50,000,000。
 
 相对响应队列基线，W2/W1 IPC分别下降0.026%/0.017%；本次分配停顿代价较小。
 选定组合版，diagnose 290.50 MHz；相对基线W2 `IPC×Fmax`约+2.10%。
+
+接收数量寄存＋地址进位组合的两档六个perf及19个correctness周期也与上表逐项相同，
+IPC保持0.5195/0.4989；组合频率为293.07 MHz，不重复列相同benchmark表。
 
 地址分组进位候选`bf08056`的两档六个perf及19个correctness周期与上表版本逐项相同，
 因此不重复列相同benchmark表；候选diagnose为20,442.024 / 290.83 MHz，已回退RTL。

@@ -607,6 +607,76 @@ int main(int argc, char** argv) {
     h.expect(all_age && age_prod_seen && fresh_age_seen,"saved group ages preserve exact squash boundary");
     h.expect(dut.backend_ready,"age buffer fully recovers");
 
+    // ---- mixed group sizes, partial-group squash, and queued younger group -
+    for (int cut=0;cut<W;++cut) {
+        h.auto_respond=true;h.reset();h.auto_respond=false;
+        h.write_word(0x7400,100,15);
+        Uop producer;
+        producer.dest=40;producer.rob=1;producer.reg_we=1;
+        producer.is_load=1;producer.wb_sel=WB_MEM;producer.imm=0x7400;
+        h.expect(h.dispatch_one(producer),"partial-boundary producer accepted");
+        for(int i=0;i<32 && h.ld_pending.empty();++i)h.tick();
+        h.expect(h.ld_pending.size()==1,"partial-boundary producer held");
+        for(int base=0;base<8;) {
+            int count=(W==2 && base%3!=0 && base+1<8)?2:1;
+            Uop group[W];
+            for(int lane=0;lane<count;++lane) {
+                int n=base+lane;
+                group[lane].dest=10+n;group[lane].rob=2+n;group[lane].reg_we=1;
+                group[lane].src1=40;group[lane].src1_ready=0;
+                group[lane].b_sel=B_IMM;group[lane].imm=n;
+            }
+            h.expect(count==1?h.dispatch_one(group[0]):h.dispatch_group(group),
+                     "mixed-width older group accepted");
+            base+=count;
+        }
+        Uop boundary[W],younger[W];
+        for(int lane=0;lane<W;++lane) {
+            boundary[lane].dest=50+lane;boundary[lane].rob=10+lane;
+            boundary[lane].reg_we=1;boundary[lane].b_sel=B_IMM;
+            boundary[lane].imm=20+lane;boundary[lane].src1=(lane<=cut)?40:63;
+            boundary[lane].src1_ready=0;
+            younger[lane].dest=52+lane;younger[lane].rob=10+W+lane;
+            younger[lane].reg_we=1;younger[lane].b_sel=B_IMM;
+            younger[lane].imm=30+lane;younger[lane].src1=63;younger[lane].src1_ready=0;
+        }
+        h.expect(h.dispatch_group(boundary),"boundary group buffered");
+        h.expect(h.dispatch_group(younger),"younger group buffered behind boundary");
+        h.expect(!dut.backend_ready,"partial-boundary test fills both slots");
+        bool seen[8]={},kept[W]={},boundary_seen=false,producer_seen=false,fresh_seen=false;
+        auto capture = [&]() {
+            while(!h.cdb_q.empty()) {
+                auto r=h.cdb_q.front();h.cdb_q.pop_front();
+                if(r.first==40) {
+                    h.expect(!producer_seen && r.second==100,"partial-boundary producer returns once");
+                    producer_seen=true;
+                } else if(r.first==63) {
+                    h.expect(!fresh_seen && r.second==7,"fresh producer returns once");fresh_seen=true;
+                } else if(r.first>=10 && r.first<18) {
+                    int n=int(r.first)-10;
+                    h.expect(!seen[n] && r.second==100u+n,"all older owners retained once");seen[n]=true;
+                } else if(r.first>=50 && r.first<50+W) {
+                    int lane=int(r.first)-50;
+                    h.expect(lane<=cut && !kept[lane] && r.second==120u+lane,
+                             "squash retains exactly the boundary prefix");
+                    kept[lane]=true;if(lane==cut)boundary_seen=true;
+                } else h.expect(false,"younger buffered group must not complete");
+            }
+        };
+        h.auto_respond=true;
+        for(int i=0;i<256 && !boundary_seen;++i){h.tick();capture();}
+        h.expect(boundary_seen,"selected partial-group boundary executes");
+        h.squash_one(10+cut);
+        Uop fresh;fresh.dest=63;fresh.rob=30;fresh.reg_we=1;
+        fresh.a_sel=A_ZERO;fresh.b_sel=B_IMM;fresh.imm=7;
+        h.expect(h.dispatch_one(fresh),"fresh group accepted after partial squash");
+        for(int i=0;i<128;++i){h.tick();capture();}
+        bool correct=producer_seen && fresh_seen && dut.backend_ready;
+        for(bool v:seen)correct &= v;
+        for(int lane=0;lane<W;++lane)correct &= kept[lane]==(lane<=cut);
+        h.expect(correct,"group ages preserve order across width changes and recovery");
+    }
+
     // ---- W=2 dispatch absorption -----------------------------------------
     if (W == 2) {
         h.reset();

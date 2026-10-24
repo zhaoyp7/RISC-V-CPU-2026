@@ -346,5 +346,12 @@ redirect不丢已接受的训练。BPU独立模块同拍旁路协议保持不变
 请求FIFO仍保存use2和预测快照；只有队首use2=1才消费第二路响应，单条请求
 不会误消费后续双条请求的第二路数据。decode FIFO空间只计实际rename出队。
 redirect/reset同拍清请求、响应和decode队列；I-cache原flush即时生效。
+
+### dispatch 年龄接收数量寄存（频率组合实验）
+
+seq_pending保存上一拍实际接收的有效lane数，disp_seq_next=disp_seq+seq_pending
+提前计算本拍组首；前后槽在接收时保存disp_seq_next。disp_seq每拍结算pending，
+当前接收数量留给下一拍结算。组首数值、接收时机、ROB映射建立点及squash空洞
+规则与原实现完全相同，不改变外部dispatch/ready协议。
 ROB分支解析、redirect/squash的对外时序不变；请求FIFO保存发请求当拍的预测快照，
 后续训练不得改写在途指令的预测metadata。
