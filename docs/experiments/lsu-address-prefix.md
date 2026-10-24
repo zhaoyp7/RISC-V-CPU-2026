@@ -95,7 +95,19 @@ Fmax仅+0.114%，面积+52.153 µm²（+0.256%），IPC与全部周期相同。
 →core dispatch[150]有效位（2.619 ns）→backend接收相关寄存器（3.384 ns）。
 另一条接近原上限的控制链限制了总频率，单独改变加法结构收益很小。
 
-本轮不将此RTL纳入当前候选：保存trial代码与测量后回退到5c921b7的LSU，保留
+本轮不将此RTL纳入当前候选：保存trial代码与测量后已回退到5c921b7的LSU，保留
 新增地址参考测试，供后续组合优化验证。后续应同时评估IQ/PRF/AGU数据通路与
 ROB/CDB/dispatch控制链；不能仅凭一条路径退出首位就判定整体优化有效。
 无opt、未合main、未推送。
+
+## 回退与最终状态
+
+候选提交`bf08056`、tag `freq-lsu-address-prefix-trial-20261024`保留完整RTL和测试。
+已将verilog/lsu.sv恢复为5c921b7原文件，默认仿真器从基线归档恢复；默认diagnose
+目录恢复原组合版的完整报告与网表，24个输入hash再次通过。当前选定频率仍为
+290.50 MHz，候选290.83 MHz只作为被撤回实验数据，不混用其报告描述当前RTL。
+
+保留新增参考测试与README，最终状态将保存于`freq-lsu-address-review-20261024`。
+回退后完整run_all为ALL PASS，日志为`/tmp/lsu-address-prefix-unit-restored.log`，
+地址检查63757/63948项再次通过。无需再综合字节一致的原RTL，当前报告来自此前完成的
+有效综合。对照和回退均没有运行opt，也没有合main或推送。

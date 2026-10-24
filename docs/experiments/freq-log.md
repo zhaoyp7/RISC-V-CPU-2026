@@ -494,3 +494,26 @@ IPC 0.5195/0.4989。相对上一轮频率+2.13%、面积-0.037%、W2 `IPC×Fmax`
 `build/synth/lsq_registered_alloc_baseline/`，两个候选分别归档在
 `lsq_registered_alloc_buffered/`和`lsq_registered_alloc_direct/`。
 详见 [LSQ寄存占用实验](lsq-registered-alloc.md)。
+
+## 实验 21：LSU 地址分组进位（收益不足，已回退）
+
+`feat/freq-lsu-address-prefix`，基于`5c921b7`；候选`bf08056` /
+`freq-lsu-address-prefix-trial-20261024`。LSU地址改为4位局部双候选和＋三级分组
+进位，保持模2^32结果、访存所有权和拍数。
+
+W1/W2各19/19，全部correctness/perf周期相同；最终候选run_all ALL PASS。
+每档4231组操作数经真实load/store端口对拍，含全位进位边界、回绕、负偏移和
+随机数、两拍反压稳定；63757/63948项通过。一轮早期run_all遇到Verilator线程池
+内部错误250，重跑完整矩阵通过。一次diagnose、24个输入hash一致，无opt。
+
+diagnose **20,442.024 µm² / 290.83 MHz**，相对基线仅+0.114%频率、+0.256%面积，
+最小周期3.4424→3.4385 ns。地址路径退出首位，另一ROB/LSU/CDB/分支tag/ROB ready
+控制链到dispatch有效位及backend捕获成为最长链，限制整体收益。
+
+决定回退RTL，保留trial代码与新增测试；当前仍选定**20,389.871 / 290.50 MHz**。
+默认RTL、仿真器和报告已恢复且24个hash核对一致，回退后完整run_all也ALL PASS。
+候选归档为
+`build/synth/lsu_address_prefix_trial/`，基线为`lsu_address_prefix_baseline/`。
+后续同时评估数据与控制路径；未合main、未推送，评审tag为
+`freq-lsu-address-review-20261024`。
+详见 [地址分组进位实验](lsu-address-prefix.md)。
