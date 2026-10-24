@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <deque>
+#include <random>
 #include <utility>
 #include <vector>
 
@@ -66,6 +67,7 @@ struct Harness {
     uint8_t mem[1 << 16] = {};
     bool auto_respond = true;
     bool load_ready = true;
+    bool store_ready = true;
     long checks = 0;
     long fails = 0;
     uint32_t seq_base = 0;
@@ -97,7 +99,7 @@ struct Harness {
 
         // Memory model: one response per cycle, in request order.
         dut->ld_req_ready = load_ready;
-        dut->st_req_ready = 1;
+        dut->st_req_ready = store_ready;
         const bool ld_resp = auto_respond && !ld_pending.empty();
         const bool st_resp = auto_respond && !st_pending.empty();
         dut->ld_resp_valid = ld_resp ? 1 : 0;
@@ -168,6 +170,7 @@ struct Harness {
     void reset() {
         auto_respond = true;
         load_ready = true;
+        store_ready = true;
         dut->reset = 1;
         clear_inputs();
         for (int i = 0; i < 4; ++i) tick();
@@ -291,6 +294,46 @@ struct Harness {
         }
         expect(false, "load result timeout");
         return false;
+    }
+
+    void address_case(uint32_t base, uint32_t imm, bool store) {
+        // Independent arithmetic reference; observe only real LSU ports.
+        const uint32_t want = uint32_t(uint64_t(base) + uint64_t(imm));
+        const uint32_t data = 0x89abcdefu ^ base ^ imm;
+        load_ready = store;
+        store_ready = !store;
+        expect(alloc(0, 1, store), "AGU alloc");
+        Uop u;
+        u.dest=7; u.lsq=0; u.rob=1; u.imm=imm;
+        u.is_store=store; u.is_load=!store;
+        if (!store) write_word(want, data, 15);
+        expect(issue(u, base, data), "AGU issue");
+        if (store) commit(0, true, false);
+        for (int i=0; i<16 && !(store?dut->st_req_valid:dut->ld_req_valid); ++i) tick();
+        expect(store?dut->st_req_valid:dut->ld_req_valid, "AGU request arrives");
+        auto correct = [&]() {
+            return store ? (dut->st_req_valid && dut->st_req_addr==want &&
+                            dut->st_req_wdata==data && dut->st_req_wstrb==15)
+                         : (dut->ld_req_valid && dut->ld_req_addr==want);
+        };
+        bool ok=correct();
+        expect(ok, "AGU modulo-32-bit address and store payload");
+        if(!ok)printf("  base=%08x imm=%08x want=%08x got=%08x store=%d\n",
+                      base,imm,want,uint32_t(store?dut->st_req_addr:dut->ld_req_addr),store);
+        for (int i=0; i<2; ++i) {
+            // No new issue: a held request must ignore changing input operands.
+            dut->issue_src1=base^0xffffffffu;
+            set_field(dut->issue_uop,O_IMM,32,imm^0xaaaaaaaa);
+            tick();expect(correct(), "AGU registered request stable under backpressure");
+        }
+        clear_inputs();load_ready=true;store_ready=true;
+        if (store) {
+            expect(wait_idle("AGU store timeout"), "AGU store completes");
+            expect(read_word(want)==data,"AGU store writes reference address");
+        } else {
+            wait_load_result(data,7,"AGU load reads reference address");
+            commit(0,false,true);results.clear();
+        }
     }
 
     void expect(bool ok, const char* what) {
@@ -721,6 +764,33 @@ int main(int argc, char** argv) {
         for (int id : expected_ids) h.commit(id, false, true);
         h.expect(h.wait_idle("tree arbitration drain"), "tree arbitration idle");
     }
+
+    // ---- address carry boundaries, wraparound and arbitrary immediates -----
+    h.reset();
+    std::vector<std::pair<uint32_t,uint32_t>> addresses = {
+        {0,0},{0xffffffffu,1},{1,0xffffffffu},{0x80000000u,0x80000000u},
+        {0x7fffffffu,1},{0,0xffffffffu},{0xffffffffu,0xffffffffu},
+    };
+    for(unsigned bit=1;bit<=32;++bit) {
+        uint32_t mask=uint32_t((uint64_t(1)<<bit)-1);
+        addresses.push_back({mask,1});addresses.push_back({1,mask});
+        addresses.push_back({~mask,mask});addresses.push_back({~mask,1});
+    }
+    std::mt19937 random(0x20261024);
+    for(int i=0;i<4096;++i) {
+        uint32_t a=random(),b=random();
+        if(i%4==0) { // sign-extended 12-bit offsets without signed shifts
+            b &= 0xfff;
+            if(b&0x800)b |= 0xfffff000u;
+        }
+        addresses.push_back({a,b});
+    }
+    for(const auto& pair:addresses) {
+        h.address_case(pair.first,pair.second,false);
+        h.address_case(pair.first,pair.second,true);
+    }
+    printf("AGU reference: %zu operand pairs, load/store ports, two stalled cycles each\n",
+           addresses.size());
 
     // ---- reset -----------------------------------------------------------
     h.reset();

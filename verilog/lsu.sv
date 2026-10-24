@@ -112,7 +112,44 @@ module lsu #(
   assign issue_is_load      = issue_uop[`CPU_DISPATCH_IS_LOAD_OFF];
   assign issue_is_store     = issue_uop[`CPU_DISPATCH_IS_STORE_OFF];
   assign issue_illegal      = issue_uop[`CPU_DISPATCH_ILLEGAL_OFF];
-  assign issue_addr         = issue_src1 + issue_imm;
+  // 4-bit 局部和并行预计算；8 组进位用三级前缀合并，避免跨32位串行传播。
+  // 结果仍是模 2^32 的 src1+imm，不增加访存级或改变接收时机。
+  function automatic [31:0] address_add(input logic [31:0] a,
+                                       input logic [31:0] b);
+    logic [4:0] sum0 [0:7];
+    logic [3:0] sum1 [1:7];
+    logic [7:0] group_p [0:3], group_g [0:3];
+    integer block_idx, level_idx;
+    begin
+      for (block_idx = 0; block_idx < 8; block_idx = block_idx + 1) begin
+        sum0[block_idx] = {1'b0,a[block_idx*4 +: 4]} +
+                          {1'b0,b[block_idx*4 +: 4]};
+        if (block_idx != 0)
+          sum1[block_idx] = a[block_idx*4 +: 4] + b[block_idx*4 +: 4] + 4'd1;
+        group_p[0][block_idx] = &(a[block_idx*4 +: 4] ^ b[block_idx*4 +: 4]);
+        group_g[0][block_idx] = sum0[block_idx][4];
+      end
+      for (level_idx = 0; level_idx < 3; level_idx = level_idx + 1) begin
+        for (block_idx = 0; block_idx < 8; block_idx = block_idx + 1) begin
+          if (block_idx >= (1 << level_idx)) begin
+            group_g[level_idx+1][block_idx] = group_g[level_idx][block_idx] |
+                (group_p[level_idx][block_idx] &
+                 group_g[level_idx][block_idx-(1 << level_idx)]);
+            group_p[level_idx+1][block_idx] = group_p[level_idx][block_idx] &
+                 group_p[level_idx][block_idx-(1 << level_idx)];
+          end else begin
+            group_g[level_idx+1][block_idx] = group_g[level_idx][block_idx];
+            group_p[level_idx+1][block_idx] = group_p[level_idx][block_idx];
+          end
+        end
+      end
+      address_add[3:0] = sum0[0][3:0];
+      for (block_idx = 1; block_idx < 8; block_idx = block_idx + 1)
+        address_add[block_idx*4 +: 4] = group_g[3][block_idx-1] ?
+                                       sum1[block_idx] : sum0[block_idx][3:0];
+    end
+  endfunction
+  assign issue_addr = address_add(issue_src1, issue_imm);
 
   // ---- 写掩码 / 写数据 ----------------------------------------------------
   function automatic [3:0] make_wstrb(input logic [1:0] size,
