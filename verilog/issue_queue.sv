@@ -211,8 +211,7 @@ module issue_queue #(
       for (genvar g = 0; g < D; g = g + 1) begin : gen_rank
         // 树节点只记录是否存在、是否至少两个更老的完整候选。
         // 不使用串行加法统计数量，也不再在选择树每层比较32位seq。
-        wire any_older [0:2*LEAVES-1] /* verilator split_var */;
-        wire multi_older [0:2*LEAVES-1] /* verilator split_var */;
+        wire [2*LEAVES-1:0] any_older, multi_older;
         assign any_older[0] = 1'b0;
         assign multi_older[0] = 1'b0;
         for (genvar h = 0; h < LEAVES; h = h + 1) begin : gen_leaf

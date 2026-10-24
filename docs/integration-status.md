@@ -1,9 +1,11 @@
 # 集成状态（P1 完成，P2 进入性能优化）
 
-## 四轮已完成：最终选择402.36 MHz，第四轮trial将回退
+## 四轮已完成：保留402.36 MHz，第四轮已回退
 
 当前分支`feat/freq-four-rounds`，最终保留第三轮 `ba7ceb6` / `freq-r3-age-matrix-20261024` 的RTL。
-第四轮trial完整归档后恢复第三轮；默认报告/仿真器的恢复核对尚在进行。
+最终标签`freq-four-rounds-best-20261024`，第四轮trial为`3cb56ae`。
+第三轮RTL、默认报告和仿真器均已恢复，24个输入hash匹配，源码逐文件与ba7ceb6一致。
+恢复后新增CDB四档69,797项再次通过，LOCAL_STATS lint通过（保留已说明的树节点假依赖警告）。
 
 | 轮次 | 改动 | diagnose面积 µm² | diagnose MHz |
 | --- | --- | ---: | ---: |

@@ -111,6 +111,21 @@ CDB段本身约0.370→0.379 ns，前后段也变慢；并行RTL表达未转化�
 保留新增CDB穷举参考及四档测试，回退RTL。第三轮原packed节点的Verilator UNOPTFLAT
 假依赖警告随精确恢复保留，实际结构无反馈、完整回归通过；不以警告清理换取4.25%频率损失。
 
+## 最终恢复核对
+
+第四轮trial为3cb56ae / freq-r4-cdb-parallel-trial-20261024；最终恢复提交标签
+`freq-four-rounds-best-20261024`，只恢复RTL，保留新增CDB精确仲裁及四档测试。
+当前24个综合输入逐文件与ba7ceb6一致，默认diagnose与第三轮归档一致，W2/W1仿真器
+与对应归档字节一致。恢复已验证的完整快照，不追加第五轮或重新综合。
+恢复后CDB四档69,797项零失败，LOCAL_STATS lint退出0；无IMPLICIT/UNDRIVEN/LATCH，
+只有第三轮packed树节点的两条UNOPTFLAT假依赖提示。结构0 problems和单向连接关系
+支持此判断；完整第三轮W1/W2及run_all结果仍对应精确恢复后的源码。
+最终额外日志位于`/tmp/freq-four-final-{cdb,local-stats-lint}.log`，另存于
+`build/synth/four_rounds_final/`。四轮总核对结果在该目录的results.json。
+
+后续若获新授权，优先研究ROB完成tag搜索的动态索引，以及取消/结果仲裁的长链；
+本批不继续实验，也不启动opt或合并main。402.36 MHz仍为diagnose值。
+
 ## 复现与归档约定
 
 每轮使用同一官方filelist和默认配置；W1包装器仅增加CPU_ISSUE_WIDTH=1。
