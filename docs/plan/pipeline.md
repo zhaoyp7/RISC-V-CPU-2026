@@ -705,3 +705,10 @@ valid保持原br_issue，PC/tag/目标等直接输出，避免握手门控tag再
 W1/W2各19/19、run_all ALL PASS，两档perf周期相同；一次diagnose24个hash匹配。
 20,430.433 µm² / 322.52 MHz，频率+0.0315%、面积-0.05585%，仅作为组合中间对照。
 下一轮加入IQ tag树验证组合。完整归档`build/synth/freq_r1_branch_payload/`，无opt。
+
+## 32. 四轮2，branch payload＋IQ tag树
+
+第一轮上加入6637367的IQ tag树。W1/W2各19/19、run_all ALL PASS，两档perf周期相同。
+一次diagnose24个hash匹配，20,426.671 µm² / 340.77 MHz，较本批次起点频率+5.69%、面积-0.074%。
+保留组合，tag freq-r2-iq-combined-20261024，无opt。首条IQ→PRF→AGU→LSQ仍为2.875 ns到达。
+第三轮继续缩短IQ年龄选择，详见四轮记录。归档`build/synth/freq_r2_iq_combined/`。

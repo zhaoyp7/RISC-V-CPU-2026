@@ -156,6 +156,8 @@ module issue_queue #(
   logic [IW-1:0] sel_addr_only;
   logic [7:0] sel_idx [0:IW-1];
   logic [31:0] sel_seq [0:IW-1];
+  logic [PW-1:0] sel_src1_tag [0:IW-1];
+  logic [PW-1:0] sel_src2_tag [0:IW-1];
 
   always_comb begin
     cand_issue = '0;
@@ -173,9 +175,10 @@ module issue_queue #(
   generate
     if (IW <= 2) begin : gen_select_tree
       localparam integer LEAVES = 1 << $clog2(D);
-      // 扁平候选字段：valid[40] / seq[39:8] / slot[7:0]。
+      // 候选低位：valid[40] / seq[39:8] / slot[7:0]，高位携带两个源 tag。
+      // tag 随年龄选择一起归并，避免选出 slot 后再走一次动态索引 mux。
       // 避免综合前端把 unpacked struct 数组字段误解析为独立无驱动信号。
-      localparam integer CW = 41;
+      localparam integer CW = 41 + 2*PW;
       // 调用时 lhs 总来自物理 slot 更低的左子树，相等 seq 时保留 lhs。
       function automatic [CW-1:0] oldest(input logic [CW-1:0] lhs,
                                              input logic [CW-1:0] rhs);
@@ -189,8 +192,10 @@ module issue_queue #(
       assign prefill[0] = '0;
       for (genvar g = 0; g < LEAVES; g = g + 1) begin : gen_leaf
         if (g < D) begin : gen_entry
-          assign first[LEAVES+g] = {cand_issue[g], seq[g*32 +: 32], 8'(g)};
-          assign prefill[LEAVES+g] = {cand_prefill[g], seq[g*32 +: 32], 8'(g)};
+          assign first[LEAVES+g] = {src2_tag[g*PW +: PW], src1_tag[g*PW +: PW],
+                                   cand_issue[g], seq[g*32 +: 32], 8'(g)};
+          assign prefill[LEAVES+g] = {src2_tag[g*PW +: PW], src1_tag[g*PW +: PW],
+                                     cand_prefill[g], seq[g*32 +: 32], 8'(g)};
         end else begin : gen_pad
           assign first[LEAVES+g] = '0;
           assign prefill[LEAVES+g] = '0;
@@ -217,11 +222,15 @@ module issue_queue #(
       assign sel_addr_only[0] = take_prefill;
       assign sel_idx[0] = take_prefill ? prefill[1][7:0] : first[1][7:0];
       assign sel_seq[0] = take_prefill ? prefill[1][39:8] : first[1][39:8];
+      assign sel_src1_tag[0] = take_prefill ? prefill[1][41 +: PW] : first[1][41 +: PW];
+      assign sel_src2_tag[0] = take_prefill ? prefill[1][41+PW +: PW] : first[1][41+PW +: PW];
       if (IW == 2) begin : gen_lane1
         assign sel_valid[1] = take_prefill ? first[1][40] : second[1][40];
         assign sel_addr_only[1] = 1'b0;
         assign sel_idx[1] = take_prefill ? first[1][7:0] : second[1][7:0];
         assign sel_seq[1] = take_prefill ? first[1][39:8] : second[1][39:8];
+        assign sel_src1_tag[1] = take_prefill ? first[1][41 +: PW] : second[1][41 +: PW];
+        assign sel_src2_tag[1] = take_prefill ? first[1][41+PW +: PW] : second[1][41+PW +: PW];
       end
     end else begin : gen_select_wide
       // 保留 IW>2 的通用逐 lane 选择语义；默认后端使用 IW=2。
@@ -249,6 +258,8 @@ module issue_queue #(
           sel_valid[l] = found;
           sel_idx[l] = best_idx;
           sel_seq[l] = best_seq;
+          sel_src1_tag[l] = src1_tag[best_idx*PW +: PW];
+          sel_src2_tag[l] = src2_tag[best_idx*PW +: PW];
           if (found) begin
             sel_addr_only[l] = cand_prefill[best_idx] && !cand_issue[best_idx];
             chosen[best_idx] = 1'b1;
@@ -272,6 +283,8 @@ module issue_queue #(
       out_addr_only[lane] = sel_addr_only[lane] && out_valid[lane];
       if (sel_valid[lane]) begin
         out_uop[lane*DW +: DW] = uop[sel_idx[lane]*DW +: DW];
+        out_uop[lane*DW + `CPU_DISPATCH_SRC1_TAG_OFF +: PW] = sel_src1_tag[lane];
+        out_uop[lane*DW + `CPU_DISPATCH_SRC2_TAG_OFF +: PW] = sel_src2_tag[lane];
         out_seq[lane*32 +: 32] = sel_seq[lane];
       end
     end

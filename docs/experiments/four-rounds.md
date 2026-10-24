@@ -27,6 +27,20 @@
 单项收益很小，保留为第二轮组合的中间对照，不宣称取得显著频率提升。
 归档`build/synth/freq_r1_branch_payload/`，日志`/tmp/freq-r1-branch-payload-*.log`。
 
+## 第二轮：branch update解耦＋IQ tag树
+
+以第一轮5a9b982为基线，恢复6637367的issue_queue tag树实现，其余RTL不变。
+两个源tag随first/second/prefill候选树传递，输出tag不再等待物理slot索引整个uop。
+原最老优先、store预填、late squash、registered wake及双lane独立反压不变；无额外拍数。
+本轮专门验证两个局部改动的组合效果，不以单项路径缩短作为采用依据。
+W1/W2各19/19、run_all ALL PASS、配置检查通过，两档perf六项周期与初始基线相同。
+一次diagnose、24个输入hash一致：20,426.670980 µm² / 340.765391 MHz，
+最小周期2.93457031 ns，WNS -0.934097 ns；相对初始基线频率+5.6905%、面积-0.07425%。
+相对第一轮频率+5.657%，面积-3.762 µm²。保留组合，tag为freq-r2-iq-combined-20261024。
+首条路径仍是IQ→PRF→LSU地址→LSQ，累计1.603/1.920/2.712/2.875 ns。
+归档目录`build/synth/freq_r2_iq_combined/`。第三轮优先改进入队年龄信息的保存方式，
+将反复比较32位seq的工作移出发射选择，不增加发射拍数。
+
 ## 复现与归档约定
 
 每轮使用同一官方filelist和默认配置；W1包装器仅增加CPU_ISSUE_WIDTH=1。
