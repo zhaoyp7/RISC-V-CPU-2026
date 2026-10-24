@@ -22,6 +22,16 @@ RTL未改，沿用已通过的W1/W2各19/19、run_all ALL PASS；IPC仍为0.5221
 合并后验证树与已测分支一致，diagnose/opt的24个源码hash均匹配，沿用既有测试，不重复综合。
 详见[opt同源对比及合并记录](experiments/iq-age-matrix-opt.md)。
 
+## 当前IPC统计已刷新（2026-10-25）
+
+主线六项perf的普通/LOCAL_STATS版答案、输入、周期逐项相同，IPC0.5221；功能RTL未改。
+qsort/rsort的ROB入口容量不足42.83%/57.41%，队首load未完成51.12%/55.37%，
+其中已发请求等返回37.90%/48.56%。仅剩一槽的容量状态占21.36%/29.43%，不等于保证能回收的周期。
+当前活跃load执行级消歧阻塞0～1.24%周期；本拍wake机会1.35%～17.80%，不能直接折算IPC增益。
+下一步先评估单槽接收机会与load关键依赖链/有效窗口，不沿用2026-10-22的旧瓶颈结论。
+复现tools/perf_stats/collect.py，原始数据build/perf_stats_20261025/results.json，
+详见[当前main统计](experiments/main-stats-20261025.md)。阶段合计、互斥及软件提交数检查均通过。
+
 ## 最新检查点：ALU 乘法器共享（2026-10-23）
 
 本地 `main` 已纳入乘法器共享，检查点 tag `alu-shared-mul-20261023`，未推送远端。
