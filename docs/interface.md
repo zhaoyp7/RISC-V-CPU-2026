@@ -368,5 +368,13 @@ REFILL提前选refill_index，写入仍受原响应与flush条件控制；没有
 也不会单独发起refill。所有原有真实读访问仍存在，s1停顿重读、pending重放、
 写使能及flush清理条件不变。此版本增加内部只读访问，不能沿用上一检查点
 “所有SRAM访问次数相同”的等价性结论；外部接受/响应/回填时序保持原协议。
+
+### 前端响应按寄存容量入队（频率组合实验）
+
+`feat/freq-frontend-response-capacity`中，decode响应入队只使用寄存fq_count计算
+至少两个空闲槽位，不借用当拍rename出队空间，也不以backend_ready阻止已有响应
+入队。满队列释放沿后才复用容量；请求FIFO仍保持use2与预测快照配对。
+新取指请求仍受backend_ready及原请求容量条件限制，rename消费仍按rename_ready。
+redirect/reset保持原清理优先级，响应缓冲不能覆盖未消费的decode数据。
 ROB分支解析、redirect/squash的对外时序不变；请求FIFO保存发请求当拍的预测快照，
 后续训练不得改写在途指令的预测metadata。

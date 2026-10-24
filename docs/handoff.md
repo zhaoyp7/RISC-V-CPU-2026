@@ -1,29 +1,30 @@
 # RISC-V CPU 2026 — 协作者交接（P2 功能完成，性能优化中）
 
-## 当前频率检查点：I-cache SRAM 地址预选择
+## 当前频率检查点：本地预读＋响应容量解耦
 
-`feat/freq-icache-read-address`，tag `freq-icache-read-address-20261024`，基于`fd07456`。
-lookup_room提前选择读地址，REFILL按寄存状态提前选写地址；所有读写使能、访问
-地址、次数和cache状态时序保持原语义，未使能时地址允许不同。
+`feat/freq-frontend-response-capacity`，tag `freq-frontend-response-capacity-20261024`，基于`4dc81b2`。
+保留I-cache本地预读；响应入队只看寄存空闲容量，不借当拍rename出队，也不等待backend ready。
+新请求与rename消费仍按原握手，满decode队列在释放沿后才复用容量。
 
 | 候选 | W2 / W1 IPC | diagnose 面积 / MHz（W2） |
 | --- | ---: | ---: |
-| 接收数量寄存＋地址进位 `fd07456` | 0.5195 / 0.4989 | 20,441.659 / 293.07 |
-| **I-cache地址预选择** | **0.5195 / 0.4989** | **20,437.314 / 300.03** |
+| 地址预选择基线 `cdddde6` | 0.5195 / 0.4989 | 20,437.314 / 300.03 |
+| 本地预读trial `4dc81b2` | 0.5195 / 0.4989 | 20,437.519 / 300.29 |
+| **本地预读＋响应容量解耦** | **0.5221 / 0.4988** | **20,441.849 / 322.42** |
 
-频率+2.37%、面积-0.021%，全部correctness/perf周期不变；相对290.50 MHz原基线，
-两阶段组合频率+3.28%、面积+0.233%。保留独立检查点；300.03 MHz是diagnose估计，
-尚无opt最终验收及充分频率余量，不据此声称课程阶段通过。
-W1/W2各19/19、run_all ALL PASS；索引4/10各10万拍随机矩阵，19247/71501次响应对拍通过，
-新增s1重读、pending重放及flush/回填同拍检查通过；LOCAL_STATS lint通过。
-一次diagnose，24个输入hash一致，无opt、未合main、未推送，main仍`bc795ae`。
+相对300.03 MHz基线：频率+7.46%、面积+0.022%、W2 IPC+0.509%，W2 `IPC×Fmax`约+8.01%。
+W1 IPC仅下降0.006%。已有约22.42 MHz的初步诊断余量，仍未做opt最终验收。
+W1/W2各19/19、run_all ALL PASS；增强前端293/297项、backend566/592项、LSU63757/63948项通过，
+LOCAL_STATS lint通过。两档perf已重测，不能沿用旧周期表。
+本轮两版各一次diagnose，顺序运行，24个输入hash均一致；无opt、未合main、未推送，main仍bc795ae。
 
-地址路径退出首位，新最长路径为ROB in_ready→rename in_ready→frontend fetch_fire
-→I-cache read_en→SRAM CE。下一轮优先研究读使能本地化或受控请求缓冲，验证s1/s2、
-pending及flush配对；乘法器不在当前首要关键路径，本轮未修改ALU。
-基线为`build/synth/icache_read_address_baseline/`，完整候选在
-`build/synth/icache_read_address_candidate/`，默认报告对应当前RTL。
-详见[I-cache地址预选择实验](experiments/icache-read-address.md)。原opt及历史main归档位置不变。
+前端CE及响应入队路径退出首位，新最长路径为IQ源tag选择→PRF读→LSU地址加法→LSQ捕获，
+累计1.759/2.088/2.879/3.042 ns。下一轮优先分析IQ输出tag选择与PRF地址形成，继续积累余量。
+当前组合增加本地SRAM只读访问，额外空读不建立有效指令或refill；外部响应接收时机有调整。
+基线在`build/synth/frontend_response_capacity_baseline/`，完整候选在
+`build/synth/frontend_response_capacity_candidate/`，默认报告对应当前RTL。
+详见[前端响应容量实验](experiments/frontend-response-capacity.md)与[本地预读trial](experiments/icache-local-read.md)。
+原opt及历史main报告归档位置不变。
 
 ## 最新检查点：ALU 乘法器共享（2026-10-23）
 

@@ -113,3 +113,10 @@ latency=10、MAX_CYCLES=50,000,000。
 `build/synth/icache_read_address_candidate/`，默认diagnose报告与当前24个RTL hash一致。
 最终I-cache定向日志为`/tmp/icache-read-address-unit-{4,10}-final.log`，其余日志见上文。
 本轮到此收尾，不追加RTL/opt；未合main、未推送，回滚点`fd07456`。
+
+## 后续读使能与响应容量组合
+
+本地预读单项达到300.29 MHz，配合响应按寄存容量入队后达到322.42 MHz，W2 IPC
+0.5221、面积20,441.849 µm²，W1/W2全量及run_all通过。相对本页300.03 MHz基线，
+组合频率+7.46%、W2 `IPC×Fmax`约+8.01%。详见
+[本地预读trial](icache-local-read.md)和[响应容量组合](frontend-response-capacity.md)。

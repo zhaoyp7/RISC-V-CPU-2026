@@ -177,12 +177,13 @@ module frontend_ooo #(
   logic fq_space_fetch, fq_space_resp;
   // rename 停顿时不能借用并未真正弹出的槽位。
   assign fq_space_fetch = (fq_count + 4 <= FDEPTH + pop_credit) && (rq_count < RDEPTH);
-  assign fq_space_resp  = (fq_count + 2 <= FDEPTH + pop_credit);
+  // 响应入队只看寄存空闲容量，不等待当拍rename出队或backend接收。
+  assign fq_space_resp  = (fq_count + 2 <= FDEPTH);
 
   assign fetch_fire = backend_ready && !redirect_valid && fq_space_fetch &&
                       fetch_ready0 && (!use2 || fetch_ready1);
   assign resp_accept0 = resp0_valid && (rq_count != 0) && fq_space_resp &&
-                        backend_ready && !redirect_valid &&
+                        !redirect_valid &&
                         (!rq_use2[rq_head] || resp1_valid);
   // 只有当前请求使用第二条时才消费 cache1 的响应；否则它会属于后面的请求。
   assign resp_accept1 = resp_accept0 && rq_use2[rq_head];

@@ -77,6 +77,24 @@ struct Harness {
                                  (!taken || records[0].target==target),"trained prediction metadata");
         d.backend_ready=0;d.rename_ready=0;
     }
+    void backend_stall_responses() {
+        reset();d.backend_ready=1;d.rename_ready=0;tick();tick();
+        check(d.pc_out==16,"two paired requests accepted before backend stall");
+        d.backend_ready=0;
+        for(int i=0;i<64;++i)tick();
+        check(d.dec_valid!=0 && field(d.dec_uop,1,32)==0,
+              "in-flight responses buffered while backend is stalled");
+        if(TB_W==2)check(d.dec_valid==3 && field(d.dec_uop,133,32)==4,
+                        "paired response remains together during backend stall");
+        // Consume only already-issued requests, keeping new fetches disabled.
+        d.rename_ready=1;
+        for(int i=0;i<32;++i)tick();
+        check(records.size()==4,"backend stall admits no new fetches or duplicate responses");
+        for(unsigned i=0;i<records.size();++i)
+            check(records[i].pc==4*i && !records[i].taken,"stalled response order and snapshot");
+        check(d.pc_out==16,"PC stays at first unissued request while backend is stalled");
+        d.rename_ready=0;
+    }
     void response_skew(int slow_bank) {
         reset();latency[0]=slow_bank==0?9:0;latency[1]=slow_bank==1?9:0;
         update(0,0x40);update(0x4c,0x90);update(0x90,0xc0);settle();redirect(0);
@@ -151,7 +169,7 @@ int main(int argc,char** argv) {
     // Reset discards any pending training valid and predictor table state.
     d.backend_ready=0;d.rename_ready=0;h.update(0,0x100);h.reset();h.until(1);
     if(!h.records.empty())h.check(h.records[0].pc==0 && !h.records[0].taken,"reset drops pending training");
-    h.response_skew(0);h.response_skew(1);
+    h.backend_stall_responses();h.response_skew(0);h.response_skew(1);
     std::printf("BPU training / response queues W=%d checks=%u fails=%u\n",TB_W,h.checks,h.fails);
     return h.fails?1:0;
 }

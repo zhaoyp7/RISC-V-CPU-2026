@@ -555,3 +555,34 @@ read_en→SRAM CE，累计2.578/2.820/3.047/3.232 ns。下一轮优先研究读�
 或受控请求缓冲，独立验证s1/s2、pending与flush配对。基线在
 `build/synth/icache_read_address_baseline/`，完整候选在`icache_read_address_candidate/`。
 详见 [地址预选择实验](icache-read-address.md)。
+
+## 实验 24：I-cache本地预读trial（单项小收益）
+
+`feat/freq-icache-local-read`，提交4dc81b2 / `freq-icache-local-read-trial-20261024`。
+lookup_room触发本地SRAM读，真正accept_fetch才建立有效s1；空读不产生指令/refill，
+s1停顿、pending重放、flush和写条件不变。索引4/10各10万拍随机，19259/71513次
+响应对拍通过；W1/W2各19/19、run_all ALL PASS，全部correctness/perf周期与基线相同。
+
+diagnose **20,437.519 / 300.29 MHz**，仅频率+0.088%、面积+0.001%。CE路径移出首位，
+decode FIFO指令写入成为瓶颈；保存中间trial供后续组合，不单独作为采用依据。
+一次diagnose、24个输入hash一致，无opt。完整归档`build/synth/icache_local_read_trial/`。
+详见 [本地预读trial](icache-local-read.md)。
+
+## 实验 25：本地预读＋响应容量解耦（322.42 MHz）
+
+`feat/freq-frontend-response-capacity` / `freq-frontend-response-capacity-20261024`，基于4dc81b2。
+响应入队只看寄存fq_count空闲，不借当拍出队空间，且不等待backend ready；新请求与
+rename消费仍用原握手。新增停backend后缓冲并按序消费原4条响应测试，前端293/297项通过。
+W1/W2各19/19、run_all ALL PASS；backend566/592、LSU63757/63948项，LOCAL_STATS lint通过。
+
+diagnose **20,441.849 µm² / 322.42 MHz**，IPC **0.5221 / 0.4988**。
+相对本地预读trial：频率+7.368%、面积+0.021%、W2 IPC+0.509%、W2 `IPC×Fmax`约+7.91%。
+相对300.03 MHz正式检查点：频率+7.462%、面积+0.022%、W2 `IPC×Fmax`约+8.01%；
+W1 IPC仅下降0.006%。保留组合，形成约22.42 MHz初步诊断余量，未做opt最终验收。
+
+前端链退出首位，新路径IQ源tag→PRF→LSU地址→LSQ fill，累计1.759/2.088/2.879/3.042 ns。
+下一轮优先研究IQ选择输出与PRF地址形成，保持访存所有权和实际握手。
+当前完整候选在`build/synth/frontend_response_capacity_candidate/`，基线在
+`frontend_response_capacity_baseline/`，默认报告与24个RTL输入hash一致。
+两版各一次diagnose，顺序运行；无opt、未合main、未推送。
+详见 [响应容量组合](frontend-response-capacity.md)。

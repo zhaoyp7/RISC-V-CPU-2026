@@ -1,29 +1,30 @@
 # 性能记录
 
-## 当前频率检查点：I-cache SRAM 地址预选择
+## 当前频率检查点：本地预读＋响应容量解耦
 
-`feat/freq-icache-read-address`，tag `freq-icache-read-address-20261024`，基于`fd07456`。
-lookup_room提前选择读地址，REFILL按寄存状态提前选写地址；所有读写使能、访问
-地址、次数和cache状态时序保持原语义，未使能时地址允许不同。
+`feat/freq-frontend-response-capacity`，tag `freq-frontend-response-capacity-20261024`，基于`4dc81b2`。
+保留I-cache本地预读；响应入队只看寄存空闲容量，不借当拍rename出队，也不等待backend ready。
+新请求与rename消费仍按原握手，满decode队列在释放沿后才复用容量。
 
 | 候选 | W2 / W1 IPC | diagnose 面积 / MHz（W2） |
 | --- | ---: | ---: |
-| 接收数量寄存＋地址进位 `fd07456` | 0.5195 / 0.4989 | 20,441.659 / 293.07 |
-| **I-cache地址预选择** | **0.5195 / 0.4989** | **20,437.314 / 300.03** |
+| 地址预选择基线 `cdddde6` | 0.5195 / 0.4989 | 20,437.314 / 300.03 |
+| 本地预读trial `4dc81b2` | 0.5195 / 0.4989 | 20,437.519 / 300.29 |
+| **本地预读＋响应容量解耦** | **0.5221 / 0.4988** | **20,441.849 / 322.42** |
 
-频率+2.37%、面积-0.021%，全部correctness/perf周期不变；相对290.50 MHz原基线，
-两阶段组合频率+3.28%、面积+0.233%。保留独立检查点；300.03 MHz是diagnose估计，
-尚无opt最终验收及充分频率余量，不据此声称课程阶段通过。
-W1/W2各19/19、run_all ALL PASS；索引4/10各10万拍随机矩阵，19247/71501次响应对拍通过，
-新增s1重读、pending重放及flush/回填同拍检查通过；LOCAL_STATS lint通过。
-一次diagnose，24个输入hash一致，无opt、未合main、未推送，main仍`bc795ae`。
+相对300.03 MHz基线：频率+7.46%、面积+0.022%、W2 IPC+0.509%，W2 `IPC×Fmax`约+8.01%。
+W1 IPC仅下降0.006%。已有约22.42 MHz的初步诊断余量，仍未做opt最终验收。
+W1/W2各19/19、run_all ALL PASS；增强前端293/297项、backend566/592项、LSU63757/63948项通过，
+LOCAL_STATS lint通过。两档perf已重测，不能沿用旧周期表。
+本轮两版各一次diagnose，顺序运行，24个输入hash均一致；无opt、未合main、未推送，main仍bc795ae。
 
-地址路径退出首位，新最长路径为ROB in_ready→rename in_ready→frontend fetch_fire
-→I-cache read_en→SRAM CE。下一轮优先研究读使能本地化或受控请求缓冲，验证s1/s2、
-pending及flush配对；乘法器不在当前首要关键路径，本轮未修改ALU。
-基线为`build/synth/icache_read_address_baseline/`，完整候选在
-`build/synth/icache_read_address_candidate/`，默认报告对应当前RTL。
-详见[I-cache地址预选择实验](experiments/icache-read-address.md)。原opt及历史main归档位置不变。
+前端CE及响应入队路径退出首位，新最长路径为IQ源tag选择→PRF读→LSU地址加法→LSQ捕获，
+累计1.759/2.088/2.879/3.042 ns。下一轮优先分析IQ输出tag选择与PRF地址形成，继续积累余量。
+当前组合增加本地SRAM只读访问，额外空读不建立有效指令或refill；外部响应接收时机有调整。
+基线在`build/synth/frontend_response_capacity_baseline/`，完整候选在
+`build/synth/frontend_response_capacity_candidate/`，默认报告对应当前RTL。
+详见[前端响应容量实验](experiments/frontend-response-capacity.md)与[本地预读trial](experiments/icache-local-read.md)。
+原opt及历史main报告归档位置不变。
 
 ## 最新检查点：ALU 乘法器共享（2026-10-23）
 
@@ -90,6 +91,7 @@ load/store 放入旧的 a0/a1 缓冲。优先做分析和方案设计，单次�
 | 2026-10-24 | `freq-seq-count-pipe-20261024` | W2/16/48/8/2/16/1KB×2 | 0.5195 | 20,441.659 (diag) | 293.07 (diag) | 接收数量寄存＋地址进位组合；小收益，独立检查点、无opt |
 | 2026-10-24 | `freq-icache-read-address-20261024` | W2/16/48/8/2/16/1KB×2 | **0.5195** | **20,437.314 (diag)** | **300.03 (diag)** | 地址预选择；无周期损失，诊断值贴近300线、无opt |
 | 2026-10-24 | `freq-icache-local-read-trial-20261024` | W2/16/48/8/2/16/1KB×2 | 0.5195 | 20,437.519 (diag) | 300.29 (diag) | 本地预读trial；仅+0.088%，待组合评估，无opt |
+| 2026-10-24 | `freq-frontend-response-capacity-20261024` | W2/16/48/8/2/16/1KB×2 | **0.5221** | **20,441.849 (diag)** | **322.42 (diag)** | 本地预读＋响应容量解耦；对300.03版W2吞吐+8.01%，无opt |
 
 P2 基线 opt 综合：comb 16,361.326、seq 5,648.117、SRAM 2,278.903 µm²，
 min period 17.8320 ns（目标 2 ns，WNS −15.8320 ns）。diagnose 为 25,025.438 µm²、
@@ -233,6 +235,7 @@ ALU，必须先确认 IPC 不低于 0.60。
 | 接收数量寄存＋地址进位（组合候选） | `freq-seq-count-pipe-20261024` | 0.5195 | 0.4989 | 20,441.7 | 293.07 | 未运行 | 未运行 |
 | I-cache地址预选择（独立检查点） | `freq-icache-read-address-20261024` | **0.5195** | **0.4989** | **20,437.3** | **300.03** | 未运行 | 未运行 |
 | I-cache本地预读（组合trial） | `freq-icache-local-read-trial-20261024` | 0.5195 | 0.4989 | 20,437.5 | 300.29 | 未运行 | 未运行 |
+| 本地预读＋响应容量解耦（选定组合） | `freq-frontend-response-capacity-20261024` | **0.5221** | **0.4988** | **20,441.8** | **322.42** | 未运行 | 未运行 |
 
 lane0 非访存流水版相对 C2 opt：面积 **+547.3 µm²（+2.8%）**，Fmax **+31.1%**，IPC **-3.6%**；
 `IPC × Fmax` **+26.4%**。W2/W1 均 19/19，`run_all` ALL PASS。
@@ -280,6 +283,21 @@ W2 使用标准 `make perf MAX_CYCLES=50000000 SIM="$REPO_ROOT/build/sim"` 复�
 | perf_towers | 5,278 | 11,102 | 0.4754 | 11,352 | 0.4649 |
 | perf_vvadd | 4,524 | 5,738 | 0.7884 | 5,647 | 0.8011 |
 | **GEOMEAN** | | | **0.6084** | | **0.5759** |
+
+
+## 分 benchmark（本地预读＋响应容量解耦组合候选）
+
+latency=10、MAX_CYCLES=50,000,000；两档均重新测量。
+
+| benchmark | instructions | W2 cycles | W2 IPC | W1 cycles | W1 IPC |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| perf_median | 6,961 | 18,311 | 0.3802 | 18,926 | 0.3678 |
+| perf_multiply | 21,722 | 23,816 | 0.9121 | 29,588 | 0.7341 |
+| perf_qsort | 139,900 | 385,836 | 0.3626 | 393,867 | 0.3552 |
+| perf_rsort | 195,719 | 363,001 | 0.5392 | 355,740 | 0.5502 |
+| perf_towers | 5,278 | 12,134 | 0.4350 | 12,508 | 0.4220 |
+| perf_vvadd | 4,524 | 6,585 | 0.6870 | 6,537 | 0.6921 |
+| **GEOMEAN** | | | **0.5221** | | **0.4988** |
 
 ## 分 benchmark（LSQ寄存占用＋响应队列，选定候选）
 
