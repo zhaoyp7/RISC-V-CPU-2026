@@ -638,3 +638,12 @@ W1/W2各19/19、run_all ALL PASS、LOCAL_STATS lint通过；correctness/perf周�
 组合不保留，trial标签freq-r4-cdb-parallel-trial-20261024。CDB段0.370→0.379 ns，未获得门级改善。
 最终选择ba7ceb6的402.36 MHz RTL，较起点频率+24.79%、面积+0.309%，IPC0.5221/0.4988不变。
 四轮结束，保留新测试，精确恢复第三轮的RTL/报告/仿真器；无opt、未合main、未推送。
+
+## 实验 31：ROB完成固定槽位匹配（局部改善，单项小收益回退）
+
+固定物理槽并行匹配，保持最年轻同tag命中优先，直接one-hot写done/exception；done_now_mask直接用命中广播tag。
+原RTL和trial的ROB新增边界随机均28,024/27,978项通过；W1/W2各19/19、run_all ALL PASS，全部周期相同。
+一次diagnose、24个hash一致，20,487.732 µm² / 404.26 MHz，较402.36版频率+0.474%、面积-0.084%。
+按既定小收益准则回退，保存freq-rob-completion-match-trial-20261024及新测试，无opt/合main/推送。
+已有网表附加OpenSTA显示ROB→CDB→ROB到达2.4252→2.0403 ns，但ALU路径2.4104→2.4138 ns形成瓶颈。
+后续先核查ALU运算路径，再考虑与此trial组合；当前精确恢复402.36 MHz检查点，详见ROB完成匹配实验。

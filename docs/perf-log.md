@@ -1,28 +1,21 @@
 # 性能记录
 
-## 四轮已完成：保留402.36 MHz，第四轮已回退
+## 最新追加实验：ROB完成固定槽位匹配（小收益trial，回退402.36 MHz）
 
-当前分支`feat/freq-four-rounds`，最终保留第三轮 `ba7ceb6` / `freq-r3-age-matrix-20261024` 的RTL。
-最终标签`freq-four-rounds-best-20261024`，第四轮trial为`3cb56ae`。
-第三轮RTL、默认报告和仿真器均已恢复，24个输入hash匹配，源码逐文件与ba7ceb6一致。
-恢复后新增CDB四档69,797项再次通过，LOCAL_STATS lint通过（保留已说明的树节点假依赖警告）。
+分支`feat/freq-rob-completion-match`，基于af4e794，基线RTL同ba7ceb6。
+trial标签`freq-rob-completion-match-trial-20261024`；本轮结束后恢复原402.36 MHz检查点。
 
-| 轮次 | 改动 | diagnose面积 µm² | diagnose MHz |
-| --- | --- | ---: | ---: |
-| 起点 | e9390ce | 20,441.849 | 322.42 |
-| 1 | branch update数据提前输出 | 20,430.433 | 322.52 |
-| 2 | 组合IQ tag树 | 20,426.671 | 340.77 |
-| **3（最终选择）** | **IQ分配时记录年龄关系** | **20,505.024** | **402.36** |
-| 4（回退） | 并行CDB授权＋IQ节点清理 | 20,482.585 | 385.25 |
+| 版本 | W2 / W1 IPC | diagnose面积 µm² | diagnose MHz |
+| --- | ---: | ---: | ---: |
+| 当前保留基线 | 0.5221 / 0.4988 | 20,505.024 | 402.36 |
+| ROB固定槽位匹配trial（回退） | 0.5221 / 0.4988 | 20,487.732 | 404.26 |
 
-最终较起点频率+24.79%、面积+0.309%，IPC仍为W2 **0.5221** / W1 **0.4988**。
-第四轮较第三轮频率-4.25%，面积仅省22.44 µm²，不保留。四轮各一次diagnose、24个hash一致，
-分别W1/W2各19/19、run_all ALL PASS，两档全部correctness/perf周期均与起点相同。
-新增IQ边界/随机矩阵1,468,560项、CDB四档69,797项通过；新增测试保留。
-第三轮packed树有Verilator UNOPTFLAT假依赖警告，实际单向树、综合结构0 problems。
-新瓶颈是ROB取消→LSU结果valid→CDB tag→ROB完成搜索，最终D端到达2.425 ns。
-本批四轮已结束，无opt、未合main、未推送，main仍bc795ae；尚未opt最终验收。
-完整数据、验证与归档见[四轮记录](experiments/four-rounds.md)。
+全核频率+0.474%、面积-0.084%，按既定小收益准则不替换检查点，trial保留用于后续组合。
+W1/W2各19/19、run_all ALL PASS，全部correctness/perf周期与基线相同；一次diagnose24个hash一致。
+新增ROB边界随机28,024/27,978项在原RTL和trial均通过，保留这些测试。
+补查已有网表：ROB→CDB→ROB到达2.4252→2.0403 ns，ALU路径2.4104→2.4138 ns，限制全核收益。
+默认报告/仿真器恢复核对尚在进行。本轮无opt、未合main、未推送，main仍bc795ae。
+完整记录与归档见[ROB完成匹配实验](experiments/rob-completion-match.md)。
 
 ## 最新检查点：ALU 乘法器共享（2026-10-23）
 
@@ -95,6 +88,7 @@ load/store 放入旧的 a0/a1 缓冲。优先做分析和方案设计，单次�
 | 2026-10-24 | `freq-r2-iq-combined-20261024` | W2/16/48/8/2/16/1KB×2 | 0.5221 | 20,426.671 (diag) | 340.77 (diag) | 四轮2：branch payload＋IQ tag树，保留；无opt |
 | 2026-10-24 | `freq-r3-age-matrix-20261024` | W2/16/48/8/2/16/1KB×2 | 0.5221 | 20,505.024 (diag) | 402.36 (diag) | 四轮3：IQ年龄关系寄存，保留；无opt |
 | 2026-10-24 | `freq-r4-cdb-parallel-trial-20261024` | W2/16/48/8/2/16/1KB×2 | 0.5221 | 20,482.585 (diag) | 385.25 (diag) | 四轮4：频率-4.25%，回退至402.36版；无opt |
+| 2026-10-24 | `freq-rob-completion-match-trial-20261024` | W2/16/48/8/2/16/1KB×2 | 0.5221 | 20,487.732 (diag) | 404.26 (diag) | 单项+0.474%，按小收益准则回退402.36；无opt |
 
 P2 基线 opt 综合：comb 16,361.326、seq 5,648.117、SRAM 2,278.903 µm²，
 min period 17.8320 ns（目标 2 ns，WNS −15.8320 ns）。diagnose 为 25,025.438 µm²、
@@ -244,6 +238,7 @@ ALU，必须先确认 IPC 不低于 0.60。
 | 四轮2：branch payload＋IQ tag树 | `freq-r2-iq-combined-20261024` | 0.5221 | 0.4988 | 20,426.7 | 340.77 | 未运行 | 未运行 |
 | 四轮3：IQ年龄关系寄存 | `freq-r3-age-matrix-20261024` | 0.5221 | 0.4988 | 20,505.0 | 402.36 | 未运行 | 未运行 |
 | 四轮4：并行CDB＋IQ节点清理（回退） | `freq-r4-cdb-parallel-trial-20261024` | 0.5221 | 0.4988 | 20,482.6 | 385.25 | 未运行 | 未运行 |
+| ROB完成固定槽位匹配（回退） | `freq-rob-completion-match-trial-20261024` | 0.5221 | 0.4988 | 20,487.7 | 404.26 | 未运行 | 未运行 |
 
 lane0 非访存流水版相对 C2 opt：面积 **+547.3 µm²（+2.8%）**，Fmax **+31.1%**，IPC **-3.6%**；
 `IPC × Fmax` **+26.4%**。W2/W1 均 19/19，`run_all` ALL PASS。
@@ -296,7 +291,7 @@ W2 使用标准 `make perf MAX_CYCLES=50000000 SIM="$REPO_ROOT/build/sim"` 复�
 ## 分 benchmark（本地预读＋响应容量解耦组合候选）
 
 latency=10、MAX_CYCLES=50,000,000；两档均重新测量。
-IQ tag树trial与连续四轮均已重测两档perf，六项周期逐项相同，复用本表，避免重复。
+IQ tag树trial、连续四轮及ROB完成固定槽位匹配trial均已重测两档perf，六项周期逐项相同，复用本表。
 
 | benchmark | instructions | W2 cycles | W2 IPC | W1 cycles | W1 IPC |
 | --- | ---: | ---: | ---: | ---: | ---: |

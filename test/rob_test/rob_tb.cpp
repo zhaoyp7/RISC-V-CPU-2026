@@ -215,6 +215,16 @@ struct RefRob {
         ExpReg r;
         uint32_t old_head = head;
         size_t old_size = q.size();
+        // Search the pre-edge ordered queue. The RTL chooses the last (youngest)
+        // match, even if duplicate tags are supplied by an interface test.
+        auto youngest = [&](uint32_t tag) {
+            for (auto it=q.rbegin(); it!=q.rend(); ++it)
+                if (it->dest==tag) return (int)it->idx;
+            return -1;
+        };
+        int cdb_winner = youngest(in.cdb_tag);
+        int comp_winner[W];
+        for (int l=0;l<W;++l) comp_winner[l]=youngest(in.comp_tag[l]);
 
         // 分支解析 / 冲刷（完成广播在时钟沿后处理，恢复掩码用本拍前的 done）
         if (e.br_pos >= 0) {
@@ -286,7 +296,7 @@ struct RefRob {
         // 完成广播（在本拍恢复掩码/提交判断之后更新，符合寄存器时序）
         if (in.cdb_valid) {
             for (Entry& x : q)
-                if (x.dest == in.cdb_tag) {
+                if ((int)x.idx == cdb_winner) {
                     x.done = true;
                     if (in.cdb_exc) x.exception = true;
                 }
@@ -294,7 +304,7 @@ struct RefRob {
         for (int l = 0; l < W; ++l) {
             if (!in.comp_valid[l]) continue;
             for (Entry& x : q)
-                if (x.dest == in.comp_tag[l]) {
+                if ((int)x.idx == comp_winner[l]) {
                     x.done = true;
                     if (in.comp_exc[l]) x.exception = true;
                 }
@@ -653,6 +663,37 @@ bool run_directed(Harness& h) {
     return ok;
 }
 
+// Cover every circular head position, including duplicate tags straddling wrap.
+// Observe only external commit/recovery signals through the ordered-queue model.
+void run_completion_boundaries(Harness& h) {
+    for (int port=0;port<2;++port) for (int target=0;target<DEPTH;++target) {
+        h.reset();
+        for (int n=0;n<target;++n) {
+            Inputs in;in.u[0]=make_uop(0x8000,10,0,false);h.step(in,"move-head-alloc");
+            in={};in.comp_valid[0]=true;in.comp_tag[0]=10;h.step(in,"move-head-done");
+            h.step(Inputs{},"move-head-commit");
+        }
+        Inputs in;in.u[0]=make_uop(0x9000,21,0,false);h.step(in,"dup-older");
+        in={};in.u[0]=make_uop(0x9004,22,0,false,0,false,false,0,true);
+        h.step(in,"dup-middle-branch");
+        in={};in.u[0]=make_uop(0x9008,21,0,false);h.step(in,"dup-younger");
+        in={};in.cdb_tag=21;in.comp_tag[0]=21;h.step(in,"invalid-match-no-write");
+        in={};
+        if(port==0) {in.cdb_valid=true;in.cdb_tag=21;in.cdb_exc=true;}
+        else {in.comp_valid[0]=true;in.comp_tag[0]=21;in.comp_exc[0]=true;}
+        h.step(in,"only-youngest-duplicate-completes");
+        h.step(Inputs{},"older-duplicate-still-blocks");
+        in={};in.comp_valid[0]=true;in.comp_tag[0]=22;h.step(in,"resolve-middle-done");
+        in={};in.br_valid=true;in.br_tag=22;in.br_taken=true;in.br_target=0xa000;
+        h.step(in,"squash-younger-duplicate");
+        h.step(Inputs{},"duplicate-recovery-pulse");
+        h.step(Inputs{},"surviving-older-still-blocks");
+        in={};in.cdb_valid=true;in.cdb_tag=21;h.step(in,"complete-surviving-older");
+        for(int n=0;n<4;++n) h.step(Inputs{},"drain-duplicate-boundary");
+        if(!h.ref.q.empty())h.report("boundary","duplicate drain",-1,h.ref.q.size(),0);
+    }
+}
+
 void run_random(Harness& h, long iters) {
     h.reset();
     uint32_t next_tag = 1;
@@ -752,6 +793,7 @@ int main(int argc, char** argv) {
     h.dut = &dut;
 
     run_directed(h);
+    run_completion_boundaries(h);
     run_random(h, random_iters);
 
     printf("rob_tb: W=%d checked=%ld fails=%ld\n", W, h.checked, h.fails);

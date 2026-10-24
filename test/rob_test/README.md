@@ -11,8 +11,7 @@ test/rob_test/
 └── build/      # 编译产物（已忽略）
 ```
 
-> 本目录、`rob.sv`、`commit.sv` 暂不进入 `filelist.f`；`frontend_ooo`
-> 集成时再登记。
+> 测试台不加入正式filelist；`rob.sv`与`commit.sv`已用于正式OoO核心。
 
 ## 1. 怎么跑
 
@@ -31,7 +30,8 @@ ROB_W=2 sh test/rob_test/run.sh --quick
 - **分配**：接收 rename 的 `in_uop` / `in_old_tag`，按程序序分配 `rob_idx`
   （循环缓冲索引），同时保存前端给出的 `pred_taken/pred_target`。
 - **完成**：`cdb` 与 `complete[W]` 按 `dest_tag` 定位表项，置 `done`；
-  `exception` 一并记录。
+  `exception` 一并记录。若接口测试给出多个同tag有效项，保持原实现的规则：
+  只更新从head开始扫描的最后一个命中，即程序序最年轻的一项。
 - **提交**：`commit.sv` 从头部选择前缀连续的
   `valid && done && (非控制 || br_resolved)` 表项。异常/非法指令可以提交，
   但产生 `commit_halt` 且其后的 lane 不提交。
@@ -65,6 +65,10 @@ ROB_W=2 sh test/rob_test/run.sh --quick
 | 误预测 | 冲刷年轻项、redirect/squash 脉冲、恢复掩码/lsq_ptr |
 | 随机 | 5 万拍随机分配/完成/分支解析/提交，逐拍对拍组合输出与沿后脉冲 |
 | W=2 | 双 lane 分配、前缀提交、双 lane 完成 |
+| 完成搜索边界 | 遍历所有head位置；重复tag跨回绕、无效广播、年轻项被squash后的再次匹配 |
+
+完成参考在时钟沿前的有序队列中从后向前查找匹配项，保存其槽位；更新后仅修改
+仍存活的匹配槽。它不使用RTL中的物理槽位优先矩阵，适合检验搜索结构改写。
 
 完整输出示例：
 
@@ -79,4 +83,4 @@ PASS
 
 - W=1/W=2 随机对拍通过；
 - Yosys `proc; opt; check` 0 problems；
-- 尚未登记 `filelist.f`，基线 `make build` 不受影响。
+- 已纳入正式OoO核心；测试台和其参考模型保持独立。
