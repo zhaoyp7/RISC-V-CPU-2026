@@ -607,3 +607,10 @@ trial网表/源码/仿真器/日志及附加时序在`build/synth/iq_tag_tree_ca
 原基线在`iq_tag_tree_baseline/`。下一轮优先检查branch update payload与valid能否
 解耦，再独立验证与tag树组合；不得省略分支取消、CDB反压和提交回归。
 详见[IQ tag树试验](iq-tag-tree.md)。
+
+## 实验 27：四轮1，branch update数据提前输出
+
+valid保持原br_issue，PC/tag/目标等直接输出，避免握手门控tag再进入ROB匹配。
+W1/W2各19/19、run_all ALL PASS，两档perf周期相同；一次diagnose24个hash匹配。
+20,430.433 µm² / 322.52 MHz，频率+0.0315%、面积-0.05585%，仅作为组合中间对照。
+下一轮加入IQ tag树验证组合。完整归档`build/synth/freq_r1_branch_payload/`，无opt。

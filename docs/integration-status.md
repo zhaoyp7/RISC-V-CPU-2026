@@ -1,30 +1,19 @@
 # 集成状态（P1 完成，P2 进入性能优化）
 
-## 当前频率检查点：322.42 MHz；IQ tag树trial已回退
+## 连续四轮优化进行中：已完成第一轮
 
-当前工作分支`feat/freq-iq-tag-tree`，RTL已恢复为`e9390ce` /
-`freq-frontend-response-capacity-20261024`，保留本地预读＋前端响应容量解耦。
-IQ tag树trial为`6637367` / `freq-iq-tag-tree-trial-20261024`，单独归档，不纳入当前RTL。
+用户授权连续执行四轮并在结束后汇报，当前分支`feat/freq-four-rounds`。
+本批次基于550754f（RTL=e9390ce），起点322.42 MHz；不运行opt、不合main、不推送。
 
 | 版本 | W2 / W1 IPC | diagnose面积 µm² | diagnose MHz |
 | --- | ---: | ---: | ---: |
-| **当前保留基线** | **0.5221 / 0.4988** | **20,441.849** | **322.42** |
-| IQ tag随候选树传递（已回退） | 0.5221 / 0.4988 | 20,431.512 | 318.90 |
+| 初始保留基线 | 0.5221 / 0.4988 | 20,441.849 | 322.42 |
+| 第一轮：branch update数据提前输出 | 0.5221 / 0.4988 | 20,430.433 | 322.52 |
 
-trial频率下降1.090%，面积仅减少0.051%，不保留。W1/W2各19/19、run_all ALL PASS、
-LOCAL_STATS lint通过；两档全部correctness/perf周期与基线逐项相同，IPC无变化。
-一次diagnose，24个输入hash一致。没有新增流水拍数或改变访存所有权。
-
-补查映射网表：IQ→PRF→地址→LSQ累计由1.759/2.088/2.879/3.042 ns缩短到
-1.603/1.920/2.712/2.875 ns，但全核转为ROB squash→LSU load result valid→CDB
-ready→branch update tag→ROB commit free→rename路径，导致总频率下降。
-下一轮优先检查branch update数据字段是否能提前输出、只用valid控制状态更新，
-再与tag树trial做独立组合对照；须验证分支取消、CDB反压与提交，不能直接假设有效。
-
-当前默认报告和W2仿真器已恢复322.42 MHz基线，24个hash匹配；完整trial与附加
-OpenSTA查询在`build/synth/iq_tag_tree_candidate/`，基线在`iq_tag_tree_baseline/`。
-基线仍有约22.42 MHz初步余量，尚未做opt最终验收。无opt、未合main、未推送，main仍bc795ae。
-详见[IQ tag树试验](experiments/iq-tag-tree.md)及[前端响应容量组合](experiments/frontend-response-capacity.md)。
+第一轮W1/W2各19/19、run_all ALL PASS，全部perf周期与初始基线相同，24个输入hash一致。
+频率仅+0.0315%、面积-0.05585%，作为组合中间对照。第二轮将在其上加入IQ tag树，
+确认此前改善的IQ局部路径能否在解除branch update门控后转化为全核收益。
+完整数据、验证命令及归档见[连续四轮记录](experiments/four-rounds.md)。
 
 ## 最新检查点：ALU 乘法器共享（2026-10-23）
 

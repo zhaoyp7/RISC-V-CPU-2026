@@ -982,14 +982,14 @@ module backend_ooo #(
 
   always_comb begin
     br_update = '0;
-    if (br_issue) begin
-      br_update[`CPU_BR_VALID_OFF] = 1'b1;
-      br_update[`CPU_BR_PC_OFF +: 32] = a0_pc;
-      br_update[`CPU_BR_TAKEN_OFF] = br_taken;
-      br_update[`CPU_BR_TARGET_OFF +: 32] = br_target;
-      br_update[`CPU_BR_IS_JALR_OFF] = a0_is_jalr;
-      br_update[`CPU_BR_TAG_OFF +: PW] = a0_dest;
-    end
+    // 数据由执行级直接给出；消费者只在 valid 时使用。
+    // 避免 CDB ready / squash 经 br_issue 再门控 ROB 的 tag 比较输入。
+    br_update[`CPU_BR_VALID_OFF] = br_issue;
+    br_update[`CPU_BR_PC_OFF +: 32] = a0_pc;
+    br_update[`CPU_BR_TAKEN_OFF] = br_taken;
+    br_update[`CPU_BR_TARGET_OFF +: 32] = br_target;
+    br_update[`CPU_BR_IS_JALR_OFF] = a0_is_jalr;
+    br_update[`CPU_BR_TAG_OFF +: PW] = a0_dest;
   end
 
   // ---------------------------------------------------------------------------
