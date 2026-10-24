@@ -138,6 +138,7 @@ module icache_pipe #(
   logic s2_consume;
   logic load_pending;
   logic read_en;
+  logic lookup_room;
   logic [INDEX_BITS-1:0] read_index;
 
   // s2 可以被新指令覆盖：空，或当前命中且被接收。
@@ -147,8 +148,9 @@ module icache_pipe #(
   assign load_pending = (state == ST_NORMAL) && buf_valid && fetch_resp_ready &&
                         pending_valid;
 
-  assign fetch_ready = (state == ST_NORMAL) && !flush && !buf_valid &&
+  assign lookup_room = (state == ST_NORMAL) && !buf_valid &&
                        !pending_valid && s2_accept;
+  assign fetch_ready = lookup_room && !flush;
 
   assign accept_fetch = (state == ST_NORMAL) && !flush && fetch_valid && fetch_ready;
 
@@ -156,18 +158,21 @@ module icache_pipe #(
   assign read_en    = (state == ST_NORMAL) && !flush &&
                       (accept_fetch || load_pending ||
                        (s1_valid && !s2_accept));
-  assign read_index = accept_fetch ? fetch_index :
+  // lookup_room=1 且 read_en=1 时必然接收新PC；否则该预选地址不被使用。
+  // 地址不等待当前 fetch_valid/flush，所有实际读使能仍沿用原握手。
+  assign read_index = lookup_room ? fetch_index :
                       (load_pending ? pending_pc[INDEX_BITS+1:2] : s1_index);
 
   // ---- SRAM 读写 ------------------------------------------------------------
   always_comb begin
     data_en    = 1'b0;
     data_we    = 1'b0;
-    data_addr  = read_index;
+    // REFILL 只有写访问，提前选好地址；flush/响应仍控制真正的写使能。
+    data_addr  = (state == ST_REFILL) ? refill_index : read_index;
     data_wdata = 32'b0;
     tag_en     = 1'b0;
     tag_we     = 1'b0;
-    tag_addr   = read_index;
+    tag_addr   = data_addr;
     tag_wdata  = refill_tag;
 
     if (read_en) begin
@@ -178,11 +183,9 @@ module icache_pipe #(
     if (!flush && (state == ST_REFILL) && refill_resp_valid) begin
       data_en    = 1'b1;
       data_we    = 1'b1;
-      data_addr  = refill_index;
       data_wdata = refill_rdata;
       tag_en     = 1'b1;
       tag_we     = 1'b1;
-      tag_addr   = refill_index;
       tag_wdata  = refill_tag;
     end
   end

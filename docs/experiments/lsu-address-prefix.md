@@ -111,3 +111,10 @@ ROB/CDB/dispatch控制链；不能仅凭一条路径退出首位就判定整体�
 回退后完整run_all为ALL PASS，日志为`/tmp/lsu-address-prefix-unit-restored.log`，
 地址检查63757/63948项再次通过。无需再综合字节一致的原RTL，当前报告来自此前完成的
 有效综合。对照和回退均没有运行opt，也没有合main或推送。
+
+## 后续多路径组合验证
+
+接收数量寄存与本地址加法器组合达到293.07 MHz，随后I-cache地址预选择达到
+300.03 MHz，IPC和全部周期相同。见[组合实验](seq-count-pipe.md)及
+[地址预选择实验](icache-read-address.md)。后续组合采用本加法器，不改变本页
+单项trial仅+0.114%并回退的历史结论；各阶段都有独立检查点和实测报告。

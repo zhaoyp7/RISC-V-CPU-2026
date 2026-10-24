@@ -11,7 +11,7 @@ test/icache_pipe_test/
 └── build/             # 编译产物（已忽略）
 ```
 
-> 本目录和 `icache_pipe.sv` 暂不进入 `filelist.f`；等 P1 前端集成时再登记。
+`icache_pipe.sv`已用于官方OoO前端的两个bank，本目录测试已接入`test/run_all.sh`。
 
 ## 1. 怎么跑
 
@@ -22,8 +22,8 @@ sh test/icache_pipe_test/run.sh --seed 123
 ICACHE_INDEX_BITS=10 sh test/icache_pipe_test/run.sh --quick
 ```
 
-默认测试用 `INDEX_BITS=4`（16 行），便于覆盖同索引不同 tag 的别名；正式配置
-默认是 10（1024 行）。回填数据由 `mem_word(addr) = (addr & ~3) ^ 0x5a5a0000`
+默认测试用 `INDEX_BITS=4`（16 行），便于覆盖同索引不同 tag 的别名；当前默认核
+为8（256行，每bank 1KB），测试另覆盖10（1024行）。回填数据由 `mem_word(addr) = (addr & ~3) ^ 0x5a5a0000`
 生成，测试台在 `refill_valid` 期间检查地址稳定。
 
 ## 2. 接口
@@ -80,6 +80,7 @@ buf: 回填响应 1 项缓冲（保持输出顺序 + 吸收反压）
 | 吞吐 | 预填 8 条连续 PC 后连续取指，8 条/10 拍（约 1 条/拍） |
 | flush | lookup 中冲刷、refill 中冲刷（旧响应丢弃且需重新 refill）、输出缓冲中冲刷 |
 | 随机 | 10 万拍随机 fetch/ready/flush + 随机回填延迟，按序核对 PC/指令 |
+| 地址预选择 | s2反压且s1持有不同命中、冷缺失后的pending命中重放、无效fetch PC变化、flush与回填响应同拍不写入 |
 
 完整运行输出示例：
 
@@ -94,6 +95,7 @@ flush，属于压力场景，不代表真实程序命中率。
 
 ## 5. 当前状态
 
-- Verilator 单测通过；`ICACHE_INDEX_BITS=10` 也做快速回归；
-- 尚未接入 `frontend_ooo`，因此未登记 `filelist.f`；
-- 基线 `core.sv` 仍使用原 `icache.sv`，`make build` 不受影响。
+索引4/10各10万拍随机矩阵均通过，响应对拍19247/71501次；定向检查要求pending
+命中不额外回填、flush与回填同拍后重新取指仍缺失。夹具使用显式单线程context。
+地址预选择不改变任何使能访问：lookup_room有空间且read_en有效时必为新请求，
+否则沿用pending或s1地址；REFILL地址可提前选择，写入仍受原响应/flush条件控制。

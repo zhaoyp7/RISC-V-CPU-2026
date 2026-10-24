@@ -535,3 +535,23 @@ diagnose **20,441.659 µm² / 293.07 MHz**，相对基线频率+0.887%、面积+
 到cache0 SRAM地址，累计2.647/2.868/3.096/3.312 ns。下一轮优先评估读地址预选择，
 保持所有使能访问和refill/flush语义。
 详见 [组合实验](seq-count-pipe.md)。
+
+## 实验 23：I-cache SRAM 地址预选择（诊断300.03 MHz）
+
+`feat/freq-icache-read-address` / `freq-icache-read-address-20261024`，基于`fd07456`。
+按lookup_room提前选读地址，REFILL按寄存state提前选地址；保持全部使能访问的
+地址/次数、read_en、写使能和状态更新不变，未使能地址可变化。
+W1/W2各19/19、run_all ALL PASS，全部correctness/perf周期相同，IPC0.5195/0.4989。
+索引4/10各10万拍随机矩阵、19247/71501次响应对拍通过；新定向覆盖停顿重读、
+pending重放不得额外回填，以及flush与回填同拍不得写入。LOCAL_STATS lint通过。
+
+diagnose **20,437.314 µm² / 300.03 MHz**，频率+2.373%、面积-0.021%、IPC无损，保留
+独立检查点；相对290.50 MHz原基线，两阶段组合频率+3.282%、面积+0.233%。
+一次diagnose、24个输入hash一致，无opt、未合main、未推送。300.03只是诊断值，
+尚无opt最终验收和充分裕量，不视为课程阶段通过。
+
+SRAM地址路径退出首位，新路径为ROB in_ready→rename in_ready→fetch_fire→cache0
+read_en→SRAM CE，累计2.578/2.820/3.047/3.232 ns。下一轮优先研究读使能本地化
+或受控请求缓冲，独立验证s1/s2、pending与flush配对。基线在
+`build/synth/icache_read_address_baseline/`，完整候选在`icache_read_address_candidate/`。
+详见 [地址预选择实验](icache-read-address.md)。

@@ -120,6 +120,7 @@ struct Harness {
     void reset() {
         dut->reset = 1;
         dut->flush = 0;
+        dut->discard = 0;
         dut->fetch_valid = 0;
         dut->fetch_pc = 0;
         dut->fetch_resp_ready = 0;
@@ -325,6 +326,63 @@ bool run_directed(Harness& h) {
     }
     printf("hit throughput: %zu instructions in %ld cycles\n", seq.size(), cycles);
 
+    // Hold a hit in s2 and a different hit in s1; inactive fetch PCs must not
+    // replace the s1 reread while the response is stalled.
+    ok &= h.drain();
+    ok &= h.fetch_one(a,&inst);ok &= h.fetch_one(b,&inst);
+    long held_refills=h.refills;
+    ok &= h.issue(a,false);ok &= h.issue(b,false);
+    const uint32_t poison=0xfeed0100u;
+    for(int i=0;i<6;++i)h.step(false,poison+4*i,false);
+    ok &= h.drain();
+    if(h.refills!=held_refills) {
+        h.report("reread", "stalled hits must not need another refill",b,
+                 uint32_t(h.refills-held_refills),0);ok=false;
+    }
+
+    // A cold miss saves the younger hit as pending. Keep the refill buffer
+    // stalled, then replay pending while the caller supplies unrelated PCs.
+    const uint32_t pending_hit=0x1004u,cold=0x8000u;
+    ok &= h.fetch_one(pending_hit,&inst);
+    long pending_refills=h.refills;
+    h.fixed_refill_latency=5;
+    ok &= h.issue(cold,false);ok &= h.issue(pending_hit,false);
+    bool buffer_held=false;
+    for(int i=0;i<64 && !buffer_held;++i) {
+        h.step(false,poison,false);
+        buffer_held=h.dut->fetch_resp_valid;
+    }
+    if(!buffer_held) {
+        h.report("pending", "refill buffer did not become valid",cold,0,1);ok=false;
+    }
+    for(int i=0;i<4;++i)h.step(false,poison+4*i,false);
+    ok &= h.drain();
+    if(h.refills!=pending_refills+1) {
+        h.report("pending", "saved hit must not need another refill",pending_hit,
+                 uint32_t(h.refills-pending_refills),1);ok=false;
+    }
+
+    // Assert flush on the exact edge that the memory model returns a refill.
+    // The discarded line must not become a hit on the next fetch.
+    const uint32_t simultaneous=0x9000u;
+    h.fixed_refill_latency=0;
+    ok &= h.issue(simultaneous,false);
+    for(int i=0;i<8 && !h.dut->refill_valid;++i)h.step(false,poison,false);
+    bool refill_waiting=h.dut->refill_valid;
+    if(!refill_waiting) {
+        h.report("flush/refill", "no refill to cancel",simultaneous,0,1);ok=false;
+    } else {
+        long before=h.refills;
+        h.step(false,poison,true,true);
+        h.step(false,poison,true,false);
+        ok &= h.fetch_one(simultaneous,&inst);
+        if(h.refills!=before+2) {
+            h.report("flush/refill", "flushed refill must not populate cache",simultaneous,
+                     uint32_t(h.refills-before),2);ok=false;
+        }
+    }
+    h.fixed_refill_latency=1;
+
     // flush 冲刷 lookup：先发 A，下一拍 flush，之后不应有 A 的响应。
     bool lookup_acc = h.issue(a, true);
     h.step(false, a, true, true);   // flush 当拍
@@ -429,7 +487,7 @@ void run_random(Harness& h, long iters) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    Verilated::commandArgs(argc, argv);
+    VerilatedContext context;context.threads(1);context.commandArgs(argc, argv);
 
     long random_iters = 100000;
     uint32_t seed = 0x20261018u;
@@ -448,7 +506,7 @@ int main(int argc, char** argv) {
     }
     rng_state = seed ? seed : 0x20261018u;
 
-    Vicache_pipe dut;
+    Vicache_pipe dut{&context};
     Harness h;
     h.dut = &dut;
 

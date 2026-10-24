@@ -1,28 +1,29 @@
 # 集成状态（P1 完成，P2 进入性能优化）
 
-## 当前组合检查点：接收数量寄存＋地址分组进位（小收益）
+## 当前频率检查点：I-cache SRAM 地址预选择
 
-`feat/freq-seq-count-pipe`，tag `freq-seq-count-pipe-20261024`，基于`a050c13`。
-seq_pending寄存上一拍实际接收数，disp_seq+seq_pending提前给出本拍组首年龄，
-数值与旧实现完全一致；同时重用已验证的地址分组进位，缩短数据和控制两条路径。
+`feat/freq-icache-read-address`，tag `freq-icache-read-address-20261024`，基于`fd07456`。
+lookup_room提前选择读地址，REFILL按寄存状态提前选写地址；所有读写使能、访问
+地址、次数和cache状态时序保持原语义，未使能时地址允许不同。
 
-| 候选 | W2 / W1 IPC | diagnose 面积 / MHz |
+| 候选 | W2 / W1 IPC | diagnose 面积 / MHz（W2） |
 | --- | ---: | ---: |
-| 选定基线 `a050c13` / `5c921b7` | 0.5195 / 0.4989 | 20,389.871 / 290.50 |
-| 地址进位单项（已回退） | 0.5195 / 0.4989 | 20,442.024 / 290.83 |
-| 接收数量寄存＋地址进位组合 | **0.5195 / 0.4989** | **20,441.659 / 293.07** |
+| 接收数量寄存＋地址进位 `fd07456` | 0.5195 / 0.4989 | 20,441.659 / 293.07 |
+| **I-cache地址预选择** | **0.5195 / 0.4989** | **20,437.314 / 300.03** |
 
-组合频率+0.887%、面积+0.254%，全部correctness/perf周期不变，整体收益仍小。
-保存独立中间检查点继续筛选，不据此单独合main。W1/W2各19/19、run_all ALL PASS，
-增强backend566/592项及LSU63757/63948项通过；LOCAL_STATS lint通过。
-一次diagnose、24个输入hash一致；基线在`build/synth/seq_count_pipe_baseline/`，
-候选完整报告/仿真器在`build/synth/seq_count_pipe_candidate/`。
+频率+2.37%、面积-0.021%，全部correctness/perf周期不变；相对290.50 MHz原基线，
+两阶段组合频率+3.28%、面积+0.233%。保留独立检查点；300.03 MHz是diagnose估计，
+尚无opt最终验收及充分频率余量，不据此声称课程阶段通过。
+W1/W2各19/19、run_all ALL PASS；索引4/10各10万拍随机矩阵，19247/71501次响应对拍通过，
+新增s1重读、pending重放及flush/回填同拍检查通过；LOCAL_STATS lint通过。
+一次diagnose，24个输入hash一致，无opt、未合main、未推送，main仍`bc795ae`。
 
-年龄与地址加法退出首位，新路径为ROB redirect→cache1 fetch_ready→frontend
-fetch_fire→cache0 SRAM地址。下一轮优先验证读地址预选择，保持所有使能访问的
-地址正确，并保持read_en、写使能、flush与refill排空语义。
-详见[接收数量寄存组合实验](experiments/seq-count-pipe.md)。未opt、未合main、未推送，
-main仍`bc795ae`；原opt及历史报告归档位置不变。
+地址路径退出首位，新最长路径为ROB in_ready→rename in_ready→frontend fetch_fire
+→I-cache read_en→SRAM CE。下一轮优先研究读使能本地化或受控请求缓冲，验证s1/s2、
+pending及flush配对；乘法器不在当前首要关键路径，本轮未修改ALU。
+基线为`build/synth/icache_read_address_baseline/`，完整候选在
+`build/synth/icache_read_address_candidate/`，默认报告对应当前RTL。
+详见[I-cache地址预选择实验](experiments/icache-read-address.md)。原opt及历史main归档位置不变。
 
 ## 最新检查点：ALU 乘法器共享（2026-10-23）
 

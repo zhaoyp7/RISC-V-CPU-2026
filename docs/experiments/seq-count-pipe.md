@@ -107,3 +107,9 @@ latency=10、MAX_CYCLES=50,000,000。
 
 候选完整报告、RTL快照与W1/W2仿真器归档在`build/synth/seq_count_pipe_candidate/`。
 仅一次diagnose，无opt、未合main、未推送；回滚点`a050c13`。
+
+## 后续地址预选择组合
+
+[I-cache地址预选择实验](icache-read-address.md)在本轮组合上达到300.03 MHz，
+面积20,437.314 µm²，全部周期相同。原地址与年龄改动因此作为组合保留；
+本轮单独仅0.887%的历史测量仍不改变。最终频率是diagnose口径，未追加opt。
