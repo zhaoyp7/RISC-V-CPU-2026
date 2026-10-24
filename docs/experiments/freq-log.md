@@ -586,3 +586,24 @@ W1 IPC仅下降0.006%。保留组合，形成约22.42 MHz初步诊断余量，�
 `frontend_response_capacity_baseline/`，默认报告与24个RTL输入hash一致。
 两版各一次diagnose，顺序运行；无opt、未合main、未推送。
 详见 [响应容量组合](frontend-response-capacity.md)。
+
+
+## 实验 26：IQ源tag随候选树传递（局部改善，全核回退）
+
+`6637367` / `freq-iq-tag-tree-trial-20261024`，基于e9390ce。
+两个源tag随first/second/prefill候选树传递，直接提供输出tag，减少slot动态索引后的
+二次选择；不增加流水拍数，最老优先、wake、预填、late squash和独立lane反压不变。
+IQ独立scoreboard五档共1,466,671项零失败，原三档行为回归通过；W1/W2各19/19、
+run_all ALL PASS、LOCAL_STATS lint通过，两档全部correctness/perf周期与基线相同。
+
+diagnose **20,431.512 µm² / 318.90 MHz**，IPC0.5221/0.4988。相对322.42版，频率
+-1.090%、面积-0.051%，不采用。一次diagnose、24个hash一致，无opt、未合main、未推送。
+补做现有网表OpenSTA查询，IQ→PRF→地址→LSQ累计1.603/1.920/2.712/2.875 ns，
+局部比基线改善约0.167 ns；全核首位改为ROB squash→LSU load result valid→CDB ready
+→branch update tag→ROB commit free→rename，整体频率反而下降。
+
+已恢复e9390ce的RTL、默认报告和W2仿真器，24个hash匹配，保留322.42 MHz基线。
+trial网表/源码/仿真器/日志及附加时序在`build/synth/iq_tag_tree_candidate/`，
+原基线在`iq_tag_tree_baseline/`。下一轮优先检查branch update payload与valid能否
+解耦，再独立验证与tag树组合；不得省略分支取消、CDB反压和提交回归。
+详见[IQ tag树试验](iq-tag-tree.md)。

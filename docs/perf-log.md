@@ -1,30 +1,30 @@
 # 性能记录
 
-## 当前频率检查点：本地预读＋响应容量解耦
+## 当前频率检查点：322.42 MHz；IQ tag树trial已回退
 
-`feat/freq-frontend-response-capacity`，tag `freq-frontend-response-capacity-20261024`，基于`4dc81b2`。
-保留I-cache本地预读；响应入队只看寄存空闲容量，不借当拍rename出队，也不等待backend ready。
-新请求与rename消费仍按原握手，满decode队列在释放沿后才复用容量。
+当前工作分支`feat/freq-iq-tag-tree`，RTL已恢复为`e9390ce` /
+`freq-frontend-response-capacity-20261024`，保留本地预读＋前端响应容量解耦。
+IQ tag树trial为`6637367` / `freq-iq-tag-tree-trial-20261024`，单独归档，不纳入当前RTL。
 
-| 候选 | W2 / W1 IPC | diagnose 面积 / MHz（W2） |
-| --- | ---: | ---: |
-| 地址预选择基线 `cdddde6` | 0.5195 / 0.4989 | 20,437.314 / 300.03 |
-| 本地预读trial `4dc81b2` | 0.5195 / 0.4989 | 20,437.519 / 300.29 |
-| **本地预读＋响应容量解耦** | **0.5221 / 0.4988** | **20,441.849 / 322.42** |
+| 版本 | W2 / W1 IPC | diagnose面积 µm² | diagnose MHz |
+| --- | ---: | ---: | ---: |
+| **当前保留基线** | **0.5221 / 0.4988** | **20,441.849** | **322.42** |
+| IQ tag随候选树传递（已回退） | 0.5221 / 0.4988 | 20,431.512 | 318.90 |
 
-相对300.03 MHz基线：频率+7.46%、面积+0.022%、W2 IPC+0.509%，W2 `IPC×Fmax`约+8.01%。
-W1 IPC仅下降0.006%。已有约22.42 MHz的初步诊断余量，仍未做opt最终验收。
-W1/W2各19/19、run_all ALL PASS；增强前端293/297项、backend566/592项、LSU63757/63948项通过，
-LOCAL_STATS lint通过。两档perf已重测，不能沿用旧周期表。
-本轮两版各一次diagnose，顺序运行，24个输入hash均一致；无opt、未合main、未推送，main仍bc795ae。
+trial频率下降1.090%，面积仅减少0.051%，不保留。W1/W2各19/19、run_all ALL PASS、
+LOCAL_STATS lint通过；两档全部correctness/perf周期与基线逐项相同，IPC无变化。
+一次diagnose，24个输入hash一致。没有新增流水拍数或改变访存所有权。
 
-前端CE及响应入队路径退出首位，新最长路径为IQ源tag选择→PRF读→LSU地址加法→LSQ捕获，
-累计1.759/2.088/2.879/3.042 ns。下一轮优先分析IQ输出tag选择与PRF地址形成，继续积累余量。
-当前组合增加本地SRAM只读访问，额外空读不建立有效指令或refill；外部响应接收时机有调整。
-基线在`build/synth/frontend_response_capacity_baseline/`，完整候选在
-`build/synth/frontend_response_capacity_candidate/`，默认报告对应当前RTL。
-详见[前端响应容量实验](experiments/frontend-response-capacity.md)与[本地预读trial](experiments/icache-local-read.md)。
-原opt及历史main报告归档位置不变。
+补查映射网表：IQ→PRF→地址→LSQ累计由1.759/2.088/2.879/3.042 ns缩短到
+1.603/1.920/2.712/2.875 ns，但全核转为ROB squash→LSU load result valid→CDB
+ready→branch update tag→ROB commit free→rename路径，导致总频率下降。
+下一轮优先检查branch update数据字段是否能提前输出、只用valid控制状态更新，
+再与tag树trial做独立组合对照；须验证分支取消、CDB反压与提交，不能直接假设有效。
+
+当前默认报告和W2仿真器已恢复322.42 MHz基线，24个hash匹配；完整trial与附加
+OpenSTA查询在`build/synth/iq_tag_tree_candidate/`，基线在`iq_tag_tree_baseline/`。
+基线仍有约22.42 MHz初步余量，尚未做opt最终验收。无opt、未合main、未推送，main仍bc795ae。
+详见[IQ tag树试验](experiments/iq-tag-tree.md)及[前端响应容量组合](experiments/frontend-response-capacity.md)。
 
 ## 最新检查点：ALU 乘法器共享（2026-10-23）
 
@@ -92,6 +92,7 @@ load/store 放入旧的 a0/a1 缓冲。优先做分析和方案设计，单次�
 | 2026-10-24 | `freq-icache-read-address-20261024` | W2/16/48/8/2/16/1KB×2 | **0.5195** | **20,437.314 (diag)** | **300.03 (diag)** | 地址预选择；无周期损失，诊断值贴近300线、无opt |
 | 2026-10-24 | `freq-icache-local-read-trial-20261024` | W2/16/48/8/2/16/1KB×2 | 0.5195 | 20,437.519 (diag) | 300.29 (diag) | 本地预读trial；仅+0.088%，待组合评估，无opt |
 | 2026-10-24 | `freq-frontend-response-capacity-20261024` | W2/16/48/8/2/16/1KB×2 | **0.5221** | **20,441.849 (diag)** | **322.42 (diag)** | 本地预读＋响应容量解耦；对300.03版W2吞吐+8.01%，无opt |
+| 2026-10-24 | `freq-iq-tag-tree-trial-20261024` | W2/16/48/8/2/16/1KB×2 | 0.5221 | 20,431.512 (diag) | 318.90 (diag) | 已回退；IPC不变、频率-1.09%，保留322.42版；无opt |
 
 P2 基线 opt 综合：comb 16,361.326、seq 5,648.117、SRAM 2,278.903 µm²，
 min period 17.8320 ns（目标 2 ns，WNS −15.8320 ns）。diagnose 为 25,025.438 µm²、
@@ -236,6 +237,7 @@ ALU，必须先确认 IPC 不低于 0.60。
 | I-cache地址预选择（独立检查点） | `freq-icache-read-address-20261024` | **0.5195** | **0.4989** | **20,437.3** | **300.03** | 未运行 | 未运行 |
 | I-cache本地预读（组合trial） | `freq-icache-local-read-trial-20261024` | 0.5195 | 0.4989 | 20,437.5 | 300.29 | 未运行 | 未运行 |
 | 本地预读＋响应容量解耦（选定组合） | `freq-frontend-response-capacity-20261024` | **0.5221** | **0.4988** | **20,441.8** | **322.42** | 未运行 | 未运行 |
+| IQ源tag随候选树传递（已回退） | `freq-iq-tag-tree-trial-20261024` | 0.5221 | 0.4988 | 20,431.5 | 318.90 | 未运行 | 未运行 |
 
 lane0 非访存流水版相对 C2 opt：面积 **+547.3 µm²（+2.8%）**，Fmax **+31.1%**，IPC **-3.6%**；
 `IPC × Fmax` **+26.4%**。W2/W1 均 19/19，`run_all` ALL PASS。
@@ -288,6 +290,7 @@ W2 使用标准 `make perf MAX_CYCLES=50000000 SIM="$REPO_ROOT/build/sim"` 复�
 ## 分 benchmark（本地预读＋响应容量解耦组合候选）
 
 latency=10、MAX_CYCLES=50,000,000；两档均重新测量。
+IQ tag树trial也已重测两档perf，六项周期逐项相同，复用本表，避免重复。
 
 | benchmark | instructions | W2 cycles | W2 IPC | W1 cycles | W1 IPC |
 | --- | ---: | ---: | ---: | ---: | ---: |

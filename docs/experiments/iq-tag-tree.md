@@ -2,6 +2,7 @@
 
 ## 基线与改动
 
+trial提交`6637367` / `freq-iq-tag-tree-trial-20261024`，位于
 `feat/freq-iq-tag-tree`，基于 `e9390ce` /
 `freq-frontend-response-capacity-20261024`。基线 diagnose 为
 20,441.849 µm² / 322.42 MHz，W2/W1 IPC 为 0.5221 / 0.4988。
@@ -84,3 +85,12 @@ trial第一条路径为ROB寄存器→backend→LSU→CDB→backend→ROB→rena
 完整候选在`build/synth/iq_tag_tree_candidate/`，包括diagnose报告/网表、IQ源码、两档
 仿真器和本轮日志。基线在`build/synth/iq_tag_tree_baseline/`；恢复后默认综合报告与
 仿真器应回到前端容量检查点，trial数据只从归档引用，防止混用。
+
+
+恢复已完成：当前RTL逐文件与e9390ce一致，默认diagnose报告与W2仿真器已恢复基线，
+重新核对24个报告输入hash及仿真器字节一致。精确恢复已验证版本，不重跑综合。
+
+进一步沿网表边界确认控制链：ROB squash_rob_idx[2]→backend squash_seq[1]→
+LSU load_result_valid→CDB src_ready[0]→backend br_update tag→ROB commit_free_valid[0]
+→rename。下一轮优先研究branch update payload提前输出、valid单独控制生效的表达，
+这是待验证方案；分支取消、CDB反压和按序提交必须继续保持。
