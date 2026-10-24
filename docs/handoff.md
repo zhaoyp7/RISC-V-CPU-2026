@@ -2,7 +2,8 @@
 
 ## 当前检查点：opt 456.12 MHz / 19,808.71 µm²
 
-当前分支`feat/freq-rob-completion-match`，检查点`freq-age-matrix-opt-20261024`。
+当前分支`main`，主线检查点`main-freq-age-matrix-20261025`。
+测量检查点仍为`freq-age-matrix-opt-20261024`，源码与ba7ceb6相同。
 本次用户授权的一次opt已完成；RTL与ba7ceb6完全一致，ROB固定槽位匹配trial仍回退。
 
 | 指标 | diagnose | opt | 变化 |
@@ -16,7 +17,10 @@
 结构检查0 problems，实际约7分20秒；没有追加第二次opt或重跑diagnose。
 RTL未改，沿用已通过的W1/W2各19/19、run_all ALL PASS；IPC仍为0.5221/0.4988。
 默认diagnose与opt分别为上述两列，完整归档`build/synth/iq_age_matrix_opt_checkpoint/`。
-main仍bc795ae，未合并、未推送。详见[opt同源对比](experiments/iq-age-matrix-opt.md)。
+已按用户授权将本地main从bc795ae快进到b848264，无冲突；随后仅更新合并记录。
+原main回滚标签`main-before-freq-age-matrix-20261025`保留bc795ae，未推送远端。
+合并后验证树与已测分支一致，diagnose/opt的24个源码hash均匹配，沿用既有测试，不重复综合。
+详见[opt同源对比及合并记录](experiments/iq-age-matrix-opt.md)。
 
 ## 最新检查点：ALU 乘法器共享（2026-10-23）
 

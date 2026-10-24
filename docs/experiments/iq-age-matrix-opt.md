@@ -56,3 +56,13 @@ opt首条映射路径为`_376084_/QN → _376646_/D`，D端到达2.137 ns；扁�
 检查点标签`freq-age-matrix-opt-20261024`；测量前HEAD69be061，RTL与ba7ceb6完全一致。
 现有W1/W2各19/19、run_all ALL PASS及两档IPC仍对应同一份RTL；本次没有声称新增
 门级功能回归。main保持bc795ae，未合并、未推送；原取消opt归档和历史main报告均保留。
+
+## 2026-10-25：用户授权合并main
+
+原main bc795ae是已验证分支b848264的祖先，执行fast-forward合并，无冲突。
+合并瞬间main的完整工作树与feat/freq-rob-completion-match一致；合并后仅更新文档。
+RTL仍与ba7ceb6相同，diagnose/opt的24个源码hash均重新匹配；沿用已有W1/W2各19/19、
+run_all与同源综合结果，不重复测试或综合。此前两个已回退trial没有重新生效。
+
+原main回滚标签`main-before-freq-age-matrix-20261025`指向bc795ae；新主线标签
+`main-freq-age-matrix-20261025`包含合并记录。保留实验分支与原有检查点，未推送远端。
