@@ -647,3 +647,12 @@ W1/W2各19/19、run_all ALL PASS、LOCAL_STATS lint通过；correctness/perf周�
 按既定小收益准则回退，保存freq-rob-completion-match-trial-20261024及新测试，无opt/合main/推送。
 已有网表附加OpenSTA显示ROB→CDB→ROB到达2.4252→2.0403 ns，但ALU路径2.4104→2.4138 ns形成瓶颈。
 后续先核查ALU运算路径，再考虑与此trial组合；当前精确恢复402.36 MHz检查点，详见ROB完成匹配实验。
+
+## 实验 32：402 MHz检查点同源opt验收
+
+用户授权单次opt，RTL同ba7ceb6，未采用ROB完成匹配trial。24个源码输入、7个库hash与全部时序约束一致。
+diagnose 20,505.024 µm² / 402.36 MHz，opt **19,808.712 µm² / 456.12 MHz**，面积-3.40%、频率+13.36%。
+最小周期2.48535→2.19238 ns，2 ns目标WNS -0.484783→-0.191631 ns；结构0 problems。
+实际约7分20秒，唯一一次opt，无新增RTL；沿用W1/W2各19/19、run_all及IPC0.5221/0.4988验证。
+标签freq-age-matrix-opt-20261024，完整归档build/synth/iq_age_matrix_opt_checkpoint/。未合main、未推送。
+详见同源opt对比记录。

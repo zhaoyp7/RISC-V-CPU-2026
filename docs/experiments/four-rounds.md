@@ -144,3 +144,6 @@ APPIMAGE_EXTRACT_AND_RUN=1 make synth MODE=diagnose
 
 每轮综合顺序运行，不与下一轮重叠。候选目录`build/synth/freq_rN_<name>/`保存完整
 诊断、24个源码输入、两档仿真器及日志；核对输入hash后再使用报告数据。
+
+后续用户授权对最终保留的第三轮同一RTL运行一次opt：19,808.712 µm² / 456.12 MHz，
+较原diagnose面积-3.40%、频率+13.36%。详见[同源opt对比](iq-age-matrix-opt.md)。本批四轮的历史诊断数据不变。

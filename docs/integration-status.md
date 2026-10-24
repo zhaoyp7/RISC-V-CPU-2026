@@ -1,23 +1,22 @@
 # 集成状态（P1 完成，P2 进入性能优化）
 
-## 最新追加实验：ROB完成固定槽位匹配（小收益trial，回退402.36 MHz）
+## 当前检查点：opt 456.12 MHz / 19,808.71 µm²
 
-分支`feat/freq-rob-completion-match`，基于af4e794，基线RTL同ba7ceb6。
-trial标签`freq-rob-completion-match-trial-20261024`；本轮结束后恢复原402.36 MHz检查点。
+当前分支`feat/freq-rob-completion-match`，检查点`freq-age-matrix-opt-20261024`。
+本次用户授权的一次opt已完成；RTL与ba7ceb6完全一致，ROB固定槽位匹配trial仍回退。
 
-| 版本 | W2 / W1 IPC | diagnose面积 µm² | diagnose MHz |
+| 指标 | diagnose | opt | 变化 |
 | --- | ---: | ---: | ---: |
-| 当前保留基线 | 0.5221 / 0.4988 | 20,505.024 | 402.36 |
-| ROB固定槽位匹配trial（回退） | 0.5221 / 0.4988 | 20,487.732 | 404.26 |
+| 面积 µm² | 20,505.024 | 19,808.712 | -3.40% |
+| Fmax MHz | 402.36 | 456.12 | +13.36% |
+| 最小周期 ns | 2.48535 | 2.19238 | -0.29297 |
+| 2 ns目标WNS ns | -0.484783 | -0.191631 | +0.293152 |
 
-全核频率+0.474%、面积-0.084%，按既定小收益准则不替换检查点，trial保留用于后续组合。
-W1/W2各19/19、run_all ALL PASS，全部correctness/perf周期与基线相同；一次diagnose24个hash一致。
-新增ROB边界随机28,024/27,978项在原RTL和trial均通过，保留这些测试。
-补查已有网表：ROB→CDB→ROB到达2.4252→2.0403 ns，ALU路径2.4104→2.4138 ns，限制全核收益。
-trial提交52d7c72；已精确恢复基线RTL、默认报告和W2仿真器，24个输入hash一致。
-当前RTL逐文件与af4e794/ba7ceb6一致，新增测试在原RTL已通过，无需重新综合。
-最终复核标签`freq-rob-completion-review-20261024`。本轮无opt、未合main、未推送，main仍bc795ae。
-完整记录与归档见[ROB完成匹配实验](experiments/rob-completion-match.md)。
+24个源码输入（含顺序）、7个库文件、工具版本、SRAM模型及全部时序约束一致。
+结构检查0 problems，实际约7分20秒；没有追加第二次opt或重跑diagnose。
+RTL未改，沿用已通过的W1/W2各19/19、run_all ALL PASS；IPC仍为0.5221/0.4988。
+默认diagnose与opt分别为上述两列，完整归档`build/synth/iq_age_matrix_opt_checkpoint/`。
+main仍bc795ae，未合并、未推送。详见[opt同源对比](experiments/iq-age-matrix-opt.md)。
 
 ## 最新检查点：ALU 乘法器共享（2026-10-23）
 
