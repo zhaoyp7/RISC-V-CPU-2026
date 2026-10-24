@@ -1,4 +1,4 @@
-// Direct tests of LSQ query snapshots and committed-store drain arbitration.
+// External-port tests of LSQ snapshots, store drain and allocation ownership.
 #include "Vlsq.h"
 #include "verilated.h"
 #include <cstdint>
@@ -24,10 +24,10 @@ struct Harness {
         d.query_seq=0; d.query_addr=0; d.query_resp_ready=0; d.query_flush=0;
         tick(); d.reset=0; d.eval();
     }
-    void alloc(unsigned id, unsigned seq) {
-        d.alloc_valid=1; d.alloc_id=id; d.alloc_is_store=1;
+    void alloc(unsigned id, unsigned seq, bool store=true) {
+        d.alloc_valid=1; d.alloc_id=id; d.alloc_is_store=store;
         d.seq_base=seq; d.alloc_fire=1; d.eval();
-        check(d.alloc_ready, "allocate store"); tick();
+        check(d.alloc_ready, "allocate free slot"); tick();
         d.alloc_fire=0; d.alloc_valid=0; d.eval();
     }
     void fill(unsigned id, uint32_t addr, uint32_t data, unsigned mask=15) {
@@ -59,6 +59,60 @@ struct Harness {
         check(d.drain_wstrb==mask,"store drain byte enables");
     }
     void consume() { d.query_resp_ready=1; tick(); d.query_resp_ready=0; d.eval(); }
+    void allocation_boundaries() {
+        constexpr unsigned lw=TB_DEPTH==16?4:3;
+        // A stalled two-lane request must remain atomic when only one id frees.
+        reset();alloc(0,10,false);
+        if(TB_W==2)alloc(TB_DEPTH-1,11,false);
+        d.alloc_valid=(1u<<TB_W)-1;
+        d.alloc_id=(TB_W==2)?((TB_DEPTH-1)<<lw):0;
+        d.alloc_is_store=d.alloc_valid;d.seq_base=100;d.alloc_fire=1;d.eval();
+        check(!d.alloc_ready,"occupied load rejects pending allocation");
+        d.commit_valid=1;d.commit_is_load=1;d.commit_id=0;d.eval();
+        check(!d.alloc_ready,"load commit cannot bypass registered occupancy");
+        tick();d.commit_valid=0;d.commit_is_load=0;d.eval();
+        check(d.count==TB_W-1,"rejected allocation does not claim released id");
+        if(TB_W==2) {
+            check(!d.alloc_ready,"one free lane cannot partially allocate group");
+            d.commit_valid=1;d.commit_is_load=1;d.commit_id=TB_DEPTH-1;d.eval();
+            check(!d.alloc_ready,"second release also waits for edge");
+            tick();d.commit_valid=0;d.commit_is_load=0;d.eval();
+            check(d.count==0,"both old loads release before allocation");
+        }
+        check(d.alloc_ready,"held group becomes ready after release edges");
+        tick();d.alloc_valid=0;d.alloc_fire=0;d.eval();
+        check(d.count==TB_W,"held allocation accepted once with all lanes");
+        fill(0,0x5000,0x11223344);
+        if(TB_W==2)fill(TB_DEPTH-1,0x5004,0x55667788);
+        query(102,0x5000);response(false,true,0x11223344);consume();
+        if(TB_W==2){query(102,0x5004);response(false,true,0x55667788);consume();}
+
+        reset();
+        if(TB_W==2) {
+            d.alloc_valid=3;d.alloc_id=0;d.alloc_fire=1;d.eval();
+            check(!d.alloc_ready,"duplicate free ids reject whole group");tick();
+            check(d.count==0,"duplicate id request makes no partial allocation");
+            d.alloc_valid=2;d.alloc_id=(TB_DEPTH-1)<<lw;d.seq_base=20;d.eval();
+            check(d.alloc_ready,"inactive lane does not reserve its id");tick();
+            d.alloc_valid=0;d.alloc_fire=0;d.eval();
+            check(d.count==1,"only active high lane owns a slot");
+        } else alloc(TB_DEPTH-1,21);
+        // A speculative owner remains busy throughout the squash cycle.
+        d.alloc_valid=1;d.alloc_id=TB_DEPTH-1;d.alloc_is_store=1;
+        d.seq_base=30;d.alloc_fire=1;d.squash_valid=1;d.squash_seq=20;d.eval();
+        check(!d.alloc_ready,"squash cannot bypass occupied owner");tick();
+        d.squash_valid=0;d.eval();check(d.count==0 && d.alloc_ready,
+                                                       "squashed id reusable after edge");
+        tick();d.alloc_valid=0;d.alloc_fire=0;d.eval();
+        check(d.count==1,"new post-squash owner allocated once");
+        fill(TB_DEPTH-1,0x6000,0xabcdef01);
+        query(31,0x6000);response(false,true,0xabcdef01);consume();
+        commit_store(TB_DEPTH-1);
+        d.squash_valid=1;d.squash_seq=0;tick();d.squash_valid=0;
+        d.alloc_valid=1;d.alloc_id=TB_DEPTH-1;d.eval();
+        check(!d.alloc_ready && d.count==1,"committed store retains id through squash");
+        d.alloc_valid=0;d.eval();check(d.alloc_ready,"empty group ignores occupied slots");
+    }
 };
 
 int main(int argc, char** argv) {
@@ -141,14 +195,17 @@ int main(int argc, char** argv) {
         }
         h.check(!d.drain_valid,"sent entries cannot be sent twice");
         // All stores outstanding. Each B response frees its FIFO head slot;
-        // allocate that id on the same edge and send its new owner while the
-        // remaining older B responses are still pending. This wraps the FIFO.
+        // retain the allocation through the response edge, then allocate its
+        // new owner one cycle later while older responses remain pending.
+        // The new stores wrap the sent FIFO without changing B response order.
         for (unsigned pos=0; pos<TB_DEPTH; ++pos) {
             unsigned id=order[pos];
             d.store_resp_valid=1; d.alloc_valid=1; d.alloc_is_store=1;
             d.alloc_fire=1; d.alloc_id=id; d.seq_base=0xa0000000u+pos; d.eval();
-            h.check(d.alloc_ready,"B head can be reused on response edge");
-            h.tick(); d.store_resp_valid=0; d.alloc_valid=0; d.alloc_fire=0;
+            h.check(!d.alloc_ready,"B response cannot bypass registered occupancy");
+            h.tick(); d.store_resp_valid=0; d.eval();
+            h.check(d.count==TB_DEPTH-1 && d.alloc_ready,"B head reusable after response edge");
+            h.tick(); d.alloc_valid=0; d.alloc_fire=0;
             h.fill(id,0x3000+4*id,0xd4000000u+id);
             h.check(!d.drain_valid,"reused slot waits for new commit");
             h.commit_store(id); h.drain(id,0x3000,0xd4000000u,15);
@@ -178,6 +235,7 @@ int main(int argc, char** argv) {
     d.drain_fire=1; h.tick(); d.drain_fire=0;
     d.store_resp_valid=1; h.tick(); d.store_resp_valid=0;
     h.check(d.count==0 && !d.drain_valid,"squashed store never writes");
+    h.allocation_boundaries();
     std::printf("lsq_query W=%d depth=%d: %u checks, %u failures\n",TB_W,TB_DEPTH,h.checks,h.fails);
     return h.fails ? 1:0;
 }

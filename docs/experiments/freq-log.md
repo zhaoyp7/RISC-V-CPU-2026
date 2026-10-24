@@ -474,3 +474,23 @@ diagnose **20,397.453 µm² / 284.44 MHz**，频率+1.67%、面积+0.82%；W2/W1
 原跨cache路径退出首位，新路径为ROB squash索引→LSU/CDB→分支tag→ROB提交LSQ id
 →LSQ alloc_ready→IQ捕获。下一轮优先评估LSQ对当拍提交释放空间的组合依赖，
 保持表项复用与访存所有权，重新测量分配停顿代价。详见 [前端响应队列实验](frontend-response-queues.md)。
+
+## 实验 20：LSQ 分配使用寄存占用（2026-10-24）
+
+`feat/freq-lsq-registered-alloc` / `freq-lsq-registered-alloc-20261024`，基于`1706178`。
+LSQ alloc_ready只依据寄存valid和组内重复id，load提交/B响应释放沿后才复用；
+整组原子分配、查询快照、store提交/发送/响应所有权不变。增强LSQ测试
+677/1229/1242项通过，W1/W2各19/19、run_all ALL PASS。
+
+选定组合版保留前端响应队列：diagnose **20,389.871 µm² / 290.50 MHz**，
+IPC 0.5195/0.4989。相对上一轮频率+2.13%、面积-0.037%、W2 `IPC×Fmax`约+2.10%。
+同时完成移除队列但保留容量修复的对照：20,261.932 / 262.23 MHz，IPC 0.5272/0.5057，
+同样通过两档全量及run_all。组合版W2 `IPC×Fmax`比对照高9.15%，故保留响应队列。
+两版各一次diagnose、24个输入hash一致；默认RTL/仿真器/报告已恢复为组合版。
+
+原ROB提交→LSQ ready→IQ路径退出首位，新路径为IQ源tag选择→PRF→LSU地址加法
+→LSQ fill捕获；累计到达1.759/2.087/3.220/3.382 ns。下一轮优先研究地址进位结构，
+保持访存所有权和拍数。无opt、未合main、未推送；基线为
+`build/synth/lsq_registered_alloc_baseline/`，两个候选分别归档在
+`lsq_registered_alloc_buffered/`和`lsq_registered_alloc_direct/`。
+详见 [LSQ寄存占用实验](lsq-registered-alloc.md)。

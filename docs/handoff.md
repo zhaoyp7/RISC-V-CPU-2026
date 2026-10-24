@@ -1,26 +1,28 @@
 # RISC-V CPU 2026 — 协作者交接（P2 功能完成，性能优化中）
 
-## 当前频率实验：前端独立响应队列（独立实验，小收益）
+## 当前频率实验：LSQ 分配使用寄存占用（独立检查点）
 
-`feat/freq-frontend-response-queues`，tag `freq-frontend-response-20261024`，基于`d309093`。
-两路I-cache各接两槽响应队列，ready只看本路占用；保留use2、预测快照和即时redirect。
-同时修复rename停顿时decode FIFO借用未出队槽位的问题。
+`feat/freq-lsq-registered-alloc`，tag `freq-lsq-registered-alloc-20261024`，基于`1706178`。
+alloc_ready只检查寄存valid及组内重复id；load提交/B响应释放沿后才允许复用。
 
-| 候选 | W2 / W1 IPC | diagnose 面积 / MHz | opt |
-| --- | ---: | ---: | --- |
-| dispatch年龄预分配 `d309093` | 0.5274 / 0.5059 | 20,231.241 / 279.78 | 未运行 |
-| 前端独立响应队列 | **0.5196 / 0.4990** | **20,397.453 / 284.44** | **未运行** |
+| 候选 | W2 / W1 IPC | diagnose 面积 / MHz |
+| --- | ---: | ---: |
+| 响应队列基线 `1706178` | 0.5196 / 0.4990 | 20,397.453 / 284.44 |
+| LSQ寄存占用＋响应队列（选定） | **0.5195 / 0.4989** | **20,389.871 / 290.50** |
+| 同一LSQ修改、移除响应队列（撤回对照） | 0.5272 / 0.5057 | 20,261.932 / 262.23 |
 
-频率+1.67%、面积+0.82%；W2 IPC -1.49%，`IPC×Fmax`仅+0.16%，整体收益很小。
-保留独立实验供后续组合验证，不据此单独合main。W1/W2各19/19、run_all ALL PASS，
-增强前端测试281/284项通过；一次diagnose，24个输入hash一致。
-新路径为squash索引→LSU/CDB→分支tag→ROB提交LSQ id→LSQ alloc_ready→IQ捕获。
-下一轮优先评估LSQ分配对当拍提交释放的组合依赖，保持表项复用与访存所有权。
+选定版相对基线：频率+2.13%、面积-0.037%、W2 IPC -0.026%，`IPC×Fmax`约+2.10%。
+两版各完成一次diagnose、输入24个hash一致；W1/W2全量各19/19、各自run_all ALL PASS。
+LSQ增强测试677/1229/1242项通过。移除响应队列会重新引入rename反压经两路cache
+ready到SRAM地址的长链；保留组合版的W2 `IPC×Fmax`比对照高9.15%，故本轮保留响应队列。
+两版均保留前端容量修复，不能与尚无此修复的旧直连前端混为同一对照。
 
-未跑opt、未合main、未推送；main仍为`bc795ae`。基线在
-`build/synth/frontend_response_baseline/`，详情见
-[前端响应队列实验](experiments/frontend-response-queues.md)。原取消opt产物在
-`build/synth/opt_cancelled_20261023/`，原main报告在`build/synth/frequency_checkpoint_baseline/`。
+新最长路径为 **IQ选择→PRF读→LSU地址加法→LSQ fill捕获**，下一轮优先研究地址
+加法器进位结构，保持访存所有权和拍数。选定报告/仿真器已恢复至默认目录，另有
+`build/synth/lsq_registered_alloc_buffered/`和`lsq_registered_alloc_direct/`两份归档。
+基线为`build/synth/lsq_registered_alloc_baseline/`，详见
+[LSQ寄存占用实验](experiments/lsq-registered-alloc.md)。未跑opt、未合main、未推送，
+main仍为`bc795ae`；原取消opt及历史main报告的归档位置保持不变。
 
 ## 最新检查点：ALU 乘法器共享（2026-10-23）
 

@@ -100,52 +100,24 @@ module lsq #(
   logic [FN-1:0]   sent_count;
 
   integer i, lane;
-  integer i_commit, lane_commit;
-  integer i_free, lane_free;
+  integer lane_free;
   integer i_squash, i_count, lane_count;
   logic [`CPU_LSQ_IDX_W-1:0] id;
 
   // ---- allocation ---------------------------------------------------------
-  logic [D-1:0] free_by_commit;
-  logic [D-1:0] free_by_resp;
-  logic [D-1:0] free_mask;
   logic [D-1:0] alloc_used;
   logic         alloc_ok;
-  logic         commit_hit;
 
+  // 分配只使用寄存占用；commit/B 响应释放在下一拍才可见，
+  // 切断 ROB 提交或内存响应经 alloc_ready 回传到 IQ 的组合路径。
   always_comb begin
-    free_by_commit = '0;
-    for (i_commit = 0; i_commit < D; i_commit = i_commit + 1) begin
-      commit_hit = 1'b0;
-      for (lane_commit = 0; lane_commit < W; lane_commit = lane_commit + 1) begin
-        if (commit_valid[lane_commit] && commit_is_load[lane_commit] &&
-            (commit_id[lane_commit*LW +: LW] == i_commit[LW-1:0]))
-          commit_hit = 1'b1;
-      end
-      free_by_commit[i_commit] = commit_hit;
-    end
-  end
-
-  // 写响应释放表项（按序 FIFO 头部）
-  always_comb begin
-    free_by_resp = '0;
-    if (store_resp_valid && (sent_count != 0))
-      free_by_resp[sent_fifo[sent_head*LW +: LW]] = 1'b1;
-  end
-
-  always_comb begin
-    free_mask = '0;
-    for (i_free = 0; i_free < D; i_free = i_free + 1)
-      free_mask[i_free] = !valid[i_free] || free_by_commit[i_free] ||
-                          free_by_resp[i_free];
-
     alloc_ok = 1'b1;
     alloc_used = '0;
     id = '0;
     for (lane_free = 0; lane_free < W; lane_free = lane_free + 1) begin
       if (alloc_valid[lane_free]) begin
         id = alloc_id[lane_free*LW +: LW];
-        if (!free_mask[id] || alloc_used[id])
+        if (valid[id] || alloc_used[id])
           alloc_ok = 1'b0;
         alloc_used[id] = 1'b1;
       end
@@ -375,7 +347,7 @@ module lsq #(
                     ((drain_valid && drain_fire) ? 1'b1 : 1'b0) -
                     ((store_resp_valid && (sent_count != 0)) ? 1'b1 : 1'b0);
 
-      // allocation (last, so a freed id can be reused immediately)
+      // allocation：释放沿后的下一拍才允许新 owner 占用该 id。
       if (alloc_ready && alloc_fire) begin
         for (lane = 0; lane < W; lane = lane + 1) begin
           if (alloc_valid[lane]) begin

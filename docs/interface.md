@@ -318,6 +318,13 @@ issue、load/store 流与 AXI 口保持原协议。请求 `query_valid && query_
 使用相同握手，q/r id 均从等待表选择集合排除。阻塞响应被消费后留表重试，
 只有实际读请求握手或本地结果入队才释放等待表所有者。
 
+### LSQ 分配只使用寄存占用（频率实验）
+
+`feat/freq-lsq-registered-alloc`中，alloc_ready只检查寄存valid和组内重复id，
+不借用当拍load提交、store写响应或squash释放的表项。释放在时钟沿生效后，
+下一拍才可接收该id的新owner。整组分配仍原子执行；等待方保持请求直到ready。
+load提交释放、store提交后排空及写响应释放的状态更新规则不变。
+
 ### IQ 末端取消的无效载荷约定（频率实验）
 
 `feat/freq-iq-late-squash` 先预选最老候选，再按squash过滤独立out_valid。

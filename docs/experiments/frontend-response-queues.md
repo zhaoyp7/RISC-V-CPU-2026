@@ -106,3 +106,10 @@ free_by_commit、free_by_resp，使ROB提交id组合穿过alloc_ready进入IQ。
 可以研究仅使用寄存空闲状态或提前预留容量，但须单独测量可能增加的分配停顿，
 并验证load提交释放、store写响应复用、双lane重复id、squash和满表恢复。
 不直接延迟redirect，也不把load/store放入旧a0/a1缓冲。本轮到此收尾。
+
+## 后续组合验证（2026-10-24）
+
+[LSQ寄存占用实验](lsq-registered-alloc.md)完成后，保留响应队列为290.50 MHz、
+W2 IPC 0.5195；移除响应队列且保留容量修复为262.23 MHz、W2 IPC 0.5272。
+两版均通过W1/W2全量及run_all。保留队列时W2 `IPC×Fmax`高9.15%，因此后续
+组合版保留队列；本节不改变上面单项实验仅+0.16%的历史结论。
