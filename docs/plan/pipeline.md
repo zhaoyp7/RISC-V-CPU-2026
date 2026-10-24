@@ -720,3 +720,12 @@ W1/W2各19/19、run_all ALL PASS，两档perf周期相同；一次diagnose24个h
 一次diagnose24个hash匹配、结构检查0 problems：20,505.024 µm² / 402.36 MHz。
 相对第二轮频率+18.07%、面积+78.35 µm²，保留freq-r3-age-matrix-20261024，无opt。
 新瓶颈ROB取消→LSU结果valid→CDB→ROB完成搜索。第四轮优化CDB并消除packed树UNOPTFLAT假依赖。
+
+## 34. 四轮结束，保留第三轮402.36 MHz
+
+并行有效源前缀授权并拆分IQ节点；精确轮转参考四档69,797项通过，IQ1,468,560项通过。
+W1/W2各19/19、run_all ALL PASS、LOCAL_STATS lint通过；correctness/perf周期相同。
+一次diagnose24个hash一致：20,482.585 µm² / 385.25 MHz。较第三轮频率-4.25%、面积-22.44 µm²，
+组合不保留，trial标签freq-r4-cdb-parallel-trial-20261024。CDB段0.370→0.379 ns，未获得门级改善。
+最终选择ba7ceb6的402.36 MHz RTL，较起点频率+24.79%、面积+0.309%，IPC0.5221/0.4988不变。
+四轮结束，保留新测试，精确恢复第三轮的RTL/报告/仿真器；无opt、未合main、未推送。

@@ -1,5 +1,5 @@
 #!/bin/sh
-# CDB arbitration test: default W=1/R=1 and W=2/R=2.
+# CDB arbitration test: W=1/2 crossed with R=1/2.
 set -eu
 
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -19,3 +19,5 @@ run_one() {
 
 run_one 1 1
 run_one 2 2
+run_one 1 2
+run_one 2 1

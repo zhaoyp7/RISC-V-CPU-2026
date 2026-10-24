@@ -94,3 +94,6 @@ trial第一条路径为ROB寄存器→backend→LSU→CDB→backend→ROB→rena
 LSU load_result_valid→CDB src_ready[0]→backend br_update tag→ROB commit_free_valid[0]
 →rename。下一轮优先研究branch update payload提前输出、valid单独控制生效的表达，
 这是待验证方案；分支取消、CDB反压和按序提交必须继续保持。
+
+后续：[连续四轮](four-rounds.md)中，branch update数据解耦后与本tag树组合达到340.77 MHz，
+再通过分配时记录IQ年龄关系达到402.36 MHz。本文318.90 MHz仍是原独立trial结果。

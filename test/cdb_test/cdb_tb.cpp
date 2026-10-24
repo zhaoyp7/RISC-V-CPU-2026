@@ -162,6 +162,45 @@ struct Harness {
         tick();
     }
 
+    // Exhaust all legal rotation states and input masks against the original
+    // sequential, per-lane scan. Check exact lane order, not just set membership.
+    void exhaustive_order() {
+        for (int rotation=0; rotation<N; ++rotation) {
+            for (unsigned mask=0; mask<(1u<<N); ++mask) {
+                reset();
+                dut->src_valid=1;
+                for (int c=0;c<rotation;++c) tick();
+                dut->src_valid=0;
+                tick(); // empty cycle must preserve the rotation position
+                unsigned exc=next_rand()&((1u<<N)-1);
+                uint32_t values[N];
+                for (int i=0;i<N;++i) {
+                    set_tag(i,i+1);values[i]=next_rand();set_value(i,values[i]);
+                }
+                dut->src_valid=mask;dut->src_exception=exc;
+                dut->clk=0;dut->eval();
+                unsigned used=0;
+                for (int lane=0;lane<R;++lane) {
+                    int winner=-1;
+                    for (int k=0;k<N;++k) {
+                        int i=(rotation+lane+k+1)%N;
+                        if ((mask>>i&1u) && !(used>>i&1u)) {winner=i;break;}
+                    }
+                    uint64_t expected=0;
+                    if (winner>=0) {
+                        used|=1u<<winner;
+                        expected=1ull|((uint64_t)(winner+1)<<1)|
+                                 ((uint64_t)values[winner]<<7)|
+                                 ((uint64_t)(exc>>winner&1u)<<39);
+                    }
+                    expect(cdb_lane(lane)==expected,"exhaustive exact lane payload/order");
+                }
+                expect((unsigned)dut->src_ready==used,"exhaustive exact ready mask");
+            }
+        }
+        reset();
+    }
+
     void random_stress() {
         bool valid[N] = {};
         uint32_t tag[N] = {};
@@ -226,6 +265,7 @@ int main(int argc, char** argv) {
     h.dut = &dut;
     h.reset();
 
+    h.exhaustive_order();
     h.single_source();
     h.drain_all();
     h.random_stress();
