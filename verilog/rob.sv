@@ -304,66 +304,52 @@ module rob #(
   assign in_ready = !flush_young && !recover_valid && !redirect_valid &&
                     ((count + W) <= DEPTH);
 
-  // ---- 完成搜索（固定物理槽比较，保持最年轻命中优先）---------------------
-  wire [DEPTH-1:0] later_slot [0:DEPTH-1];
-  for (genvar i = 0; i < DEPTH; i = i + 1) begin : gen_completion_order
-    for (genvar j = 0; j < DEPTH; j = j + 1) begin : gen_later
-      // 从head开始的环形顺序：先[head,DEPTH)，再[0,head)。
-      // 不旋转表项数据；只由寄存head提前计算哪些固定槽位更年轻。
-      if (j > i) begin : gen_above
-        assign later_slot[i][j] = (head <= i) || (head > j);
-      end else if (j < i) begin : gen_below
-        assign later_slot[i][j] = (head <= i) && (head > j);
-      end else begin : gen_same
-        assign later_slot[i][j] = 1'b0;
+  // ---- 完成搜索（组合） ----------------------------------------------------
+  logic [R-1:0]  cdb_hit;
+  logic [RW-1:0] cdb_idx [0:R-1];
+  logic [W-1:0]  comp_hit;
+  logic [RW-1:0] comp_idx [0:W-1];
+  integer i_cmp, i_clane, i_cmp_idx, r_cmp;
+
+  always_comb begin
+    done_now_mask = '0;
+    for (r_cmp = 0; r_cmp < R; r_cmp = r_cmp + 1) begin
+      cdb_hit[r_cmp] = 1'b0;
+      cdb_idx[r_cmp] = '0;
+      for (i_cmp = 0; i_cmp < DEPTH; i_cmp = i_cmp + 1) begin
+        i_cmp_idx = (head + i_cmp) & MASK;
+        if (entry_valid[i_cmp_idx] &&
+            (entry_dest_tag[i_cmp_idx] == cdb_tag[r_cmp*PW +: PW])) begin
+          cdb_hit[r_cmp] = 1'b1;
+          cdb_idx[r_cmp] = i_cmp_idx;
+        end
+      end
+      if (cdb_valid[r_cmp] && cdb_hit[r_cmp] &&
+          (entry_dest_tag[cdb_idx[r_cmp]] != '0))
+        done_now_mask[entry_dest_tag[cdb_idx[r_cmp]]] = 1'b1;
+    end
+
+    for (i_clane = 0; i_clane < W; i_clane = i_clane + 1) begin
+      comp_hit[i_clane] = 1'b0;
+      comp_idx[i_clane] = '0;
+      if (complete_valid[i_clane]) begin
+        for (i_cmp = 0; i_cmp < DEPTH; i_cmp = i_cmp + 1) begin
+          i_cmp_idx = (head + i_cmp) & MASK;
+          if (entry_valid[i_cmp_idx] &&
+              (entry_dest_tag[i_cmp_idx] == complete_tag[i_clane*PW +: PW])) begin
+            comp_hit[i_clane] = 1'b1;
+            comp_idx[i_clane] = i_cmp_idx;
+          end
+        end
+        if (comp_hit[i_clane] &&
+            (entry_dest_tag[comp_idx[i_clane]] != '0))
+          done_now_mask[entry_dest_tag[comp_idx[i_clane]]] = 1'b1;
       end
     end
   end
 
-  wire [DEPTH-1:0] cdb_match [0:R-1];
-  wire [DEPTH-1:0] cdb_pick [0:R-1];
-  wire [R-1:0] cdb_hit;
-  for (genvar r = 0; r < R; r = r + 1) begin : gen_cdb_match
-    assign cdb_hit[r] = |cdb_match[r];
-    for (genvar i = 0; i < DEPTH; i = i + 1) begin : gen_slot
-      assign cdb_match[r][i] = entry_valid[i] &&
-                               (entry_dest_tag[i] == cdb_tag[r*PW +: PW]);
-      assign cdb_pick[r][i] = cdb_match[r][i] &&
-                               !(|(cdb_match[r] & later_slot[i]));
-    end
-  end
-
-  wire [DEPTH-1:0] comp_match [0:W-1];
-  wire [DEPTH-1:0] comp_pick [0:W-1];
-  wire [W-1:0] comp_hit;
-  for (genvar l = 0; l < W; l = l + 1) begin : gen_complete_match
-    assign comp_hit[l] = |comp_match[l];
-    for (genvar i = 0; i < DEPTH; i = i + 1) begin : gen_slot
-      assign comp_match[l][i] = entry_valid[i] &&
-                                (entry_dest_tag[i] == complete_tag[l*PW +: PW]);
-      assign comp_pick[l][i] = comp_match[l][i] &&
-                                !(|(comp_match[l] & later_slot[i]));
-    end
-  end
-
-  integer r_mask, l_mask;
-  always_comb begin
-    done_now_mask = '0;
-    for (r_mask = 0; r_mask < R; r_mask = r_mask + 1) begin
-      // hit保证选中表项的dest_tag等于广播tag，不必编码索引再读一次tag。
-      if (cdb_valid[r_mask] && cdb_hit[r_mask] &&
-          (cdb_tag[r_mask*PW +: PW] != '0))
-        done_now_mask[cdb_tag[r_mask*PW +: PW]] = 1'b1;
-    end
-    for (l_mask = 0; l_mask < W; l_mask = l_mask + 1) begin
-      if (complete_valid[l_mask] && comp_hit[l_mask] &&
-          (complete_tag[l_mask*PW +: PW] != '0))
-        done_now_mask[complete_tag[l_mask*PW +: PW]] = 1'b1;
-    end
-  end
-
   // ---- 时序 ----------------------------------------------------------------
-  integer i_ff, i_flush, i_alloc2, i_alloc_idx, i_ff_clane, r_cmp, i_done;
+  integer i_ff, i_flush, i_alloc2, i_alloc_idx, i_ff_clane;
 
   always_ff @(posedge clk) begin
     if (reset) begin
@@ -382,21 +368,18 @@ module rob #(
       recover_valid  <= 1'b0;
       squash_valid   <= 1'b0;
 
-      // 完成广播直接使用one-hot命中写固定槽位，valid只在状态更新处门控。
+      // 完成广播（R 条）
       for (r_cmp = 0; r_cmp < R; r_cmp = r_cmp + 1) begin
-        for (i_done = 0; i_done < DEPTH; i_done = i_done + 1) begin
-          if (cdb_valid[r_cmp] && cdb_pick[r_cmp][i_done]) begin
-            entry_done[i_done] <= 1'b1;
-            if (cdb_exception[r_cmp]) entry_exception[i_done] <= 1'b1;
-          end
+        if (cdb_valid[r_cmp] && cdb_hit[r_cmp]) begin
+          entry_done[cdb_idx[r_cmp]] <= 1'b1;
+          if (cdb_exception[r_cmp]) entry_exception[cdb_idx[r_cmp]] <= 1'b1;
         end
       end
       for (i_ff_clane = 0; i_ff_clane < W; i_ff_clane = i_ff_clane + 1) begin
-        for (i_done = 0; i_done < DEPTH; i_done = i_done + 1) begin
-          if (complete_valid[i_ff_clane] && comp_pick[i_ff_clane][i_done]) begin
-            entry_done[i_done] <= 1'b1;
-            if (complete_exception[i_ff_clane]) entry_exception[i_done] <= 1'b1;
-          end
+        if (complete_valid[i_ff_clane] && comp_hit[i_ff_clane]) begin
+          entry_done[comp_idx[i_ff_clane]] <= 1'b1;
+          if (complete_exception[i_ff_clane])
+            entry_exception[comp_idx[i_ff_clane]] <= 1'b1;
         end
       end
 

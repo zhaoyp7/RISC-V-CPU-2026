@@ -14,7 +14,9 @@ trial标签`freq-rob-completion-match-trial-20261024`；本轮结束后恢复原
 W1/W2各19/19、run_all ALL PASS，全部correctness/perf周期与基线相同；一次diagnose24个hash一致。
 新增ROB边界随机28,024/27,978项在原RTL和trial均通过，保留这些测试。
 补查已有网表：ROB→CDB→ROB到达2.4252→2.0403 ns，ALU路径2.4104→2.4138 ns，限制全核收益。
-默认报告/仿真器恢复核对尚在进行。本轮无opt、未合main、未推送，main仍bc795ae。
+trial提交52d7c72；已精确恢复基线RTL、默认报告和W2仿真器，24个输入hash一致。
+当前RTL逐文件与af4e794/ba7ceb6一致，新增测试在原RTL已通过，无需重新综合。
+最终复核标签`freq-rob-completion-review-20261024`。本轮无opt、未合main、未推送，main仍bc795ae。
 完整记录与归档见[ROB完成匹配实验](experiments/rob-completion-match.md)。
 
 ## 最新检查点：ALU 乘法器共享（2026-10-23）
