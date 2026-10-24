@@ -621,3 +621,11 @@ W1/W2各19/19、run_all ALL PASS，两档perf周期相同；一次diagnose24个h
 一次diagnose24个hash匹配，20,426.671 µm² / 340.77 MHz，较本批次起点频率+5.69%、面积-0.074%。
 保留组合，tag freq-r2-iq-combined-20261024，无opt。首条IQ→PRF→AGU→LSQ仍为2.875 ns到达。
 第三轮继续缩短IQ年龄选择，详见四轮记录。归档`build/synth/freq_r2_iq_combined/`。
+
+## 实验 29：四轮3，IQ年龄关系寄存
+
+分配时对槽位保存完整32位seq的成对年龄关系，发射按更老候选集合选第一/第二名。
+边界随机矩阵1,468,560项通过，W1/W2各19/19、run_all ALL PASS，IPC周期相同。
+一次diagnose24个hash匹配、结构检查0 problems：20,505.024 µm² / 402.36 MHz。
+相对第二轮频率+18.07%、面积+78.35 µm²，保留freq-r3-age-matrix-20261024，无opt。
+新瓶颈ROB取消→LSU结果valid→CDB→ROB完成搜索。第四轮优化CDB并消除packed树UNOPTFLAT假依赖。

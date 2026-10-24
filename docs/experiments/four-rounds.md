@@ -41,6 +41,31 @@ W1/W2各19/19、run_all ALL PASS、配置检查通过，两档perf六项周期�
 归档目录`build/synth/freq_r2_iq_combined/`。第三轮优先改进入队年龄信息的保存方式，
 将反复比较32位seq的工作移出发射选择，不增加发射拍数。
 
+## 第三轮：分配时保存IQ年龄关系
+
+基于423e9a3 / freq-r2-iq-combined-20261024。对每对IQ物理槽保存一位年龄关系，
+任一端分配时，以两端分配后的完整32位seq比较；相同seq时较低槽优先。
+两端同拍分配均使用新seq；squash槽复用也按新seq更新。复位只清有效位，关系位在
+相关槽分配时建立，所有参与选择的有效槽对都已更新。不改变32位年龄比较语义。
+
+发射时，每个候选查询比它更老的ready集合：平衡树仅记录有无、是否至少两个，
+据此选完整候选第一/第二名。lane0从完整候选与store预填的并集中选最老项；
+若lane0为预填，lane1选完整第一名，否则选完整第二名。one-hot输出索引、seq和源tag，
+其余uop仍按索引读。registered wake、late squash、独立lane反压及IW>2 fallback不变。
+无额外流水拍数，但新增年龄关系状态和分配比较逻辑，须测面积及新的入队路径。
+
+原IQ五档scoreboard共1,466,671项零失败；新增高位年龄、UINT32_MAX跨界双分配、
+复位后重建及squash同拍复用的外部端口对拍，使用独立排序参考，不读取内部矩阵。
+新增边界后的五档共1,468,560项零失败（原三档行为61/60/64项同样通过）；
+W1/W2各19/19、run_all ALL PASS、配置检查通过；两档perf六项周期与基线相同。
+一次diagnose、24个输入hash一致、结构检查0 problems：20,505.023900 µm² / 402.357564 MHz，
+最小周期2.48535156 ns，WNS -0.484783 ns。相对第二轮频率+18.075%、面积+78.353 µm²
+（+0.384%）；相对初始频率+24.794%、面积+0.309%。保留tag freq-r3-age-matrix-20261024。
+新的第一条路径ROB→backend→LSU结果valid→CDB→ROB完成搜索，累计0.070/0.528/1.072/1.442/2.425 ns。
+IQ packed树节点产生Verilator UNOPTFLAT假依赖，实际为单向树；结构检查无环，全部功能检查通过。
+第四轮将以独立unpacked节点消除警告，同时针对CDB仲裁做并行授权实验。
+归档`build/synth/freq_r3_age_matrix/`，额外边界日志在/tmp/freq-r3-age-matrix-iq-boundary.log。
+
 ## 复现与归档约定
 
 每轮使用同一官方filelist和默认配置；W1包装器仅增加CPU_ISSUE_WIDTH=1。

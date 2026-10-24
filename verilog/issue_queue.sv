@@ -173,64 +173,90 @@ module issue_queue #(
   end
 
   generate
-    if (IW <= 2) begin : gen_select_tree
+    if (IW <= 2) begin : gen_select_age_matrix
       localparam integer LEAVES = 1 << $clog2(D);
-      // 候选低位：valid[40] / seq[39:8] / slot[7:0]，高位携带两个源 tag。
-      // tag 随年龄选择一起归并，避免选出 slot 后再走一次动态索引 mux。
-      // 避免综合前端把 unpacked struct 数组字段误解析为独立无驱动信号。
-      localparam integer CW = 41 + 2*PW;
-      // 调用时 lhs 总来自物理 slot 更低的左子树，相等 seq 时保留 lhs。
-      function automatic [CW-1:0] oldest(input logic [CW-1:0] lhs,
-                                             input logic [CW-1:0] rhs);
-        oldest = (rhs[40] && (!lhs[40] || rhs[39:8] < lhs[39:8])) ? rhs : lhs;
-      endfunction
-      wire [CW-1:0] first [0:2*LEAVES-1] /* verilator split_var */;
-      wire [CW-1:0] second [0:2*LEAVES-1] /* verilator split_var */;
-      wire [CW-1:0] prefill [0:2*LEAVES-1] /* verilator split_var */;
-      assign first[0] = '0;
-      assign second[0] = '0;
-      assign prefill[0] = '0;
-      for (genvar g = 0; g < LEAVES; g = g + 1) begin : gen_leaf
-        if (g < D) begin : gen_entry
-          assign first[LEAVES+g] = {src2_tag[g*PW +: PW], src1_tag[g*PW +: PW],
-                                   cand_issue[g], seq[g*32 +: 32], 8'(g)};
-          assign prefill[LEAVES+g] = {src2_tag[g*PW +: PW], src1_tag[g*PW +: PW],
-                                     cand_prefill[g], seq[g*32 +: 32], 8'(g)};
-        end else begin : gen_pad
-          assign first[LEAVES+g] = '0;
-          assign prefill[LEAVES+g] = '0;
+      // 年龄关系在分配时计算，发射只查询寄存关系。每对物理槽保存一位，
+      // 包括相等seq时较低槽优先；不依赖tag唯一或seq差值上界。
+      logic [D-1:0] allocated;
+      logic [D*32-1:0] next_seq;
+      integer al;
+      always_comb begin
+        allocated = '0;
+        next_seq = seq;
+        for (al = 0; al < W; al = al + 1) begin
+          if (in_valid[al] && in_ready) begin
+            allocated[alloc_slot[al]] = 1'b1;
+            next_seq[alloc_slot[al]*32 +: 32] = seq_base + al;
+          end
         end
-        assign second[LEAVES+g] = '0;
       end
-      for (genvar g = 1; g < LEAVES; g = g + 1) begin : gen_merge
-        wire right_first = first[2*g+1][40] &&
-                            (!first[2*g][40] ||
-                             first[2*g+1][39:8] < first[2*g][39:8]);
-        assign first[g] = right_first ? first[2*g+1] : first[2*g];
-        // 第二名必为胜方的第二名或败方的第一名；两种比较并行进行。
-        assign second[g] = right_first ? oldest(first[2*g], second[2*g+1]) :
-                                                oldest(second[2*g], first[2*g+1]);
-        assign prefill[g] = oldest(prefill[2*g], prefill[2*g+1]);
+      // older[i][j]表示j应排在i之前。无效槽的关系无关紧要；任一端重新
+      // 分配时更新，两个槽同拍分配时使用两者的新seq，不使用旧表项年龄。
+      wire [D-1:0] older [0:D-1];
+      for (genvar g = 0; g < D; g = g + 1) begin : gen_age_row
+        assign older[g][g] = 1'b0;
+        for (genvar h = g + 1; h < D; h = h + 1) begin : gen_age_pair
+          logic lower_first;
+          always_ff @(posedge clk) begin
+            if (!reset && (allocated[g] || allocated[h]))
+              lower_first <= next_seq[g*32 +: 32] <= next_seq[h*32 +: 32];
+          end
+          assign older[g][h] = !lower_first;
+          assign older[h][g] = lower_first;
+        end
       end
-      wire take_prefill = prefill[1][40] &&
-                           (!first[1][40] || prefill[1][39:8] < first[1][39:8] ||
-                            ((prefill[1][39:8] == first[1][39:8]) &&
-                             (prefill[1][7:0] < first[1][7:0])));
-      // lane0 先预填时，lane1 取完整候选第一名；否则取第二名。
-      // 不再等 lane0 选中后重新扫描整队列，输出 seq 直接沿选择树传递。
-      assign sel_valid[0] = first[1][40] || prefill[1][40];
+
+      wire [D-1:0] full_first, full_second, pick0;
+      wire [D-1:0] cand_any = cand_issue | cand_prefill;
+      for (genvar g = 0; g < D; g = g + 1) begin : gen_rank
+        // 树节点只记录是否存在、是否至少两个更老的完整候选。
+        // 不使用串行加法统计数量，也不再在选择树每层比较32位seq。
+        wire [2*LEAVES-1:0] any_older, multi_older;
+        assign any_older[0] = 1'b0;
+        assign multi_older[0] = 1'b0;
+        for (genvar h = 0; h < LEAVES; h = h + 1) begin : gen_leaf
+          if (h < D) begin : gen_entry
+            assign any_older[LEAVES+h] = cand_issue[h] && older[g][h];
+          end else begin : gen_pad
+            assign any_older[LEAVES+h] = 1'b0;
+          end
+          assign multi_older[LEAVES+h] = 1'b0;
+        end
+        for (genvar h = 1; h < LEAVES; h = h + 1) begin : gen_merge
+          assign any_older[h] = any_older[2*h] | any_older[2*h+1];
+          assign multi_older[h] = multi_older[2*h] | multi_older[2*h+1] |
+                                     (any_older[2*h] & any_older[2*h+1]);
+        end
+        assign full_first[g] = cand_issue[g] && !any_older[1];
+        assign full_second[g] = cand_issue[g] && any_older[1] && !multi_older[1];
+        assign pick0[g] = cand_any[g] && !(|(older[g] & cand_any));
+      end
+      wire take_prefill = |(pick0 & cand_prefill);
+      wire [IW*D-1:0] picks;
+      assign picks[0 +: D] = pick0;
+      assign sel_valid[0] = |pick0;
       assign sel_addr_only[0] = take_prefill;
-      assign sel_idx[0] = take_prefill ? prefill[1][7:0] : first[1][7:0];
-      assign sel_seq[0] = take_prefill ? prefill[1][39:8] : first[1][39:8];
-      assign sel_src1_tag[0] = take_prefill ? prefill[1][41 +: PW] : first[1][41 +: PW];
-      assign sel_src2_tag[0] = take_prefill ? prefill[1][41+PW +: PW] : first[1][41+PW +: PW];
       if (IW == 2) begin : gen_lane1
-        assign sel_valid[1] = take_prefill ? first[1][40] : second[1][40];
+        assign picks[D +: D] = take_prefill ? full_first : full_second;
+        assign sel_valid[1] = |picks[D +: D];
         assign sel_addr_only[1] = 1'b0;
-        assign sel_idx[1] = take_prefill ? first[1][7:0] : second[1][7:0];
-        assign sel_seq[1] = take_prefill ? first[1][39:8] : second[1][39:8];
-        assign sel_src1_tag[1] = take_prefill ? first[1][41 +: PW] : second[1][41 +: PW];
-        assign sel_src2_tag[1] = take_prefill ? first[1][41+PW +: PW] : second[1][41+PW +: PW];
+      end
+      integer l, e;
+      always_comb begin
+        for (l = 0; l < IW; l = l + 1) begin
+          sel_idx[l] = '0;
+          sel_seq[l] = '0;
+          sel_src1_tag[l] = '0;
+          sel_src2_tag[l] = '0;
+          for (e = 0; e < D; e = e + 1) begin
+            sel_idx[l] = sel_idx[l] | (8'(e) & {8{picks[l*D+e]}});
+            sel_seq[l] = sel_seq[l] | (seq[e*32 +: 32] & {32{picks[l*D+e]}});
+            sel_src1_tag[l] = sel_src1_tag[l] |
+                (src1_tag[e*PW +: PW] & {PW{picks[l*D+e]}});
+            sel_src2_tag[l] = sel_src2_tag[l] |
+                (src2_tag[e*PW +: PW] & {PW{picks[l*D+e]}});
+          end
+        end
       end
     end else begin : gen_select_wide
       // 保留 IW>2 的通用逐 lane 选择语义；默认后端使用 IW=2。

@@ -143,6 +143,26 @@ struct Test {
             t.wake_tag=14;step(t);
             t={};t.ready=(1u<<IW)-1;step(t);
         }
+        // Rebuild pairwise age state after reset, then reuse squashed slots.
+        // Include a two-lane allocation crossing UINT32_MAX: age ordering is
+        // unsigned numeric ordering, with physical-slot ties, even at wrap.
+        reset();
+        const uint32_t ages[] = {0xffffffffu,17,0x80000000u,0,17,7,0xfffffffeu,2};
+        for (int filled=0, batch=0; filled<D; filled+=W, ++batch) {
+            Stim t;t.n=std::min(W,D-filled);t.base=ages[batch%8];
+            for (int l=0;l<W;++l)t.bits[l]=uop(false,true,true,11,12);
+            step(t);
+        }
+        {
+            Stim t;t.n=W;t.base=0xfffffffeu;t.squash=true;t.cut=17;
+            for (int l=0;l<W;++l)t.bits[l]=uop(true,true,false,11,12);
+            step(t);
+        }
+        for (int c=0;c<D+5;++c) {
+            Stim t;t.ready=(1u<<IW)-1;
+            if(c==2) {t.wake_valid=1;t.wake_tag=12;}
+            step(t);
+        }
         // Fill and free slots repeatedly with independent lane backpressure.
         // Equal seq, high seq bits, nonphysical age order, squash+dispatch,
         // registered wake and dispatch-wake bypass are checked cycle by cycle.
