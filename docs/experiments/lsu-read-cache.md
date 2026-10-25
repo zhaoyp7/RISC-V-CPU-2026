@@ -53,3 +53,28 @@ correctness/perf, cache-disabled default compatibility checks, complete unit
 regression, statistics and one diagnose run. Performance and PPA results will
 be recorded after these checks finish; fixed-trace hit opportunities from
 [the trace study](dcache-trace.md) are not measured IPC improvements.
+
+## Result FIFO reuse correction
+
+The first prototype passed the protocol matrix and W1 smoke tests, but W2
+queens timed out. No synthesis was started for that version. A simulation-only
+reference compared every cache hit against memory updated by committed stores;
+all observed hit values matched. At cycle 107935, a queue observer found an
+older response (sequence 109276) entering FIFO slot zero while squash boundary
+109284 incorrectly classified that slot using its previous sequence 109285.
+The old valid bit remained set after the previous occupant had left.
+
+A directed cache-disabled regression fills and drains the result FIFO with
+younger local results while retaining an older memory miss. Its response then
+reuses the wrapped FIFO slot on the squash edge. The uncorrected version loses
+the older result; the correction clears valid on pop and gives new enqueues
+ownership of their own discard classification. Metadata slots receive the same
+explicit ownership rule. This is a queue reuse defect exposed by changed
+completion order, rather than a cache data mismatch.
+
+After the correction, cache-disabled LSU checks are
+63832/64023/64303/64303 and enabled checks are 64092/64288/64568/64568, all zero
+failures. The original failed source, binaries, oracle and logs remain in
+`build/synth/lsu_cache_64b/`; corrected measurements use the separate archive
+`build/synth/lsu_cache_64b_reuse_fix/`. Full-core validation is restarted before
+reporting any performance or PPA result.

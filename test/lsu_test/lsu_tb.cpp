@@ -427,6 +427,29 @@ void run_response_bypass(Harness& h) {
     for(int n=0;n<5;++n)h.tick();
     h.expect(h.results.size()==1,"discarded response never reappears");
 
+    // An older outstanding response can reuse a FIFO slot last occupied by a
+    // much younger local result. Squash must classify the new payload, not
+    // stale age metadata left behind when that slot was popped.
+    prepare(1);
+    h.seq_base=100;
+    for(int n=0;n<8;++n) {
+        h.expect(h.alloc(1,2,false),"reuse younger local allocate");
+        Uop u;u.dest=20;u.is_load=1;u.lsq=1;u.rob=2;u.illegal=1;
+        h.expect(h.issue(u,0x1a00,0),"reuse younger local issue");
+        h.dut->load_result_ready=1;
+        for(int i=0;i<32 && int(h.results.size())<n+1;++i)h.tick();
+        h.expect(int(h.results.size())==n+1,"reuse younger local completed");
+        h.commit(1,false,true);
+    }
+    h.results.clear();h.clear_inputs();
+    h.auto_respond=true;h.dut->load_result_ready=0;
+    h.dut->squash_valid=1;h.dut->squash_seq=1;h.tick();
+    h.expect(h.last_memory_response,"reuse old response arrives on squash");
+    h.dut->squash_valid=0;h.dut->load_result_ready=1;
+    for(int n=0;n<8;++n)h.tick();
+    h.expect(h.results.size()==1 && h.results.front()==std::make_pair(10u,0x12345678u),
+             "reused FIFO slot keeps older response across younger squash");
+
     struct Format { uint32_t size, uns, expected; };
     for(const Format& f : {Format{BYTE,0,0xffffffffu},Format{BYTE,1,0xffu},
                           Format{HALF,0,0xffff80ffu},Format{HALF,1,0x80ffu}}) {
