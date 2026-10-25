@@ -58,7 +58,7 @@ module perf_lsu_stats #(parameter D=16) (
   input logic clk, reset, squash_valid,
   input logic [D-1:0] lp_valid,
   input logic q_active, r_active, query_send, query_blocked, query_ready,
-  input logic load_enqueue, load_issue, r_illegal, ld_fwd, ld_space, result_space,
+  input logic load_enqueue, load_issue, r_illegal, ld_fwd, cache_hit, ld_space, result_space,
   input logic ld_req_ready, md_resp_fire
 );
   longint cycles, pending, lp_occ_sum, enqueues, queries, q_busy, r_busy;
@@ -87,9 +87,9 @@ module perf_lsu_stats #(parameter D=16) (
         else if(load_issue) executed<=executed+1;
         else if(!r_active) pending_no_r<=pending_no_r+1;
         else if(query_blocked) blocked<=blocked+1;
-        else if(!result_space || (!(r_illegal || ld_fwd) && !ld_space)) credits<=credits+1;
-        else if(!(r_illegal || ld_fwd) && !ld_req_ready) mem_wait<=mem_wait+1;
-        else if((r_illegal || ld_fwd) && md_resp_fire) result_wait<=result_wait+1;
+        else if(!result_space || (!(r_illegal || ld_fwd || cache_hit) && !ld_space)) credits<=credits+1;
+        else if(!(r_illegal || ld_fwd || cache_hit) && !ld_req_ready) mem_wait<=mem_wait+1;
+        else if((r_illegal || ld_fwd || cache_hit) && md_resp_fire) result_wait<=result_wait+1;
         else other_wait<=other_wait+1;
       end
     end
@@ -101,7 +101,7 @@ bind lsu perf_lsu_stats #(.D(LP_DEPTH)) perf_lsu_monitor (
   .clk(clk),.reset(reset),.squash_valid(squash_valid),.lp_valid(lp_valid),
   .q_active(q_active),.r_active(r_active),.query_send(query_send),.query_blocked(query_blocked),
   .query_ready(query_ready),.load_enqueue(load_enqueue),.load_issue(load_issue),
-  .r_illegal(r_illegal),.ld_fwd(ld_fwd),.ld_space(ld_space),.result_space(result_space),
+  .r_illegal(r_illegal),.ld_fwd(ld_fwd),.cache_hit(dc_hit),.ld_space(ld_space),.result_space(result_space),
   .ld_req_ready(ld_req_ready),.md_resp_fire(md_resp_fire)
 );
 

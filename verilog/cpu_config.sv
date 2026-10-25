@@ -2,7 +2,7 @@
 // cpu_config.sv — 全局参数配置（由 tools/config_gen.py 生成，请勿手改）
 //
 // 生成命令：
-//   tools/config_gen.py --issue-width 2 --rob 16 --prf 48 --rs 8 --cdb-num 2 --lsq 16 --icache-index-bits 8 --icache-ways 1 --icache-line-bytes 4 --dcache-index-bits 10 --dcache-ways 1 --dcache-line-bytes 4 --btb-index-bits 5 --bht-index-bits 7
+//   tools/config_gen.py --issue-width 2 --rob 16 --prf 48 --rs 8 --cdb-num 2 --lsq 16 --icache-index-bits 8 --icache-ways 1 --icache-line-bytes 4 --dcache-enable 0 --dcache-index-bits 10 --dcache-ways 1 --dcache-line-bytes 4 --btb-index-bits 5 --bht-index-bits 7
 //
 // 换参数 = 重新生成 + 重编译，不改任何 RTL。每个宏都有 `ifndef 保护，
 // 因此也可以用 Verilator/Yosys 的 -D 选项临时覆盖单个参数。
@@ -38,6 +38,9 @@
 `endif
 `ifndef CPU_ICACHE_LINE_BYTES
   `define CPU_ICACHE_LINE_BYTES 4
+`endif
+`ifndef CPU_DCACHE_ENABLE
+  `define CPU_DCACHE_ENABLE 0
 `endif
 `ifndef CPU_DCACHE_INDEX_BITS
   `define CPU_DCACHE_INDEX_BITS 10

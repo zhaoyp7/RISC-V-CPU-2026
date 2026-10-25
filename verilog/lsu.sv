@@ -287,6 +287,8 @@ module lsu #(
   logic query_blocked;
   logic ld_fwd;
   logic [31:0] ld_fwd_data;
+  logic dc_hit;
+  logic [31:0] dc_value;
   assign query_blocked = r_active && !r_illegal && lsq_query_blocked;
   assign ld_fwd        = r_active && !r_illegal &&
                          !lsq_query_blocked && lsq_query_fwd_valid;
@@ -313,7 +315,7 @@ module lsu #(
       if (r_illegal) begin
         // 非法 load 走结果队列，不能和已有响应同拍压入。
         query_ready = illegal_slot_ok;
-      end else if (ld_fwd) begin
+      end else if (ld_fwd || dc_hit) begin
         // 同地址整字 store 前递：不访问内存，直接产生结果。
         query_ready = illegal_slot_ok;
       end else begin
@@ -323,13 +325,16 @@ module lsu #(
   end
 
   logic load_issue, store_issue, store_addr_issue;
+  logic load_miss, load_local_result;
   assign load_issue       = r_active && query_ready;
+  assign load_miss        = load_issue && !r_illegal && !ld_fwd && !dc_hit;
+  assign load_local_result = load_issue && (r_illegal || ld_fwd || dc_hit);
   assign store_addr_issue = issue_valid && issue_ready && issue_is_store &&
                             issue_addr_only;
   assign store_issue      = issue_valid && issue_ready && issue_is_store &&
                             !issue_addr_only;
 
-  assign ld_req_valid = r_active && !r_illegal && !query_blocked && !ld_fwd && ld_space;
+  assign ld_req_valid = r_active && !r_illegal && !query_blocked && !ld_fwd && !dc_hit && ld_space;
   assign ld_req_addr  = r_addr;
 
   // 消歧阻塞时释放查询级，但不删除等待表项；内存 valid 等待 ready 时保留
@@ -425,8 +430,7 @@ module lsu #(
   // Existing queued results always retain priority over a new response.
   assign response_bypass_valid = (rq_count == 0) && md_resp_keep;
   assign response_bypass_fire = response_bypass_valid && load_result_ready;
-  assign rq_push = (md_resp_keep && !response_bypass_fire) ||
-                   (load_issue && (r_illegal || ld_fwd));
+  assign rq_push = (md_resp_keep && !response_bypass_fire) || load_local_result;
   assign rq_pop  = (rq_count != 0) &&
                    (rq_discard[rq_head] || load_result_ready);
 
@@ -542,7 +546,7 @@ module lsu #(
       store_complete_valid_q <= 1'b0;
 
       // ---- load issue：入元数据队列 --------------------------------------
-      if (load_issue && !r_illegal && !ld_fwd) begin
+      if (load_miss) begin
         md_valid[md_tail]         <= 1'b1;
         md_tag[md_tail*PW +: PW]  <= r_tag;
         md_seq[md_tail*32 +: 32]  <= r_seq;
@@ -560,19 +564,21 @@ module lsu #(
 
       if (rq_push) begin
         rq_valid[rq_tail]          <= 1'b1;
-        rq_tag[rq_tail*PW +: PW]   <= (load_issue && (r_illegal || ld_fwd)) ?
+        rq_tag[rq_tail*PW +: PW]   <= load_local_result ?
                                       r_tag : md_tag[md_head*PW +: PW];
         rq_value[rq_tail*32 +: 32] <=
             (load_issue && r_illegal) ? 32'b0 :
             (load_issue && ld_fwd) ?
               format_load(ld_fwd_data, r_size, r_addr[1:0], r_unsigned) :
+            (load_issue && dc_hit) ?
+              format_load(dc_value, r_size, r_addr[1:0], r_unsigned) :
               format_load(ld_resp_rdata, md_size[md_head*2 +: 2],
                           md_off[md_head*2 +: 2], md_unsigned[md_head]);
-        rq_seq[rq_tail*32 +: 32]   <= (load_issue && (r_illegal || ld_fwd)) ?
+        rq_seq[rq_tail*32 +: 32]   <= load_local_result ?
                                       r_seq : md_seq[md_head*32 +: 32];
         rq_exc[rq_tail]            <= load_issue && r_illegal;
         rq_discard[rq_tail]        <= squash_valid &&
-                                      (((load_issue && (r_illegal || ld_fwd)) ?
+                                      ((load_local_result ?
                                         r_seq : md_seq[md_head*32 +: 32])
                                        > squash_seq);
         rq_tail <= (rq_tail == LDQ_DEPTH - 1) ? '0 : rq_tail + 1'b1;
@@ -594,7 +600,7 @@ module lsu #(
 
       // ---- 计数 -----------------------------------------------------------
       ld_count <= ld_count +
-                  ((load_issue && !r_illegal && !ld_fwd) ? 1'b1 : 1'b0) -
+                  (load_miss ? 1'b1 : 1'b0) -
                   (md_resp_fire ? 1'b1 : 1'b0);
       rq_count <= rq_count + (rq_push ? 1'b1 : 1'b0) -
                              (rq_pop  ? 1'b1 : 1'b0);
@@ -607,6 +613,138 @@ module lsu #(
       end
     end
   end
+
+  // ---- Optional small read cache -----------------------------------------
+  // Hits are local LSU results after the LSQ snapshot, never responses on the
+  // untagged in-order memory interface. Stores remain write-through/drained.
+  // Default disabled; experiments explicitly select a small generated config.
+  generate if (`CPU_DCACHE_ENABLE) begin : gen_read_cache
+    localparam integer CB = `CPU_DCACHE_INDEX_BITS;
+    localparam integer CW = `CPU_DCACHE_WAYS;
+    localparam integer CS = 1 << CB;
+    localparam integer CE = CS * CW;
+    localparam integer CT = 26 - CB; // only 256 MiB RAM is cacheable
+    localparam integer CI = $clog2(CE);
+    logic [CE-1:0] valid;
+    logic [CT-1:0] tags [0:CE-1];
+    logic [31:0] data [0:CE-1];
+    logic [CS-1:0] lru;
+    logic [LDQ_DEPTH-1:0] fill_ok;
+    logic [25:0] miss_word [0:LDQ_DEPTH-1];
+    logic miss_locked;
+    wire [25:0] r_word = r_addr[27:2];
+    wire [CB-1:0] r_set = r_word[CB-1:0];
+    wire [CT-1:0] r_tag = r_word[25:CB];
+    wire store_inv = store_issue && (issue_addr[31:28] == 0);
+    wire drain_inv = drain_fire && (drain_addr[31:28] == 0);
+    wire [25:0] store_word = issue_addr[27:2];
+    wire [25:0] drain_word = drain_addr[27:2];
+    wire request_invalidated = (store_inv && store_word == r_word) ||
+                               (drain_inv && drain_word == r_word);
+    wire [CE-1:0] invalidated;
+    wire [CE-1:0] usable = valid & ~invalidated;
+    logic [CW-1:0] hits;
+    logic [31:0] lookup_value;
+    logic hit_way;
+    integer lookup_way;
+    for (genvar e = 0; e < CE; e = e + 1) begin : gen_invalidate
+      localparam [CB-1:0] SET = CB'(e % CS);
+      assign invalidated[e] =
+          (store_inv && store_word[CB-1:0] == SET && store_word[25:CB] == tags[e]) ||
+          (drain_inv && drain_word[CB-1:0] == SET && drain_word[25:CB] == tags[e]);
+    end
+    always_comb begin
+      hits = '0;
+      lookup_value = '0;
+      hit_way = 1'b0;
+      for (lookup_way = 0; lookup_way < CW; lookup_way = lookup_way + 1) begin
+        hits[lookup_way] = valid[lookup_way*CS + int'(r_set)] &&
+                           tags[lookup_way*CS + int'(r_set)] == r_tag;
+        lookup_value = lookup_value |
+            (data[lookup_way*CS + int'(r_set)] & {32{hits[lookup_way]}});
+        if(hits[lookup_way])hit_way = 1'(lookup_way);
+      end
+    end
+    assign dc_hit = r_active && !r_illegal && !query_blocked && !ld_fwd &&
+                     !miss_locked && r_addr[31:28] == 0 && r_addr[1:0] == 0 &&
+                     !request_invalidated && (|hits);
+    assign dc_value = lookup_value;
+
+    // Preserve valid/address under memory backpressure even if another miss
+    // fills this word before the outstanding request has been accepted.
+    always_ff @(posedge clk) begin
+      if(reset)miss_locked <= 1'b0;
+      else if(r_accept || query_send)miss_locked <= 1'b0;
+      else if(ld_req_valid && !ld_req_ready)miss_locked <= 1'b1;
+    end
+
+    wire drain_allocate = drain_inv && drain_addr[1:0] == 0 && drain_wstrb == 4'hf &&
+                            !(store_inv && store_word == drain_word);
+    wire [25:0] response_word = miss_word[md_head];
+    wire read_fill = md_resp_keep && fill_ok[md_head] &&
+                       !(store_inv && store_word == response_word) &&
+                       !(drain_inv && drain_word == response_word);
+    wire write_cache = drain_allocate || read_fill;
+    wire [25:0] write_word = drain_allocate ? drain_word : response_word;
+    wire [31:0] write_data = drain_allocate ? drain_wdata : ld_resp_rdata;
+    wire [CB-1:0] write_set = write_word[CB-1:0];
+    wire [CT-1:0] write_tag = write_word[25:CB];
+    logic write_way;
+    logic [CI-1:0] write_entry;
+    integer candidate_way;
+    logic found;
+    always_comb begin
+      write_way = CW == 2 ? lru[write_set] : 1'b0;
+      if(CW==2 && load_issue && dc_hit && r_set==write_set)
+        write_way = !hit_way;
+      found = 1'b0;
+      // Prefer an existing matching line, then an invalid way, then LRU.
+      for(candidate_way=0;candidate_way<CW;candidate_way=candidate_way+1)
+        if(usable[candidate_way*CS+int'(write_set)] &&
+           tags[candidate_way*CS+int'(write_set)] == write_tag) begin
+          write_way=1'(candidate_way);found=1'b1;
+        end
+      for(candidate_way=0;candidate_way<CW;candidate_way=candidate_way+1)
+        if(!found && !usable[candidate_way*CS+int'(write_set)]) begin
+          write_way=1'(candidate_way);found=1'b1;
+        end
+      write_entry = CI'(int'(write_set) + int'(write_way)*CS);
+    end
+    integer cache_slot;
+    always_ff @(posedge clk) begin
+      if(reset)begin
+        valid <= '0;
+        fill_ok <= '0;
+        lru <= '0;
+      end else begin
+        valid <= usable;
+        if(write_cache)begin
+          valid[write_entry] <= 1'b1;
+          tags[write_entry] <= write_tag;
+          data[write_entry] <= write_data;
+        end
+        if(load_issue && dc_hit && CW==2)lru[r_set] <= !hit_way;
+        if(write_cache && CW==2)lru[write_set] <= !write_way;
+        for(cache_slot=0;cache_slot<LDQ_DEPTH;cache_slot=cache_slot+1)begin
+          if(load_miss && md_tail == MDW'(cache_slot))begin
+            miss_word[cache_slot] <= r_word;
+            fill_ok[cache_slot] <= r_addr[31:28] == 0 && r_addr[1:0] == 0 && !request_invalidated;
+          end else if((md_resp_fire && md_head == MDW'(cache_slot)) ||
+                      (store_inv && store_word == miss_word[cache_slot]) ||
+                      (drain_inv && drain_word == miss_word[cache_slot]))begin
+            fill_ok[cache_slot] <= 1'b0;
+          end
+        end
+      end
+    end
+    initial begin
+      if(CW != 1 && CW != 2)$error("read cache supports one or two ways");
+      if(`CPU_DCACHE_LINE_BYTES != 4)$error("read cache uses word-sized lines");
+    end
+  end else begin : gen_no_read_cache
+    assign dc_hit = 1'b0;
+    assign dc_value = '0;
+  end endgenerate
 
 `ifdef LOCAL_TRACE
   integer dbg_stalls = 0;
