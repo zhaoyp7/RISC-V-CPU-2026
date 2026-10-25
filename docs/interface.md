@@ -275,6 +275,10 @@ P2 把 LSU 与 mem_subsystem 之间的单事务 `data_mem` 口拆成三个流水
 
 LSU 内部最多 8 笔在途 load；响应按发请求顺序返回，LSU 用元数据 FIFO 配对。
 
+`feat/ipc-load-response-bypass`中，空结果FIFO允许存活内存响应当拍送CDB；
+握手成功不重复入队，CDB反压则捕获至预留结果槽，后续保持数据直到接收或squash。
+队列非空时旧队首优先，新响应入队；前递和非法load仍走原队列，外部接口不变。
+
 ### store 流（LSU → mem_subsystem）
 
 | 字段 | 位宽 | 说明 |

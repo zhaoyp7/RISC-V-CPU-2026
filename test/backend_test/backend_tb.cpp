@@ -166,9 +166,12 @@ struct Harness {
         const uint32_t st_data = dut->st_req_wdata;
         const uint8_t st_strb = (uint8_t)dut->st_req_wstrb;
 
+        // CDB/complete/branch outputs are combinational transactions sampled
+        // by their consumers at this edge. A response bypass can disappear
+        // immediately after the edge and must be captured before state moves.
+        capture_events();
         dut->clk = 1;
         dut->eval();
-        capture_events();
 
         if (ld_fire) ld_pending.push_back(ld_addr);
         if (st_fire) {

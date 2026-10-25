@@ -414,12 +414,18 @@ module lsu #(
   logic md_resp_keep;
   logic rq_push;
   logic rq_pop;
+  logic response_bypass_valid, response_bypass_fire;
 
   assign md_resp_fire = ld_resp_valid && (ld_count != 0);
   assign md_resp_keep = md_resp_fire && !md_discard[md_head] &&
                         !(squash_valid &&
                           (md_seq[md_head*32 +: 32] > squash_seq));
-  assign rq_push = md_resp_keep ||
+  // Empty result FIFO: expose the returning memory value immediately. A
+  // stalled CDB still captures it in the reserved FIFO slot at this edge.
+  // Existing queued results always retain priority over a new response.
+  assign response_bypass_valid = (rq_count == 0) && md_resp_keep;
+  assign response_bypass_fire = response_bypass_valid && load_result_ready;
+  assign rq_push = (md_resp_keep && !response_bypass_fire) ||
                    (load_issue && (r_illegal || ld_fwd));
   assign rq_pop  = (rq_count != 0) &&
                    (rq_discard[rq_head] || load_result_ready);
@@ -429,12 +435,17 @@ module lsu #(
   assign illegal_slot_ok = !md_resp_fire && result_space;
 
   // ---- 结果输出 -----------------------------------------------------------
-  assign load_result_valid     = (rq_count != 0) && !rq_discard[rq_head] &&
+  assign load_result_valid     = response_bypass_valid ||
+                                ((rq_count != 0) && !rq_discard[rq_head] &&
                                  !(squash_valid &&
-                                   (rq_seq[rq_head*32 +: 32] > squash_seq));
-  assign load_result_tag       = rq_tag[rq_head*PW +: PW];
-  assign load_result_value     = rq_value[rq_head*32 +: 32];
-  assign load_result_exception = rq_exc[rq_head];
+                                   (rq_seq[rq_head*32 +: 32] > squash_seq)));
+  assign load_result_tag       = response_bypass_valid ? md_tag[md_head*PW +: PW]
+                                                     : rq_tag[rq_head*PW +: PW];
+  assign load_result_value     = response_bypass_valid ?
+                                  format_load(ld_resp_rdata, md_size[md_head*2 +: 2],
+                                              md_off[md_head*2 +: 2], md_unsigned[md_head]) :
+                                  rq_value[rq_head*32 +: 32];
+  assign load_result_exception = !response_bypass_valid && rq_exc[rq_head];
 
   // ---- store complete -----------------------------------------------------
   logic                         store_complete_valid_q;

@@ -83,6 +83,7 @@ struct Harness {
     std::deque<uint8_t>  st_pending;
     std::vector<uint32_t> accepted_loads;
     std::deque<std::pair<uint32_t, uint32_t>> results;
+    bool last_memory_response = false, last_result_fire = false;
 
     uint32_t read_word(uint32_t addr) const {
         uint32_t a = addr & 0xffff;
@@ -119,6 +120,8 @@ struct Harness {
         const uint32_t st_data = dut->st_req_wdata;
         const uint8_t  st_strb = (uint8_t)dut->st_req_wstrb;
         const bool result_fire = dut->load_result_valid && dut->load_result_ready;
+        last_memory_response = ld_resp;
+        last_result_fire = result_fire;
         const uint32_t result_tag = dut->load_result_tag;
         const uint32_t result_value = dut->load_result_value;
 
@@ -350,6 +353,83 @@ struct Harness {
     }
 };
 
+void run_response_bypass(Harness& h) {
+    auto prepare = [&](int count) {
+        h.reset(); h.auto_respond = false;
+        for (int i = 0; i < count; ++i) {
+            h.write_word(0x1800 + 4*i, 0x12345678u + i, 15);
+            h.expect(h.alloc(i, i+1, false), "response path allocate");
+            Uop u;u.dest=10+i;u.is_load=1;u.lsq=i;u.rob=i+1;
+            h.expect(h.issue(u,0x1800+4*i,0), "response path issue");
+        }
+        for(int n=0;n<32 && int(h.ld_pending.size())<count;++n)h.tick();
+        h.expect(int(h.ld_pending.size())==count, "response path requests accepted");
+        h.clear_inputs();
+    };
+
+    prepare(1);
+    h.auto_respond=true;h.dut->load_result_ready=1;h.tick();
+    h.expect(h.last_memory_response && h.last_result_fire,
+             "empty result FIFO writes back at memory response edge");
+    h.expect(h.results.size()==1 && h.results.front()==std::make_pair(10u,0x12345678u),
+             "direct response tag and value");
+    for(int n=0;n<5;++n)h.tick();
+    h.expect(h.results.size()==1,"direct response is not queued again");
+
+    prepare(1);
+    h.auto_respond=true;h.dut->load_result_ready=0;h.tick();
+    h.expect(!h.last_result_fire && h.dut->load_result_valid,
+             "stalled direct response is buffered");
+    for(int n=0;n<3;++n) {
+        h.write_word(0x1800,0xbad00000u+n,15);h.tick();
+        h.expect(h.dut->load_result_valid && h.dut->load_result_tag==10 &&
+                 h.dut->load_result_value==0x12345678u,
+                 "buffered response payload remains stable under backpressure");
+    }
+    h.dut->load_result_ready=1;h.tick();
+    for(int n=0;n<5;++n)h.tick();
+    h.expect(h.results.size()==1 && h.results.front()==std::make_pair(10u,0x12345678u),
+             "stalled response writes back exactly once");
+
+    prepare(2);
+    h.auto_respond=true;h.dut->load_result_ready=0;h.tick();
+    h.dut->load_result_ready=1;h.tick();
+    h.expect(h.last_memory_response && h.results.size()==1 &&
+             h.results.front()==std::make_pair(10u,0x12345678u),
+             "older buffered result wins over simultaneous younger response");
+    h.tick();
+    h.expect(h.results.size()==2 && h.results.back()==std::make_pair(11u,0x12345679u),
+             "younger response is retained behind older result");
+    for(int n=0;n<5;++n)h.tick();
+    h.expect(h.results.size()==2,"concurrent pop and response have no duplicate");
+
+    prepare(2);
+    h.auto_respond=true;h.dut->load_result_ready=1;
+    h.dut->squash_valid=1;h.dut->squash_seq=h.seq_of_rob[1];h.tick();
+    h.expect(h.last_memory_response && h.last_result_fire && h.results.size()==1 &&
+             h.results.front().first==10,"older response survives same-cycle squash");
+    h.dut->squash_valid=0;h.tick();
+    h.expect(h.last_memory_response && !h.last_result_fire && h.results.size()==1,
+             "younger response is discarded after squash");
+    for(int n=0;n<5;++n)h.tick();
+    h.expect(h.results.size()==1,"discarded response never reappears");
+
+    struct Format { uint32_t size, uns, expected; };
+    for(const Format& f : {Format{BYTE,0,0xffffffffu},Format{BYTE,1,0xffu},
+                          Format{HALF,0,0xffff80ffu},Format{HALF,1,0x80ffu}}) {
+        h.reset();h.auto_respond=false;h.write_word(0x1900,0x123480ffu,15);
+        h.expect(h.alloc(0,1,false),"direct formatted load allocate");
+        Uop u;u.dest=12;u.is_load=1;u.lsq=0;u.rob=1;u.mem_size=f.size;u.mem_uns=f.uns;
+        h.expect(h.issue(u,0x1900,0),"direct formatted load issue");
+        for(int n=0;n<32 && h.ld_pending.empty();++n)h.tick();
+        h.auto_respond=true;h.dut->load_result_ready=1;h.tick();
+        h.expect(h.last_memory_response && h.last_result_fire,"formatted response is direct");
+        h.expect(h.results.size()==1 && h.results.front()==std::make_pair(12u,f.expected),
+                 "direct byte/half signed and unsigned reference value");
+    }
+    h.reset();
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -360,6 +440,8 @@ int main(int argc, char** argv) {
     Harness h;
     h.dut = &dut;
     h.reset();
+
+    run_response_bypass(h);
 
     // ---- store: complete at issue, write only after commit ----------------
     h.expect(h.alloc(0, 1, true), "store alloc");

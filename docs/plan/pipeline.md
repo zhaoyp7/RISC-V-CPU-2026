@@ -835,3 +835,14 @@ ROB32/PRF64/IQ8/LSQ16：W2/W1 IPC0.607639/0.549105，diagnose22,878.356 µm²/37
 首条仍ROB→LSU/CDB→准入→前端I$，D端2.625 ns；默认参数与main不改，不复用默认16旧PPA。
 用户继续自主工作及Git授权保持；下一步按新统计分解load延迟，再选IPC改动；完成年龄矩阵压缩仍是面积候选。
 归档build/synth/rob_recovery_masks/，详见[恢复掩码实验](../experiments/rob-recovery-masks.md)。
+
+## 45. 测量load阶段并旁路空结果FIFO
+
+空结果FIFO时，存活内存响应直通CDB；反压则入预留队列，旧队首优先，保留squash与前递语义。
+ROB32/PRF64/IQ8/LSQ16：W2/W1 IPC0.621226/0.558328，diagnose22,865.599 µm²/368.08 MHz。
+较ce32682：IPC+2.236%/+1.680%、频率-1.905%、面积-0.056%；W2 IPC×Fmax仅+0.288%，保留独立IPC候选，未升级默认。
+四组各19/19，普通/统计周期相同、全部守恒核验；最终run_all ALL PASS，LSU四档63803/63994/64274/64274通过。
+backend观测改沿前采样后，候选与原LSU均586/612通过；初次漏记失败日志保留，完整回归已从头重跑。
+24输入仅LSU改变、7库/工具约束与实际容量核对；一次diag，无opt/合main/推送，默认16不复用旧PPA。
+下一轮按当前关键链改写ROB分支查找/资格控制，争取减少旋转选择并保留本轮IPC。
+归档build/synth/load_response_bypass/，详见[load响应直通](../experiments/load-response-bypass.md)。
