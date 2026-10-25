@@ -1,5 +1,14 @@
 # 性能记录
 
+## 64B非阻塞读缓存与队列复用修复（2026-10-26，验证中）
+
+显式启用8set/2way/4B line，默认enable0；命中经LSQ消歧后进入带tag结果FIFO，miss沿现有8笔MD。
+store执行/提交失效并取消旧fill，提交整字写分配，MMIO旁路；只缓存word对齐RAM。
+首版6fb6e97通过协议单测但W2 queens超时，未启动综合；逐笔cache数据参考无差异，定位到旧FIFO槽年龄覆盖新响应的取消分类。
+ba7f0a3原LSU也被定向测试复现；37e3b1d修复槽有效位与新入队优先级，cache-off/on八组LSU均PASS。
+修复后W1/W2 qsort→hanoi→queens均PASS，正在完整整机回归、统计和一次diagnose；暂无新IPC/PPA，不增加完整核心表行。
+另做128B/256B和ROB16缓存仿真比较，不自动opt/合main/推送。详见[缓存原型](experiments/lsu-read-cache.md)。
+
 ## D-cache访问轨迹（2026-10-26，仅被动测量）
 
 生产RTL仍ba7f0a3；六perf输入/答案/周期及原计数器完全相同，24输入hash匹配。
