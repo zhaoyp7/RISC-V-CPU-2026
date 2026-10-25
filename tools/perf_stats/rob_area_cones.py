@@ -59,6 +59,10 @@ def main():
             seen.add(n)
             if n in sequential:
                 found.add(n)
+            elif not inputs[n]:
+                # Constant outputs can be mapped to library tie cells rather
+                # than literal "0"/"1" bits. They have no state to trace.
+                continue
             else:
                 assert len(inputs[n]) == 1, (port, n, cells[n]["type"])
                 pending.extend(inputs[n])

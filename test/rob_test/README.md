@@ -67,6 +67,7 @@ ROB_W=2 sh test/rob_test/run.sh --quick
 | W=2 | 双 lane 分配、前缀提交、双 lane 完成 |
 | 完成搜索边界 | 遍历所有head位置；重复tag跨回绕、无效广播、年轻项被squash后的再次匹配 |
 | 恢复RAT | 用crat和存活有序队列重放，核对所有32个映射；遍历全部head和分支自身写回/不写回 |
+| 恢复掩码边界 | 满窗口、全部head位置、branch年龄0/15/31、非写回完成tag、高位已提交tag63、同拍完成与LSQ指针回绕 |
 
 完成参考在时钟沿前的有序队列中从后向前查找匹配项，保存其槽位；更新后仅修改
 仍存活的匹配槽。它不使用RTL中的物理槽位优先矩阵，适合检验搜索结构改写。
@@ -76,12 +77,17 @@ ROB_W=2 sh test/rob_test/run.sh --quick
 年轻同rd写入取消、rd0/rd31和跨32位字的打包字段；每次恢复脉冲均检查全部32项。
 新增检查先在原恢复逻辑上通过，再用于固定槽选择树，W1/W2完整随机共115666/115664项。
 
+恢复掩码边界仍使用有序deque参考，核对free/busy、LSQ指针与存活队列；
+branch年龄0覆盖无存活访存项，年龄15覆盖LSQ指针回绕，年龄31覆盖全窗口保留。
+同拍CDB与complete分别命中较老、branch及年轻项，非写回uop仍占用其完成tag。
+该组先在dca7d77原实现上通过，再用于固定槽恢复网络；加入后两档完整随机检查如下。
+
 完整输出示例：
 
 ```text
-rob_tb: W=1 checked=115666 fails=0
+rob_tb: W=1 checked=131698 fails=0
 PASS
-rob_tb: W=2 checked=115664 fails=0
+rob_tb: W=2 checked=131696 fails=0
 PASS
 ```
 

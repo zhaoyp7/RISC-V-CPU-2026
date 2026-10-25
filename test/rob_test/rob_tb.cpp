@@ -766,6 +766,50 @@ void run_recovery_rat_boundaries(Harness& h) {
         }
 }
 
+// Recover from a full queue at each circular head and at both age extremes.
+// The reference remains an ordered deque: no physical-slot mask/tree model.
+void run_recovery_mask_boundaries(Harness& h) {
+    for (int target = 0; target < DEPTH; ++target)
+        for (int branch_pos : {0, DEPTH / 2 - 1, DEPTH - 1}) {
+            h.reset();
+            Inputs in;
+            in.u[0] = make_uop(0xd000, 63, 27, true);
+            h.step(in, "mask-seed-high-committed-tag");
+            in = {}; in.comp_valid[0] = true; in.comp_tag[0] = 63;
+            h.step(in, "mask-seed-complete");
+            h.step(Inputs{}, "mask-seed-commit");
+            while (h.ref.head != (uint32_t)target) {
+                in = {}; in.u[0] = make_uop(0xd004, 62, 0, false);
+                h.step(in, "mask-wrap-allocate");
+                in = {}; in.comp_valid[0] = true; in.comp_tag[0] = 62;
+                h.step(in, "mask-wrap-complete");
+                h.step(Inputs{}, "mask-wrap-commit");
+            }
+            for (int i = 0; i < DEPTH; ++i) {
+                in = {};
+                // Non-writing uops still reserve their completion tags. The
+                // branch itself has no memory operation, testing empty prefix.
+                in.u[0] = make_uop(0xd100 + 4*i, i + 1, i % 32,
+                                    (i % 3) == 0, 0,
+                                    i != branch_pos && (i % 3) == 1,
+                                    i != branch_pos && (i % 3) == 2,
+                                    (i + 1) % LSQ, i == branch_pos);
+                h.step(in, "mask-fill-full-window");
+            }
+            // Complete older, branch and younger tags at the recovery edge;
+            // branch in the middle also makes the LSQ pointer wrap to zero.
+            in = {}; in.br_valid = true; in.br_tag = branch_pos + 1;
+            in.br_taken = true; in.br_target = 0xe000;
+            in.cdb_valid = true; in.cdb_tag = 1;
+            in.comp_valid[0] = true; in.comp_tag[0] = branch_pos + 1;
+            if constexpr (W > 1) {
+                in.comp_valid[1] = true; in.comp_tag[1] = DEPTH;
+            }
+            h.step(in, "mask-full-window-recovery");
+            h.step(Inputs{}, "mask-full-window-pulse");
+        }
+}
+
 void run_random(Harness& h, long iters) {
     h.reset();
     uint32_t next_tag = 1;
@@ -868,6 +912,7 @@ int main(int argc, char** argv) {
     run_capacity_boundaries(h);
     run_completion_boundaries(h);
     run_recovery_rat_boundaries(h);
+    run_recovery_mask_boundaries(h);
     run_random(h, random_iters);
 
     printf("rob_tb: W=%d checked=%ld fails=%ld\n", W, h.checked, h.fails);

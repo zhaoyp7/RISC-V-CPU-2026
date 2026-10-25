@@ -249,7 +249,6 @@ module rob #(
   logic [`CPU_PRF_SIZE-1:0] done_now_mask;
   logic [LW-1:0]            lsq_ptr_c;
   logic [32*PW-1:0]         recover_rat_c;
-  integer i_mask, i_reg, i_mask_idx;
 
   // 恢复时的 RAT：从已提交 crat 出发，按程序序重放 branch 及更老的
   // 在飞表项。仅靠 crat 会丢失尚未提交的 branch 自身 rd 映射（例如
@@ -259,13 +258,15 @@ module rob #(
   // below head are younger than slots at/above head. A balanced tree selects
   // the youngest surviving writer independently for each architectural rd.
   localparam integer RAT_LEAVES = 1 << $clog2(DEPTH);
+  wire [DEPTH-1:0] recovery_keep, recovery_live;
   wire [DEPTH-1:0] rat_writer, rat_wrapped;
   for (genvar s = 0; s < DEPTH; s = s + 1) begin : gen_rat_writer
     localparam [RW-1:0] SLOT = RW'(s);
     wire [RW-1:0] age;
     assign age = SLOT - head;
-    assign rat_writer[s] = entry_valid[s] && entry_reg_we[s] &&
-                            (32'(age) <= br_age_i);
+    assign recovery_keep[s] = 32'(age) <= br_age_i;
+    assign recovery_live[s] = entry_valid[s] && recovery_keep[s];
+    assign rat_writer[s] = recovery_live[s] && entry_reg_we[s];
     assign rat_wrapped[s] = head > SLOT;
   end
   for (genvar rd = 0; rd < 32; rd = rd + 1) begin : gen_recover_rat
@@ -295,30 +296,51 @@ module rob #(
     assign recover_rat_c[rd*PW +: PW] = gen_node[1].valid ? gen_node[1].tag : crat[rd];
   end
 
-  always_comb begin
-    free_mask_c    = '1;
-    free_mask_c[0] = 1'b0;
-    busy_mask_c    = '0;
-    lsq_ptr_c      = '0;
+  // Compare each constant physical tag against fixed slots. Both occupancy
+  // masks share tag equality; reg_we=0 uops still own their completion tags.
+  assign free_mask_c[0] = 1'b0;
+  assign busy_mask_c[0] = 1'b0;
+  for (genvar tag = 1; tag < `CPU_PRF_SIZE; tag = tag + 1) begin : gen_recover_mask
+    wire [31:0] committed_match;
+    wire [DEPTH-1:0] live_match, pending_match;
+    for (genvar rd = 0; rd < 32; rd = rd + 1) begin : gen_committed
+      assign committed_match[rd] = crat[rd] == PW'(tag);
+    end
+    for (genvar s = 0; s < DEPTH; s = s + 1) begin : gen_live
+      assign live_match[s] = recovery_live[s] && (entry_dest_tag[s] == PW'(tag));
+      assign pending_match[s] = live_match[s] && !entry_done[s];
+    end
+    assign free_mask_c[tag] = !(|committed_match) && !(|live_match);
+    assign busy_mask_c[tag] = |pending_match;
+  end
 
-    // committed RAT 占用的 tag 不能释放
-    for (i_reg = 0; i_reg < 32; i_reg = i_reg + 1)
-      if (crat[i_reg] != '0) free_mask_c[crat[i_reg]] = 1'b0;
-
-    // 存活表项（branch 及更老）的 dest tag 不能释放；未完成的还是 busy
-    for (i_mask = 0; i_mask < DEPTH; i_mask = i_mask + 1) begin
-      i_mask_idx = (head + i_mask) & MASK;
-      if (entry_valid[i_mask_idx] && (i_mask <= br_age_i)) begin
-        if (entry_dest_tag[i_mask_idx] != '0)
-          free_mask_c[entry_dest_tag[i_mask_idx]] = 1'b0;
-        if (!entry_done[i_mask_idx] && entry_dest_tag[i_mask_idx] != '0)
-          busy_mask_c[entry_dest_tag[i_mask_idx]] = 1'b1;
-        if (entry_is_store[i_mask_idx] || entry_is_load[i_mask_idx])
-          lsq_ptr_c = (entry_lsq_id[i_mask_idx] == LSQ_LAST) ? '0 :
-                      (entry_lsq_id[i_mask_idx] + 1'b1);
+  // Youngest surviving memory uop, using the same circular slot order as RAT.
+  // Select its raw LSQ id first so pointer increment/wrap is computed once.
+  for (genvar n = 1; n < 2*RAT_LEAVES; n = n + 1) begin : gen_recover_lsq
+    wire valid, wrapped;
+    wire [LW-1:0] id;
+    if (n >= RAT_LEAVES) begin : gen_leaf
+      localparam integer SLOT = n - RAT_LEAVES;
+      if (SLOT < DEPTH) begin : gen_entry
+        assign valid = recovery_live[SLOT] && (entry_is_store[SLOT] || entry_is_load[SLOT]);
+        assign wrapped = rat_wrapped[SLOT];
+        assign id = entry_lsq_id[SLOT];
+      end else begin : gen_padding
+        assign valid = 1'b0;
+        assign wrapped = 1'b0;
+        assign id = '0;
       end
+    end else begin : gen_select
+      wire take_right;
+      assign take_right = gen_recover_lsq[2*n+1].valid &&
+                            (!gen_recover_lsq[2*n].valid || gen_recover_lsq[2*n+1].wrapped || !gen_recover_lsq[2*n].wrapped);
+      assign valid = gen_recover_lsq[2*n].valid || gen_recover_lsq[2*n+1].valid;
+      assign wrapped = take_right ? gen_recover_lsq[2*n+1].wrapped : gen_recover_lsq[2*n].wrapped;
+      assign id = take_right ? gen_recover_lsq[2*n+1].id : gen_recover_lsq[2*n].id;
     end
   end
+  assign lsq_ptr_c = !gen_recover_lsq[1].valid || (gen_recover_lsq[1].id == LSQ_LAST)
+                      ? '0 : gen_recover_lsq[1].id + 1'b1;
 
   // ---- 空间/握手 -----------------------------------------------------------
   logic [CNTW-1:0] n_commit;
@@ -440,8 +462,8 @@ module rob #(
       if (flush_young) begin
         // 冲刷比分支更年轻的表项；分支及更老的保留
         for (i_flush = 0; i_flush < DEPTH; i_flush = i_flush + 1) begin
-          if (i_flush > br_age_i)
-            entry_valid[(head + i_flush) & MASK] <= 1'b0;
+          if (!recovery_keep[i_flush])
+            entry_valid[i_flush] <= 1'b0;
         end
         count             <= br_age_i + 1;
         recover_valid     <= 1'b1;
