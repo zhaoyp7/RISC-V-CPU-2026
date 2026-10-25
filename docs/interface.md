@@ -330,6 +330,12 @@ load提交释放、store提交后排空及写响应释放的状态更新规则�
 
 ### IQ 末端取消的无效载荷约定（频率实验）
 
+后端IW2实例启用LANE1_ALU_ONLY：lane0选择最老完整就绪项或store地址预填，
+lane1排除lane0预选槽后，只在普通写回ALU候选中按年龄选择。类型资格入队时寄存，
+要求reg_we且非访存/分支/跳转/DIV/REM/illegal，与后端j_lane_ok一致。
+lane0即使被反压也保留其槽；两通道分别握手，未被接收的项继续留在IQ。
+通用IQ默认关闭该参数；registered wake和store预填语义不变。
+
 `feat/freq-iq-late-squash` 先预选最老候选，再按squash过滤独立out_valid。
 当out_valid=0时out_uop/out_seq允许保留预选数据；backend必须用out_valid控制
 接收、LSU握手及complete入队，不能依据uop内原dispatch valid位写状态。

@@ -9,6 +9,9 @@
 #include <vector>
 
 constexpr int W=TB_W, R=TB_R, D=TB_D, IW=TB_IW, DW=150;
+#ifndef TB_ALU_ONLY
+#define TB_ALU_ONLY 0
+#endif
 using Bits=std::array<uint32_t,(DW+31)/32>;
 template<class V> void put(V& v,int off,int width,uint32_t x) {
     for(int b=0;b<width;++b) {
@@ -53,7 +56,26 @@ struct Test {
         for(auto& x:b)x=rng();
         put(b,117,1,store);put(b,128,6,t1);put(b,134,1,r1);
         put(b,135,6,t2);put(b,141,1,r2);
+        // Generate coherent instruction classes so the constrained-port
+        // scoreboard exercises both supported and unsupported candidates.
+        if(TB_ALU_ONLY) {
+            put(b,102,1,1);put(b,103,5,rng()%14);
+            for(int off=113;off<=118;++off)put(b,off,1,0);
+            put(b,117,1,store);
+            if(!store) {
+                unsigned kind=rng()%12;
+                if(kind<5)put(b,113+kind,1,1);
+                else if(kind==5)put(b,118,1,1);
+                else if(kind==6)put(b,102,1,0);
+                else if(kind==7)put(b,103,5,14+rng()%4);
+            }
+        }
         return b;
+    }
+    bool lane1_ok(const Bits& b) {
+        if(!get(b,102,1))return false;
+        for(int off=113;off<=118;++off)if(get(b,off,1))return false;
+        unsigned op=get(b,103,5);return op<14||op>17;
     }
     void reset() {
         entries={};d.reset=1;d.in_valid=0;d.in_alloc_mask=0;d.out_ready=0;
@@ -85,7 +107,8 @@ struct Test {
         for(int l=0;l<IW;++l)for(int i:order) {
             auto& e=entries[i];bool full=e.r1&&e.r2;
             bool pf=e.r1&&!e.r2&&get(e.bits,117,1)&&!e.addr_sent;
-            if(!used[i]&&(full||(l==0&&pf))) {sel[l]=i;used[i]=true;pre[l]=!full;break;}
+            bool supported=!(TB_ALU_ONLY&&l==1)||lane1_ok(e.bits);
+            if(!used[i]&&supported&&(full||(l==0&&pf))) {sel[l]=i;used[i]=true;pre[l]=!full;break;}
         }
         check(d.count==count,"occupied count");check(d.free_count==D-count,"free count");
         bool accept=free_after>=s.n;
@@ -120,6 +143,29 @@ struct Test {
     }
     void run() {
         reset();
+        if(TB_ALU_ONLY&&IW==2) {
+            // For every unsupported class, lane1 must skip it, reserve
+            // lane0's oldest entry under backpressure, and retain the loser.
+            for(int kind=0;kind<11;++kind) {
+                reset();
+                for(int n=0;n<4;++n) {
+                    Stim t;t.n=1;t.base=10+n;
+                    Bits b=uop(false,true,true,1,2);
+                    put(b,102,1,1);put(b,103,5,0);
+                    for(int off=113;off<=118;++off)put(b,off,1,0);
+                    if(n==1) {
+                        if(kind<6)put(b,113+kind,1,1);
+                        else if(kind<10)put(b,103,5,14+kind-6);
+                        else put(b,102,1,0);
+                    }
+                    t.bits[0]=b;step(t);
+                }
+                Stim t;t.ready=2;step(t); // oldest held; third issued
+                t={};t.squash=true;t.cut=11;t.ready=3;step(t);
+                t={};t.ready=3;step(t);step(t);
+            }
+            reset();
+        }
         // Old partial store can prefill while an independently-ready lane issues.
         Stim s;s.n=1;s.base=10;s.bits[0]=uop(true,true,false,3,4);step(s);
         s={};s.n=1;s.base=20;s.bits[0]=uop(false,true,true,5,6);step(s);
@@ -182,7 +228,7 @@ struct Test {
                 step(t);base+=rng()%4; // includes equal ages, no wrap within batch
             }
         }
-        std::printf("IQ select W=%d R=%d IW=%d D=%d cycles=%u checks=%u fails=%u\n",W,R,IW,D,cycles,checks,fails);
+        std::printf("IQ select W=%d R=%d IW=%d D=%d ALU_ONLY=%d cycles=%u checks=%u fails=%u\n",W,R,IW,D,TB_ALU_ONLY,cycles,checks,fails);
     }
 };
 int main(int argc,char** argv) {

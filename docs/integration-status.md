@@ -1,6 +1,26 @@
 # 集成状态（P1 完成，P2 进入性能优化）
 
-## 当前工作分支：ROB单槽接收IPC候选（未合main）
+## 当前工作分支：ALU1候选选择（未合main）
+
+分支feat/ipc-lane1-select，标签ipc-lane1-select-20261025，基于f21ac1f的ROB单槽接收候选。
+lane0保持原年龄优先；lane1在剩余的普通ALU候选中选最老项，资格入队时寄存。
+两档正确性各19/19、run_all ALL PASS，新增四档IQ独立参考1,245,047项零失败。
+
+| 指标 | 上轮单槽候选 | 本轮候选 | 变化 |
+| --- | ---: | ---: | ---: |
+| W2 IPC | 0.528463 | 0.532763 | +0.814% |
+| W1 IPC | 0.498844 | 0.499840 | +0.200% |
+| diagnose面积 µm² | 20,535.904 | 20,555.952 | +0.098% |
+| diagnose频率 MHz | 401.25 | 403.31 | +0.512% |
+
+诊断IPC×Fmax+1.330%，保留独立候选。相对main累计W2 IPC+2.041%、诊断IPC×Fmax+2.282%。
+普通/统计版六项答案、周期一致，24个源码hash匹配；qsort实际绕过不支持项发射17,499次。
+首条时序已转为a0源tag→PRF→ALU0→结果寄存器，D端2.419 ns，ROB控制链仍相邻。
+候选仿真器build/lane1_select_w{1,2}/sim，报告和统计build/synth/lane1_select_candidate/。
+本轮仅一次diagnose，无opt、未合main、未推送；main的456.12 MHz opt仍适用于原主线。
+详见[ALU1候选选择实验](experiments/lane1-select.md)。
+
+## 前一候选：ROB单槽接收（未合main）
 
 分支`feat/ipc-rob-single-slot`，标签`ipc-rob-single-slot-20261025`，基于f4a0555。
 候选W2 IPC **0.5285**（主线0.5221，+1.217%），W1 **0.4988**且19项正确性/6项perf周期逐项相同。

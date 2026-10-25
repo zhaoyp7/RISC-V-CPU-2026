@@ -14,7 +14,9 @@
 module issue_queue #(
   parameter integer W  = `CPU_ISSUE_WIDTH,
   parameter integer D  = `CPU_RS_DEPTH,
-  parameter integer IW = 1
+  parameter integer IW = 1,
+  // 后端第二通道只支持普通写回ALU；通用IQ默认仍保持逐年龄选择。
+  parameter integer LANE1_ALU_ONLY = 0
 ) (
   input  logic clk,
   input  logic reset,
@@ -59,6 +61,7 @@ module issue_queue #(
   logic [D*PW-1:0]    src2_tag;
   logic [D-1:0]       src1_ready;
   logic [D-1:0]       src2_ready;
+  logic [D-1:0]       lane1_eligible;
   logic [D*32-1:0]    seq;
 
 
@@ -143,6 +146,18 @@ module issue_queue #(
       for (w = 0; w < R; w = w + 1)
         if (wake_valid[w] && (wake_tag[w*PW +: PW] == tag))
           tag_hit = 1'b1;
+    end
+  endfunction
+
+  function automatic logic lane1_alu(input logic [DW-1:0] entry);
+    logic [4:0] op;
+    begin
+      op = entry[`CPU_DISPATCH_ALU_OP_OFF +: 5];
+      lane1_alu = entry[`CPU_DISPATCH_REG_WE_OFF] &&
+          !entry[`CPU_DISPATCH_IS_LOAD_OFF] && !entry[`CPU_DISPATCH_IS_STORE_OFF] &&
+          !entry[`CPU_DISPATCH_IS_BRANCH_OFF] && !entry[`CPU_DISPATCH_IS_JAL_OFF] &&
+          !entry[`CPU_DISPATCH_IS_JALR_OFF] && !entry[`CPU_DISPATCH_ILLEGAL_OFF] &&
+          op != `ALU_DIV && op != `ALU_DIVU && op != `ALU_REM && op != `ALU_REMU;
     end
   endfunction
 
@@ -237,7 +252,16 @@ module issue_queue #(
       assign sel_valid[0] = |pick0;
       assign sel_addr_only[0] = take_prefill;
       if (IW == 2) begin : gen_lane1
-        assign picks[D +: D] = take_prefill ? full_first : full_second;
+        if (LANE1_ALU_ONLY) begin : gen_alu_only
+          // 分类在入队时寄存；只在本通道候选中按原年龄关系选最老项。
+          // lane0即使被反压也保留其候选，不能在两个通道重复输出。
+          wire [D-1:0] candidates = cand_issue & lane1_eligible & ~pick0;
+          for (genvar g = 0; g < D; g = g + 1) begin : gen_pick
+            assign picks[D+g] = candidates[g] && !(|(older[g] & candidates));
+          end
+        end else begin : gen_unrestricted
+          assign picks[D +: D] = take_prefill ? full_first : full_second;
+        end
         assign sel_valid[1] = |picks[D +: D];
         assign sel_addr_only[1] = 1'b0;
       end
@@ -324,6 +348,7 @@ module issue_queue #(
       addr_sent  <= '0;
       src1_ready <= '0;
       src2_ready <= '0;
+      lane1_eligible <= '0;
     end else begin
       // 1) squash：清更年轻的表项
       for (i = 0; i < D; i = i + 1) begin
@@ -362,6 +387,7 @@ module issue_queue #(
           uop[alloc_slot[lane]*DW +: DW] <= in_uop[lane*DW +: DW];
           src1_tag[alloc_slot[lane]*PW +: PW] <= in_src1_tag[lane];
           src2_tag[alloc_slot[lane]*PW +: PW] <= in_src2_tag[lane];
+          lane1_eligible[alloc_slot[lane]] <= lane1_alu(in_uop[lane*DW +: DW]);
           // 同拍 CDB 旁路：dispatch 写入时新 tag 已在本拍广播则直接 ready。
           src1_ready[alloc_slot[lane]] <= in_src1_rdy[lane] |
                                           tag_hit(in_src1_tag[lane]);

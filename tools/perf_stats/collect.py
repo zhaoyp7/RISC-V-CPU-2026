@@ -104,6 +104,11 @@ def main():
             admission = counters["ADMISSION"]
             assert sum(admission[k] for k in ("gated", "empty", "single", "pair", "no_tag")) == admission["one_slot"]
             assert admission["accepted"] <= admission["one_slot"]
+        if "LANE1" in counters:
+            port = counters["LANE1"]
+            assert 0 <= port["alternative_accept"] <= port["alternative"] <= port["unsupported"] <= port["selected"]
+            assert 0 <= port["fired"] <= port["selected"] <= port["cycles"]
+            assert port.get("bypass_fire", 0) <= port["fired"]
         iq, ls, rb, lq = [counters[k] for k in ("IQ_EXTRA", "LSU_EXTRA", "ROB_EXTRA", "LSQ")]
         assert sum(iq[k] for k in ("empty", "wait_sources", "cancel_no_offer", "other_no_offer", "offered")) == iq["cycles"]
         assert sum(ls[k] for k in ("pending_squash", "executed", "blocked", "credits", "mem_wait", "result_wait", "other_wait", "pending_no_r")) == ls["pending"]

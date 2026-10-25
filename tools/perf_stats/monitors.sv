@@ -251,4 +251,66 @@ bind core_ooo perf_admission_stats #(.W(W)) perf_admission_monitor (
   .free_tag(u_rename.free_count!=0),.committing(|rob_cm_valid),
   .fq_count(32'(u_front.fq_count)),.accept_fire(|ren_fire)
 );
+
+// Count real ALU1 alternatives, excluding the lane0 reservation even when
+// lane0 is backpressured. This is an opportunity count, not saved cycles.
+module perf_lane1_stats #(parameter D=8, DW=`CPU_DISPATCH_W) (
+  input logic clk, reset, squash_valid, lane1_accept,
+  input logic [31:0] squash_seq,
+  input logic [D-1:0] valid, src1_ready, src2_ready,
+  input logic [D*DW-1:0] uop,
+  input logic [D*32-1:0] seq,
+  input logic [7:0] lane0_slot,
+  input logic [1:0] out_valid, out_ready,
+  input logic lane1_ok
+);
+  longint cycles, unsupported, alternative, alternative_accept, selected, fired, bypass_fire;
+  integer i, legacy_slot;
+  logic available, legacy_ok, eligible;
+  logic [31:0] legacy_seq;
+  logic [4:0] op;
+  always_comb begin
+    available=0;op='0;legacy_slot=-1;legacy_seq='1;legacy_ok=0;eligible=0;
+    for(i=0;i<D;i=i+1) begin
+      op=uop[i*DW+`CPU_DISPATCH_ALU_OP_OFF+:5];
+      eligible=uop[i*DW+`CPU_DISPATCH_REG_WE_OFF] &&
+         !uop[i*DW+`CPU_DISPATCH_IS_LOAD_OFF] && !uop[i*DW+`CPU_DISPATCH_IS_STORE_OFF] &&
+         !uop[i*DW+`CPU_DISPATCH_IS_BRANCH_OFF] && !uop[i*DW+`CPU_DISPATCH_IS_JAL_OFF] &&
+         !uop[i*DW+`CPU_DISPATCH_IS_JALR_OFF] && !uop[i*DW+`CPU_DISPATCH_ILLEGAL_OFF] &&
+         op!=`ALU_DIV && op!=`ALU_DIVU && op!=`ALU_REM && op!=`ALU_REMU;
+      if(valid[i] && src1_ready[i] && src2_ready[i] &&
+         !(squash_valid && seq[i*32+:32]>squash_seq) && i!=int'(lane0_slot)) begin
+        if(eligible) available=1;
+        if(legacy_slot<0 || seq[i*32+:32]<legacy_seq) begin
+          legacy_slot=i;legacy_seq=seq[i*32+:32];legacy_ok=eligible;
+        end
+      end
+    end
+  end
+  always_ff @(posedge clk) begin
+    if(reset) begin
+      cycles<=0;unsupported<=0;alternative<=0;alternative_accept<=0;selected<=0;fired<=0;bypass_fire<=0;
+    end else begin
+      cycles<=cycles+1;
+      if(out_valid[1]) selected<=selected+1;
+      if(out_valid[1] && out_ready[1]) fired<=fired+1;
+      if(out_valid[1] && out_ready[1] && lane1_ok && legacy_slot>=0 && !legacy_ok)
+        bypass_fire<=bypass_fire+1;
+      if(out_valid[1] && !lane1_ok) begin
+        unsupported<=unsupported+1;
+        if(available) begin
+          alternative<=alternative+1;
+          if(lane1_accept) alternative_accept<=alternative_accept+1;
+        end
+      end
+    end
+  end
+  final $fdisplay(32'h80000002,"[STATS] LANE1 cycles=%0d unsupported=%0d alternative=%0d alternative_accept=%0d selected=%0d fired=%0d bypass_fire=%0d",cycles,unsupported,alternative,alternative_accept,selected,fired,bypass_fire);
+endmodule
+bind backend_ooo perf_lane1_stats #(.D(`CPU_RS_DEPTH)) perf_lane1_monitor (
+  .clk(clk),.reset(reset),.squash_valid(sq_valid),.squash_seq(squash_seq),.lane1_accept(a1_accept),
+  .valid(u_iq.valid),.src1_ready(u_iq.src1_ready),.src2_ready(u_iq.src2_ready),
+  .uop(u_iq.uop),.seq(u_iq.seq),.lane0_slot(u_iq.sel_idx[0]),
+  .out_valid(iq_out_valid),.out_ready(issue_ready),.lane1_ok(j_lane_ok)
+);
 `endif

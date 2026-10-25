@@ -664,3 +664,14 @@ W1/W2各19/19、run_all ALL PASS，ROB28,094/28,038、前端293/325项通过，W
 W2 IPC0.5221→0.5285（+1.217%）；diagnose20,535.904 µm² /401.25 MHz，较基线面积+0.151%、频率-0.274%。
 IPC×Fmax+0.939%，保留ipc-rob-single-slot-20261025独立候选，不合main、不跑opt。
 单槽实际接收qsort28,061/rsort23,026次，候选普通/统计版周期相同，详见rob-single-slot.md。
+
+## 实验 34：ALU1按执行能力选候选（保留）
+
+基于f21ac1f的单槽候选，入队寄存ALU1资格位，lane1跳过其不支持的类型，按原年龄关系选最老普通ALU。
+不增加执行单元/流水级，不改lane0和registered wake；两档19/19、run_all ALL PASS，新增四档IQ参考1,245,047项通过。
+W2/W1 IPC0.532763/0.499840，较上轮+0.814%/+0.200%；一次diagnose20,555.952 µm² /403.31 MHz，
+频率+0.512%、面积+0.098%、IPC×Fmax+1.330%，保留ipc-lane1-select-20261025。
+普通/统计版六项周期相同、24个源码hash一致，qsort实际绕过不支持项发射17,499次。
+首条路径a0源tag→PRF→ALU0→结果寄存器2.419 ns，后续IPC方向仍需核对load依赖等待与唤醒，不能直接加深流水。
+本轮无opt、未合main、未推送，报告归档build/synth/lane1_select_candidate/。
+详见[ALU1选择实验](lane1-select.md)。

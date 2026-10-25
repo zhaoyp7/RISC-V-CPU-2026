@@ -31,5 +31,8 @@ module issue_queue_select_top (
   output logic [7:0]                         count,
   output logic [7:0]                         free_count
 );
-  issue_queue #(.IW(`IQ_TEST_IW)) dut (.*);
+`ifndef IQ_TEST_ALU_ONLY
+`define IQ_TEST_ALU_ONLY 0
+`endif
+  issue_queue #(.IW(`IQ_TEST_IW), .LANE1_ALU_ONLY(`IQ_TEST_ALU_ONLY)) dut (.*);
 endmodule

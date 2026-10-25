@@ -183,7 +183,7 @@ module backend_ooo #(
   logic [1:0]  issue_ready;
   logic [7:0]  iq_count, iq_free;
 
-  issue_queue #(.W(W), .IW(2)) u_iq (
+  issue_queue #(.W(W), .IW(2), .LANE1_ALU_ONLY(1)) u_iq (
     .clk            (clk),
     .reset          (reset),
     .in_valid       (skid_drain ? skid_vmask : '0),
