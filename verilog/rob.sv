@@ -148,41 +148,46 @@ module rob #(
   logic          br_found;
   logic          br_mispredict;
   integer        br_age_i;
-  integer        i_br, i_br_idx;
+  logic br_pred_taken_c, br_uncond_c;
+  logic [31:0] br_pred_target_c, br_pc_c;
+  wire [DEPTH-1:0] br_match, br_pick;
+  for (genvar s = 0; s < DEPTH; s = s + 1) begin : gen_branch_match
+    assign br_match[s] = entry_valid[s] && entry_control[s] &&
+                          (entry_dest_tag[s] == br_update_tag);
+    assign br_pick[s] = br_match[s] && !(|(br_match & later_slot[s]));
+  end
 
+  integer i_br;
   always_comb begin
-    br_idx        = '0;
-    br_found      = 1'b0;
-    br_mispredict = 1'b0;
-    br_age_i      = 0;
-
+    br_idx = '0;
+    br_pred_taken_c = 1'b0;
+    br_pred_target_c = '0;
+    br_pc_c = '0;
+    br_uncond_c = 1'b0;
+    // Fixed physical slots; the one-hot winner is the youngest matching
+    // control uop, including duplicate-tag interface cases across wrap.
     for (i_br = 0; i_br < DEPTH; i_br = i_br + 1) begin
-      i_br_idx = (head + i_br) & MASK;
-      if (entry_valid[i_br_idx] && entry_control[i_br_idx] &&
-          (entry_dest_tag[i_br_idx] == br_update_tag)) begin
-        br_found = 1'b1;
-        br_idx   = i_br_idx;
-        br_age_i = i_br;
-      end
+      br_idx = br_idx | (RW'(i_br) & {RW{br_pick[i_br]}});
+      br_pred_taken_c = br_pred_taken_c | (entry_pred_taken[i_br] && br_pick[i_br]);
+      br_pred_target_c = br_pred_target_c | (entry_pred_tgt[i_br] & {32{br_pick[i_br]}});
+      br_pc_c = br_pc_c | (entry_pc[i_br] & {32{br_pick[i_br]}});
+      br_uncond_c = br_uncond_c | (entry_uncond[i_br] && br_pick[i_br]);
     end
-
-    if (br_update_valid && br_found) begin
-      if (br_update_taken != entry_pred_taken[br_idx]) begin
-        br_mispredict = 1'b1;
-      end else if (br_update_taken &&
-                   (br_update_target != entry_pred_tgt[br_idx])) begin
-        br_mispredict = 1'b1;
-      end
-    end
+    br_found = |br_match;
+    br_age_i = br_found ? 32'(RW'(br_idx - head)) : 0;
+    // Prediction payload can settle before late branch issue qualification.
+    // Only flush/update outputs are qualified by br_update_valid below.
+    br_mispredict = (br_update_taken != br_pred_taken_c) ||
+                    (br_update_taken && (br_update_target != br_pred_target_c));
   end
 
   logic flush_young;
   logic [31:0] redirect_pc_c;
   assign flush_young = br_update_valid && br_found && br_mispredict;
-  assign br_update_uncond = br_update_valid && br_found && entry_uncond[br_idx];
+  assign br_update_uncond = br_update_valid && br_found && br_uncond_c;
   assign redirect_valid = flush_young;
   assign redirect_pc_c  = br_update_taken ? br_update_target :
-                          (entry_pc[br_idx] + 32'd4);
+                          (br_pc_c + 32'd4);
   assign redirect_pc     = redirect_pc_c;
 
   // ---- 提交选择 ------------------------------------------------------------
@@ -542,7 +547,7 @@ module rob #(
       if (flush_young)
         $display("[ROB_FLUSH] t=%0t br_idx=%0d br_age=%0d recover=%0b redirect=%08x squash=%0b",
                  $time, br_idx, br_age_i, recover_valid,
-                 br_update_taken ? br_update_target : (entry_pc[br_idx] + 32'd4),
+                 br_update_taken ? br_update_target : (br_pc_c + 32'd4),
                  squash_valid);
       if (recover_valid)
         $display("[ROB_RECOVER] t=%0t free=%016x busy=%016x", $time,

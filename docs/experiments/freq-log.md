@@ -755,3 +755,14 @@ backend观测改沿前采样后，候选与原LSU均586/612通过；初次漏记
 24输入仅LSU改变、7库/工具约束与实际容量核对；一次diag，无opt/合main/推送，默认16不复用旧PPA。
 下一轮按当前关键链改写ROB分支查找/资格控制，争取减少旋转选择并保留本轮IPC。
 归档build/synth/load_response_bypass/，详见[load响应直通](load-response-bypass.md)。
+
+## 实验 42：固定槽分支查找与晚资格限定
+
+固定物理槽匹配分支，保留最年轻同tag语义；预测payload先形成，最后限定有效恢复动作。
+ROB32/PRF64/IQ8/LSQ16：W2/W1 IPC0.621226/0.558328，diagnose22,903.492 µm²/393.39 MHz。
+较007bd09：频率+6.877%，面积+0.166%，全部正确性/perf周期与统计计数器不变；保留独立检查点。
+四组各19/19，新增ROB边界先在原版通过，再在候选141970/141968零失败；最终单任务run_all ALL PASS。
+两次Verilator编译线程池内部故障及统计等待超时日志均保留；单测CPU_UNIT_JOBS=1重跑通过，未改生产工具/约束。
+24输入仅ROB改变，7库/工具约束及实际容量核验，一次diag约9.92分钟；默认16不复用旧PPA。
+一小时相对ce32682累计W2 IPC+2.236%、W1+1.680%、Fmax+4.841%、面积+0.110%、W2 IPC×Fmax+7.185%。
+无opt/合main/推送；归档build/synth/rob_branch_match/，详见[ROB分支查找](rob-branch-match.md)。

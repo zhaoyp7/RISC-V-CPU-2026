@@ -408,3 +408,8 @@ IQ的lookahead_valid/tag只供LANE1_ALU_ONLY且LANE1_LOOKAHEAD通道形成提前
 因此该compute必获准并在接收沿写PRF。a1同沿捕获消费者uop，下一拍才读PRF，无需同拍数据旁路。
 存在多个compute结果或R<2时关闭提示。真实CDB继续更新ready；独立通道反压及seq取消保持原语义。
 这项保证依赖当前四源布局；若增加结果源或改变仲裁吞吐，须重新验证资格与实际PRF写回一致。
+
+### ROB固定槽分支解析候选
+
+feat/freq-rob-branch-match以固定槽tag/control匹配并选程序序最年轻项，包含重复tag接口输入的既有语义。
+预测PC/方向/目标/uncond独立于晚到br_update_valid形成，恢复/训练资格仍由valid和found限定；不改变周期或端口。

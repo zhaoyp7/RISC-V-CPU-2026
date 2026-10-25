@@ -85,9 +85,9 @@ branch年龄0覆盖无存活访存项，年龄15覆盖LSQ指针回绕，年龄31
 完整输出示例：
 
 ```text
-rob_tb: W=1 checked=131698 fails=0
+rob_tb: W=1 checked=141970 fails=0
 PASS
-rob_tb: W=2 checked=131696 fails=0
+rob_tb: W=2 checked=141968 fails=0
 PASS
 ```
 
@@ -99,3 +99,6 @@ PASS
 
 容量边界覆盖：填到仅剩一槽、只接收所提供前缀、满队列同拍commit不借空间、释放沿后绕回复用。
 参考以有序队列剩余容量限定接受条数，逐拍核对容量mask及提交/恢复状态。
+
+分支查找参考按有序deque选最年轻control tag，核对br_update_uncond。新增全部head×三预测场景，
+区分重复tag的PC/预测目标/类型、无效更新和跨回绕取消；先在原ROB上通过，再用于固定槽实现。

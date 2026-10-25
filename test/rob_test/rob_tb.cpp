@@ -106,7 +106,7 @@ struct Entry {
     uint32_t idx = 0, pc = 0, inst = 0, dest = 0, old_tag = 0;
     uint8_t  rd = 0, lsq_id = 0;
     bool     reg_we = false, is_store = false, is_load = false;
-    bool     control = false, illegal = false;
+    bool     control = false, uncond = false, illegal = false;
     bool     pred_taken = false;
     uint32_t pred_target = 0;
     bool     done = false, exception = false, resolved = false;
@@ -120,6 +120,7 @@ struct ExpComb {
     uint32_t commit_rd[W] = {}, commit_dest[W] = {}, commit_free[W] = {};
     bool commit_free_valid[W] = {};
     bool halt = false, flush = false;
+    bool br_uncond = false;
     int  br_pos = -1;
     bool br_mispredict = false;
     int  n_commit = 0;
@@ -160,14 +161,17 @@ struct RefRob {
 
         e.br_pos = -1;
         if (in.br_valid) {
-            for (size_t i = 0; i < q.size(); ++i) {
-                if (q[i].control && q[i].dest == in.br_tag) {
-                    e.br_pos = (int)i;
+            // The original RTL overwrites each match in program order,
+            // selecting the youngest control uop for duplicate interface tags.
+            for (int i = (int)q.size() - 1; i >= 0; --i) {
+                if (q[(size_t)i].control && q[(size_t)i].dest == in.br_tag) {
+                    e.br_pos = i;
                     break;
                 }
             }
             if (e.br_pos >= 0) {
                 const Entry& b = q[(size_t)e.br_pos];
+                e.br_uncond = b.uncond;
                 e.br_mispredict = (in.br_taken != b.pred_taken) ||
                                   (in.br_taken && in.br_target != b.pred_target);
             }
@@ -294,6 +298,7 @@ struct RefRob {
                 x.is_load = in.u[l].is_load;
                 x.lsq_id = in.u[l].lsq_id;
                 x.control = in.u[l].is_branch || in.u[l].is_jal || in.u[l].is_jalr;
+                x.uncond = in.u[l].is_jal || in.u[l].is_jalr;
                 x.illegal = in.u[l].illegal;
                 x.pred_taken = in.u[l].pred_taken;
                 x.pred_target = in.u[l].pred_target;
@@ -399,6 +404,8 @@ struct Harness {
         if ((bool)dut->commit_halt != e.halt) {
             report(tag, "commit_halt", -1, dut->commit_halt, e.halt);
         }
+        if ((bool)dut->br_update_uncond != e.br_uncond)
+            report(tag, "branch uncond", -1, dut->br_update_uncond, e.br_uncond);
         uint32_t cv = (uint32_t)dut->commit_valid;
         for (int l = 0; l < W; ++l) {
             bool want = e.commit_valid[l];
@@ -810,6 +817,33 @@ void run_recovery_mask_boundaries(Harness& h) {
         }
 }
 
+void run_branch_lookup_boundaries(Harness& h) {
+    for(int target=0;target<DEPTH;++target)for(int mode=0;mode<3;++mode) {
+        h.reset();
+        for(int n=0;n<target;++n) {
+            Inputs in;in.u[0]=make_uop(0x10000,6,0,false);h.step(in,"branch-head-allocate");
+            in={};in.comp_valid[0]=true;in.comp_tag[0]=6;h.step(in,"branch-head-complete");
+            h.step(Inputs{},"branch-head-commit");
+        }
+        Inputs in;in.u[0]=make_uop(0x11000,22,0,false);
+        in.u[0].is_jal=mode!=2;in.u[0].is_branch=mode==2;
+        in.u[0].pred_taken=mode==1;in.u[0].pred_target=0x20000;
+        h.step(in,"branch-older-duplicate");
+        in={};in.u[0]=make_uop(0x11004,23,0,false);h.step(in,"branch-gap");
+        in={};in.u[0]=make_uop(0x11008,22,0,false);
+        in.u[0].is_jalr=mode==2;in.u[0].is_branch=mode!=2;
+        in.u[0].pred_taken=true;in.u[0].pred_target=0x21000;
+        h.step(in,"branch-younger-duplicate");
+        in={};in.u[0]=make_uop(0x1100c,24,0,false);h.step(in,"branch-youngest-tail");
+        in={};in.br_tag=22;in.br_taken=mode!=0;
+        in.br_target=mode==2?0x21000:0x20000;
+        h.step(in,"invalid-branch-update-does-not-qualify");
+        in.br_valid=true;in.br_pc=0x11000;
+        h.step(in,"youngest-control-tag-determines-prediction-pc-and-kind");
+        h.step(Inputs{},"branch-duplicate-recovery-pulse");
+    }
+}
+
 void run_random(Harness& h, long iters) {
     h.reset();
     uint32_t next_tag = 1;
@@ -913,6 +947,7 @@ int main(int argc, char** argv) {
     run_completion_boundaries(h);
     run_recovery_rat_boundaries(h);
     run_recovery_mask_boundaries(h);
+    run_branch_lookup_boundaries(h);
     run_random(h, random_iters);
 
     printf("rob_tb: W=%d checked=%ld fails=%ld\n", W, h.checked, h.fails);
