@@ -20,3 +20,6 @@ __pycache__/
 
 # Local handoff notes (not committed).
 prompt.md
+
+# Local Codex configuration and command permissions.
+/.codex/
