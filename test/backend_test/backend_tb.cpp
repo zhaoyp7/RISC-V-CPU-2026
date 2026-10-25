@@ -767,10 +767,16 @@ int main(int argc, char** argv) {
         consumer.b_sel=both?B_REG:B_IMM;consumer.imm=7;
         if(both) {consumer.src2=40;consumer.src2_ready=0;}
         h.expect(h.dispatch_one(consumer),"load dependency consumer accepted");
+        Uop follower;
+        follower.dest=42;follower.rob=3;follower.reg_we=1;
+        follower.src1=41;follower.src1_ready=0;
+        follower.b_sel=both?B_REG:B_IMM;follower.imm=3;
+        if(both) {follower.src2=41;follower.src2_ready=0;}
+        h.expect(h.dispatch_one(follower),"compute dependency follower accepted");
         for(int n=0;n<8;++n)h.tick();
         h.expect(h.cdb_q.empty(),"consumer does not execute before producer");
         h.auto_respond=true;
-        int producer_cycle=-1,consumer_cycle=-1;
+        int producer_cycle=-1,consumer_cycle=-1,follower_cycle=-1;
         for(int n=0;n<20;++n) {
             h.tick();
             while(!h.cdb_q.empty()) {
@@ -778,15 +784,22 @@ int main(int argc, char** argv) {
                 if(event.first==40) {
                     h.expect(producer_cycle<0&&event.second==seed,"load dependency producer returns once");
                     producer_cycle=n;
-                } else {
-                    h.expect(event.first==41&&consumer_cycle<0&&event.second==(both?seed+seed:seed+7),
+                } else if(event.first==41) {
+                    h.expect(consumer_cycle<0&&event.second==(both?seed+seed:seed+7),
                              "load dependency consumer reads new PRF data exactly once");
                     consumer_cycle=n;
+                } else {
+                    const uint32_t expected=both?(seed+seed+seed+seed):(seed+10);
+                    h.expect(event.first==42&&follower_cycle<0&&event.second==expected,
+                             "lookahead follower reads new PRF data exactly once");
+                    follower_cycle=n;
                 }
             }
         }
         h.expect(producer_cycle>=0&&consumer_cycle==producer_cycle+3,
                  "registered-wake consumer returns three edges after producer");
+        h.expect(follower_cycle==consumer_cycle+2,
+                 "uncontended compute follower returns two edges after consumer");
     }
 
     printf("\nW=%d checked=%ld fails=%ld\n", W, h.checks, h.fails);

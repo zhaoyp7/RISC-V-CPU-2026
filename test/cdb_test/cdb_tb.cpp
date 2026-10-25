@@ -196,6 +196,13 @@ struct Harness {
                     expect(cdb_lane(lane)==expected,"exhaustive exact lane payload/order");
                 }
                 expect((unsigned)dut->src_ready==used,"exhaustive exact ready mask");
+                // With one compute result and at most one load source,
+                // two CDB lanes must grant the compute result for every
+                // rotation. This is the backend's lookahead-wake contract.
+                const unsigned compute=mask&~(1u<<W);
+                if(R>=2&&compute&&!(compute&(compute-1)))
+                    expect(((unsigned)dut->src_ready&compute)==compute,
+                           "single compute result guaranteed with two CDB lanes");
             }
         }
         reset();

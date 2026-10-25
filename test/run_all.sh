@@ -52,6 +52,7 @@ printf 'run_all: root=%s full=%d seed=%s\n' "$root" "$full" "$seed"
 
 run "config check" python3 tools/config_gen.py --check
 run "alu arithmetic" sh test/alu_test/run.sh
+run "CDB arbitration/lookahead guarantee" sh test/cdb_test/run.sh
 run "issue queue W1/W2 R1/R2" sh test/issue_queue_test/run.sh
 run "pc_unit" sh test/pc_unit_test/run.sh $quick --seed "$seed"
 run "bpu default" sh test/bpu_test/run.sh $quick --seed "$seed"

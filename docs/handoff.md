@@ -1,6 +1,21 @@
 # RISC-V CPU 2026 — 协作者交接（P2 功能完成，性能优化中）
 
-## ALU1提前唤醒试验（2026-10-25，不采纳）
+## 当前工作分支：无争用计算结果提示（独立IPC候选）
+
+分支feat/ipc-uncontended-wake，标签ipc-uncontended-wake-20261025，基于6b341e3（功能同8cbb580）。
+只有一个compute结果且R>=2时直接提示其tag，保证compute+至多一个load均获准；不经过CDB仲裁或当拍取消。
+W2/W1 IPC **0.538263/0.504223**，较403.31版+1.032%/+0.877%。
+diagnose **20,571.946 µm² /400.00 MHz**，面积+0.078%、频率-0.820%、诊断IPC×Fmax **+0.204%**。
+仅作独立IPC组合候选，整体收益很小；403.31 MHz检查点继续保留，不据此合main或opt。
+两档19/19、run_all重跑ALL PASS，后端586/612、IQ新增四档1,245,917、CDB69,833项通过。
+普通/统计版答案和周期一致，24个源码及7个库hash核对一致，所有安全提示实际获准写回，missing_grant为0。
+首条路径为PRF→ALU0→结果寄存器2.444 ns；qsort/rsort实际提前接收23,210/40,983次。
+首次工具错误导致初次diag中断无report，保留interrupted目录；独立重启后完成一次diag。
+仿真器build/uncontended_wake_w{1,2}/sim，报告/源码/统计build/synth/uncontended_wake_candidate/。
+main仍f4a0555，默认main报告/仿真器及403.31版归档不改；本轮无opt、未合main、未推送。
+详见[无争用提示实验](experiments/uncontended-wake.md)。
+
+## 前一轮：ALU1提前唤醒试验（2026-10-25，不采纳）
 
 标签ipc-lane1-early-wake-trial-20261025保留试验；工作分支feat/ipc-lane1-early-wake恢复8cbb580功能RTL。
 W2 IPC0.532763→0.543730（+2.058%），W1 .499840→.507784（+1.589%）。

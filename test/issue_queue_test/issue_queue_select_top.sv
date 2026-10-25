@@ -12,6 +12,8 @@ module issue_queue_select_top (
   // CDB wake (R lanes)
   input  logic [`CPU_CDB_NUM-1:0]            wake_valid,
   input  logic [`CPU_CDB_NUM*`CPU_PRF_IDX_W-1:0] wake_tag,
+  input  logic lookahead_valid,
+  input  logic [`CPU_PRF_IDX_W-1:0] lookahead_tag,
 
   // dispatch sequence: lane i is seq_base + i
   input  logic [31:0]                        seq_base,
@@ -34,5 +36,9 @@ module issue_queue_select_top (
 `ifndef IQ_TEST_ALU_ONLY
 `define IQ_TEST_ALU_ONLY 0
 `endif
-  issue_queue #(.IW(`IQ_TEST_IW), .LANE1_ALU_ONLY(`IQ_TEST_ALU_ONLY)) dut (.*);
+`ifndef IQ_TEST_LOOKAHEAD
+`define IQ_TEST_LOOKAHEAD 0
+`endif
+  issue_queue #(.IW(`IQ_TEST_IW), .LANE1_ALU_ONLY(`IQ_TEST_ALU_ONLY),
+                .LANE1_LOOKAHEAD(`IQ_TEST_LOOKAHEAD)) dut (.*);
 endmodule

@@ -182,8 +182,10 @@ module backend_ooo #(
   logic [2*32-1:0] issue_seq;
   logic [1:0]  issue_ready;
   logic [7:0]  iq_count, iq_free;
+  logic iq_lookahead_valid;
+  logic [PW-1:0] iq_lookahead_tag;
 
-  issue_queue #(.W(W), .IW(2), .LANE1_ALU_ONLY(1)) u_iq (
+  issue_queue #(.W(W), .IW(2), .LANE1_ALU_ONLY(1), .LANE1_LOOKAHEAD(1)) u_iq (
     .clk            (clk),
     .reset          (reset),
     .in_valid       (skid_drain ? skid_vmask : '0),
@@ -192,6 +194,8 @@ module backend_ooo #(
     .in_ready       (iq_in_ready),
     .wake_valid     (cdb_wake_valid),
     .wake_tag       (cdb_wake_tag),
+    .lookahead_valid(iq_lookahead_valid),
+    .lookahead_tag  (iq_lookahead_tag),
     .seq_base       (skid_seq),
     .squash_valid   (sq_valid),
     .squash_seq     (squash_seq),
@@ -379,8 +383,8 @@ module backend_ooo #(
   logic [31:0] issue_src1, issue_src2;
   logic [31:0] p_src1, p_src2;
   logic [31:0] a0_src1, a0_src2;
-  // IQ 只按寄存后的 ready 位选择，操作数在选择前的时钟沿已写入 PRF。
-  // a0/a1 还会再缓冲一拍，因此六个读口均不需要当前拍 CDB 数据旁路。
+  // lane0/访存只按寄存ready选择；ALU1的保守提示保证接收沿写PRF，
+  // a1缓冲下一拍才读PRF。六个读口均不需要当前拍CDB数据旁路。
   // dispatch/skid/IQ 入队的同拍 wake 匹配仍保留，防止漏掉唯一一次广播。
   assign issue_src1 = prf_rdata[0 +: 32];
   assign issue_src2 = prf_rdata[32 +: 32];
@@ -669,6 +673,16 @@ module backend_ooo #(
   logic [N-1:0]                   cdb_src_exc;
   logic [N-1:0]                   cdb_src_ready;
   logic [`CPU_CDB_BUS_W-1:0]      cdb_out;
+
+  // 至多一个计算结果，加上至多一个LSU结果，R>=2时必定都获准写回。
+  // 只读寄存valid/tag，不依赖当拍squash、LSU valid或CDB仲裁结果。
+  wire [2:0] compute_pending = {div_valid_q, alu1_valid_q, alu_valid_q};
+  assign iq_lookahead_valid = (R >= 2) &&
+      ((compute_pending == 3'b001) || (compute_pending == 3'b010) ||
+       (compute_pending == 3'b100));
+  assign iq_lookahead_tag = (alu_tag_q & {PW{alu_valid_q}}) |
+                            (alu1_tag_q & {PW{alu1_valid_q}}) |
+                            (div_tag_q & {PW{div_valid_q}});
 
   always_comb begin
     cdb_src_valid = '0;

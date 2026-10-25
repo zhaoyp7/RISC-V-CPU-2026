@@ -395,3 +395,12 @@ in_ready表示非恢复/redirect且至少有一个空槽；每lane实际接收�
 core将容量传给frontend.decode_capacity，前端只提供并弹出该容量内的队首前缀，其余指令及预测快照留在FIFO。
 rename仍整组处理当前提供的前缀，ROB/dispatch/rename共享实际接收mask；单槽时不会分配第二条的tag/LSQ id。
 取消仍由既有ready/redirect门控生效，不增加流水拍数。外部student_top接口和总线布局不变。
+
+### 无争用计算结果的ALU1提示（独立IPC候选）
+
+IQ的lookahead_valid/tag只供LANE1_ALU_ONLY且LANE1_LOOKAHEAD通道形成提前候选，
+不写持久ready，不参与lane0/访存/store预填；通用IQ默认关闭此功能。
+后端R>=2且ALU0/ALU1/divider结果valid恰好one-hot时提示其tag；CDB至多再有一项LSU结果，
+因此该compute必获准并在接收沿写PRF。a1同沿捕获消费者uop，下一拍才读PRF，无需同拍数据旁路。
+存在多个compute结果或R<2时关闭提示。真实CDB继续更新ready；独立通道反压及seq取消保持原语义。
+这项保证依赖当前四源布局；若增加结果源或改变仲裁吞吐，须重新验证资格与实际PRF写回一致。

@@ -16,7 +16,8 @@ module issue_queue #(
   parameter integer D  = `CPU_RS_DEPTH,
   parameter integer IW = 1,
   // 后端第二通道只支持普通写回ALU；通用IQ默认仍保持逐年龄选择。
-  parameter integer LANE1_ALU_ONLY = 0
+  parameter integer LANE1_ALU_ONLY = 0,
+  parameter integer LANE1_LOOKAHEAD = 0
 ) (
   input  logic clk,
   input  logic reset,
@@ -30,6 +31,11 @@ module issue_queue #(
   // CDB wake (R lanes)
   input  logic [`CPU_CDB_NUM-1:0]            wake_valid,
   input  logic [`CPU_CDB_NUM*`CPU_PRF_IDX_W-1:0] wake_tag,
+
+  // 保证本沿写PRF的独立提示，仅供后接寄存级的普通ALU1提前选择。
+  // 不用于持久ready或lane0/访存选择；实际CDB仍负责状态更新。
+  input  logic                               lookahead_valid,
+  input  logic [`CPU_PRF_IDX_W-1:0]           lookahead_tag,
 
   // dispatch sequence: lane i is seq_base + i
   input  logic [31:0]                        seq_base,
@@ -255,7 +261,17 @@ module issue_queue #(
         if (LANE1_ALU_ONLY) begin : gen_alu_only
           // 分类在入队时寄存；只在本通道候选中按原年龄关系选最老项。
           // lane0即使被反压也保留其候选，不能在两个通道重复输出。
-          wire [D-1:0] candidates = cand_issue & lane1_eligible & ~pick0;
+          wire [D-1:0] ready_for_lane1, candidates;
+          for (genvar g = 0; g < D; g = g + 1) begin : gen_ready
+            if (LANE1_LOOKAHEAD) begin : gen_hint
+              assign ready_for_lane1[g] = valid[g] &&
+                  (src1_ready[g] || (lookahead_valid && src1_tag[g*PW +: PW] == lookahead_tag)) &&
+                  (src2_ready[g] || (lookahead_valid && src2_tag[g*PW +: PW] == lookahead_tag));
+            end else begin : gen_registered
+              assign ready_for_lane1[g] = cand_issue[g];
+            end
+          end
+          assign candidates = ready_for_lane1 & lane1_eligible & ~pick0;
           for (genvar g = 0; g < D; g = g + 1) begin : gen_pick
             assign picks[D+g] = candidates[g] && !(|(older[g] & candidates));
           end

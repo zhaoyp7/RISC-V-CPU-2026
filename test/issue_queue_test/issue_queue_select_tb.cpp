@@ -12,6 +12,9 @@ constexpr int W=TB_W, R=TB_R, D=TB_D, IW=TB_IW, DW=150;
 #ifndef TB_ALU_ONLY
 #define TB_ALU_ONLY 0
 #endif
+#ifndef TB_LOOKAHEAD
+#define TB_LOOKAHEAD 0
+#endif
 using Bits=std::array<uint32_t,(DW+31)/32>;
 template<class V> void put(V& v,int off,int width,uint32_t x) {
     for(int b=0;b<width;++b) {
@@ -31,6 +34,7 @@ struct Stim {
     int n=0; std::array<Bits,W> bits{};
     uint32_t base=0, cut=0; bool squash=false;
     unsigned ready=0, wake_valid=0; uint32_t wake_tag=0;
+    bool hint=false; unsigned hint_tag=0;
 };
 struct Test {
     Vissue_queue_select_top& d;
@@ -80,6 +84,7 @@ struct Test {
     void reset() {
         entries={};d.reset=1;d.in_valid=0;d.in_alloc_mask=0;d.out_ready=0;
         d.wake_valid=0;d.wake_tag=0;d.squash_valid=0;d.squash_seq=0;d.seq_base=0;
+        d.lookahead_valid=0;d.lookahead_tag=0;
         for(int i=0;i<(W*DW+31)/32;++i)d.in_uop[i]=0;
         edge();d.reset=0;d.eval();
     }
@@ -89,6 +94,7 @@ struct Test {
         for(int i=0;i<(W*DW+31)/32;++i)d.in_uop[i]=0;
         for(int l=0;l<W;++l)for(int b=0;b<DW;++b)put(d.in_uop,l*DW+b,1,get(s.bits[l],b,1));
         d.wake_valid=s.wake_valid;d.wake_tag=s.wake_tag;
+        d.lookahead_valid=s.hint;d.lookahead_tag=s.hint_tag;
         d.out_ready=s.ready;d.squash_valid=s.squash;d.squash_seq=s.cut;d.eval();
         std::array<bool,D> killed{}, used{};
         std::vector<int> order;
@@ -106,6 +112,9 @@ struct Test {
         std::array<bool,IW> pre{};
         for(int l=0;l<IW;++l)for(int i:order) {
             auto& e=entries[i];bool full=e.r1&&e.r2;
+            if(TB_LOOKAHEAD&&TB_ALU_ONLY&&l==1)
+                full=(e.r1||(s.hint&&get(e.bits,128,6)==s.hint_tag))&&
+                     (e.r2||(s.hint&&get(e.bits,135,6)==s.hint_tag));
             bool pf=e.r1&&!e.r2&&get(e.bits,117,1)&&!e.addr_sent;
             bool supported=!(TB_ALU_ONLY&&l==1)||lane1_ok(e.bits);
             if(!used[i]&&supported&&(full||(l==0&&pf))) {sel[l]=i;used[i]=true;pre[l]=!full;break;}
@@ -143,6 +152,28 @@ struct Test {
     }
     void run() {
         reset();
+        if(TB_LOOKAHEAD&&TB_ALU_ONLY&&IW==2) {
+            for(int scenario=0;scenario<8;++scenario) {
+                reset();Stim t;t.n=1;t.base=20;
+                Bits b=uop(false,false,false,11,12);
+                put(b,102,1,1);put(b,103,5,0);
+                for(int off=113;off<=118;++off)put(b,off,1,0);
+                if(scenario==0||scenario==7)put(b,141,1,1);
+                if(scenario==1)put(b,135,6,11);
+                if(scenario==4)put(b,116,1,1); // load never uses hint
+                t.bits[0]=b;step(t);
+                t={};t.wake_valid=1;t.wake_tag=11;t.ready=3;t.hint=true;t.hint_tag=11;
+                if(R>1&&scenario==2) {t.wake_valid=3;t.wake_tag|=12<<6;}
+                if(scenario==3)t.ready=0;
+                if(scenario==5) {t.squash=true;t.cut=19;}
+                if(scenario==6) {t.squash=true;t.cut=20;}
+                if(scenario==7)t.hint=false; // actual CDB alone cannot issue early
+                step(t);
+                t={};t.wake_valid=1;t.wake_tag=12;t.ready=3;step(t);
+                t={};t.ready=3;step(t);step(t);
+            }
+            reset();
+        }
         if(TB_ALU_ONLY&&IW==2) {
             // For every unsupported class, lane1 must skip it, reserve
             // lane0's oldest entry under backpressure, and retain the loser.
@@ -219,6 +250,10 @@ struct Test {
                 for(int l=0;l<W;++l)t.bits[l]=uop((rng()%3)==0,rng()&1,rng()&1,rng()%64,rng()%64);
                 t.ready=rng()% (1u<<IW);t.wake_valid=rng()%(1u<<R);
                 for(int r=0;r<R;++r)t.wake_tag|=(rng()%64)<<(6*r);
+                if(TB_LOOKAHEAD&&(rng()&1)&&t.wake_valid) {
+                    int r=(t.wake_valid&1)?0:1;
+                    t.hint=true;t.hint_tag=(t.wake_tag>>(6*r))&63;
+                }
                 t.squash=(rng()%23)==0;t.cut=base;
                 if(t.squash) {
                     int i=rng()%D;
@@ -228,7 +263,7 @@ struct Test {
                 step(t);base+=rng()%4; // includes equal ages, no wrap within batch
             }
         }
-        std::printf("IQ select W=%d R=%d IW=%d D=%d ALU_ONLY=%d cycles=%u checks=%u fails=%u\n",W,R,IW,D,TB_ALU_ONLY,cycles,checks,fails);
+        std::printf("IQ select W=%d R=%d IW=%d D=%d ALU_ONLY=%d LOOKAHEAD=%d cycles=%u checks=%u fails=%u\n",W,R,IW,D,TB_ALU_ONLY,TB_LOOKAHEAD,cycles,checks,fails);
     }
 };
 int main(int argc,char** argv) {

@@ -44,3 +44,8 @@ EARLY1监视器用实际CDB和IQ源tag构造ALU1同拍唤醒后的最老候选�
 可接收；idle/no_offer为机会与原输出空闲的交集，不能直接当作可节省周期。
 actual_early统计实际握手且源未寄存就绪的第二通道项，并按一/双源缺失分类。
 此路径的数据正确性依靠接收沿CDB写PRF、a1缓冲下一拍才读PRF，不能推广到直连访存口。
+
+SAFE_WAKE只使用ALU0/ALU1/divider的寄存结果valid/tag，在恰好一个compute结果且R>=2
+时构造独立提示。它每拍检查该compute确实被CDB接收，missing_grant必须为0。
+opportunity/can_accept统计按该提示计算的最老普通ALU1候选需提前wake且资源可接收的周期；
+actual_early统计真实提前接收，采集器检查包含关系，监视器检查每次提前接收有安全提示。

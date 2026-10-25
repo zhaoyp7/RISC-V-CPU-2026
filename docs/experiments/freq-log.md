@@ -686,3 +686,15 @@ ROB取消→LSU→CDB→IQ→后端接收的2.553 ns新路径表明，即使只�
 后续不能直接扩大同拍wake范围；先证明独立lookahead资格、实际写PRF与取消/仲裁一致，或转向其他瓶颈。
 完整归档build/synth/lane1_early_candidate/，24个源码hash匹配，无opt/合main/推送。
 详见[提前wake试验](lane1-early-wake.md)。
+
+## 实验 36：无争用计算结果的独立提示（组合候选）
+
+基于6b341e3，恰好一个ALU0/ALU1/divider结果且R>=2时用寄存tag提示ALU1，保证最多compute+load两源均写回。
+不依赖当拍LSU valid、取消或CDB仲裁；持久ready和访存仍按实际CDB隔拍更新/选择。
+W1/W2各19/19、run_all重跑ALL PASS，IQ新增四档1,245,917、CDB69,833、后端586/612通过。
+W2/W1 IPC0.538263/0.504223（+1.032%/+0.877%）；一次完整diagnose20,571.946 µm² /400.00 MHz。
+频率-0.820%、面积+0.078%、诊断IPC×Fmax+0.204%，保留独立IPC组合候选，整体收益很小，403.31版检查点继续保留。
+首条时序恢复PRF→ALU0→结果寄存器2.444 ns；普通/统计版周期相同、24个输入hash匹配，所有提示missing_grant=0。
+首次完整回归遇Verilator线程池错误并中断初次diag；同二进制及完整suite重跑通过，独立重启后的diag完成，原日志保留。
+标签ipc-uncontended-wake-20261025，完整归档build/synth/uncontended_wake_candidate/；无opt、未合main、未推送。
+详见[无争用提示实验](uncontended-wake.md)。

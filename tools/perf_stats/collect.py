@@ -114,6 +114,10 @@ def main():
             assert early["actual_early"] == early["one_source"] + early["two_sources"]
             assert early["actual_early"] <= early["can_accept"] <= early["opportunity"] <= early["cycles"]
             assert early["no_offer_opportunity"] <= early["idle_opportunity"] <= early["opportunity"]
+        if "SAFE_WAKE" in counters:
+            safe = counters["SAFE_WAKE"]
+            assert safe["missing_grant"] == 0
+            assert safe["actual_early"] <= safe["can_accept"] <= safe["opportunity"] <= safe["hints"] <= safe["cycles"]
         iq, ls, rb, lq = [counters[k] for k in ("IQ_EXTRA", "LSU_EXTRA", "ROB_EXTRA", "LSQ")]
         assert sum(iq[k] for k in ("empty", "wait_sources", "cancel_no_offer", "other_no_offer", "offered")) == iq["cycles"]
         assert sum(ls[k] for k in ("pending_squash", "executed", "blocked", "credits", "mem_wait", "result_wait", "other_wait", "pending_no_r")) == ls["pending"]
