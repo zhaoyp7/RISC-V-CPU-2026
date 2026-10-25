@@ -111,3 +111,10 @@ python3 tools/perf_stats/rob_area_cones.py \
 cone_area含共享单元，不可相加；exclusive_partition将每个组合单元只计一次。
 exclusive仅表示未被其他已分析组共享，不代表可全部删除；复位、使能与反馈选择也可能包含在锥内。
 当前commit子模块按一个组合单元处理，来源和design hash保存在输出JSON。
+
+## Load分段延迟
+
+额外注入load_latency.sv（仅LOCAL_STATS，生产filelist不改），使用collect.py的--stats-sim复用该统计版。
+新增LOAD_LAT/LOAD_USE只读观察FIFO时间戳与IQ消费者seq，排除地址预填，避免把物理tag复用当作同一消费者。
+analyze_load_latency.py检查原有计数器不变、阶段守恒并输出平均延迟；适用于本轮LDQ_DEPTH=8配置。
+测量口径与复现见[load延迟实验](../../docs/experiments/load-latency.md)。
