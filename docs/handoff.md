@@ -1,5 +1,18 @@
 # RISC-V CPU 2026 — 协作者交接（P2 功能完成，性能优化中）
 
+## 最新完成：延迟与窗口容量仿真测量
+
+仍在feat/ipc-uncontended-wake，功能RTL保持1d142db；未改默认配置、未综合或合main。
+W2默认10拍延迟：原配置IPC0.538263；ROB32+PRF64为0.607639（+12.889%），
+再加LSQ32为0.620532（+15.284%），IQ16+LSQ32完整组合0.639400（+18.790%）。
+单独PRF64无收益，单独IQ16/LSQ32仅+0.160%/+0.016%；ROB32后扩IQ/LSQ才有明显组合收益。
+原配置外部LATENCY10→5/1时IPC0.640466/0.751973，包含取指与数据读写，不等同D-cache效果。
+26个配置×延迟点、312次逐例perf调用，普通/统计版答案/输入/周期一致；七个容量组W2各19/19。
+24个输入hash及默认构建脚本未改；容量组尚无W1、run_all或PPA结论。
+下一步先独立diagnose ROB32/PRF64/IQ8/LSQ16，再按频率/面积代价决定是否加入LSQ32、IQ16；本轮未启动。
+工具tools/perf_stats/sensitivity.py，原始归档build/ipc_sensitivity_20261025/；
+详见[延迟与窗口实验](experiments/ipc-sensitivity.md)。下方无争用提示数据仍是原参数候选的实测PPA。
+
 ## 当前工作分支：无争用计算结果提示（独立IPC候选）
 
 分支feat/ipc-uncontended-wake，标签ipc-uncontended-wake-20261025，基于6b341e3（功能同8cbb580）。

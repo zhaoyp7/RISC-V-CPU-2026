@@ -49,3 +49,26 @@ SAFE_WAKE只使用ALU0/ALU1/divider的寄存结果valid/tag，在恰好一个com
 时构造独立提示。它每拍检查该compute确实被CDB接收，missing_grant必须为0。
 opportunity/can_accept统计按该提示计算的最老普通ALU1候选需提前wake且资源可接收的周期；
 actual_early统计真实提前接收，采集器检查包含关系，监视器检查每次提前接收有安全提示。
+
+## 延迟与窗口容量敏感性
+
+```sh
+python3 tools/perf_stats/sensitivity.py --phase latency
+python3 tools/perf_stats/sensitivity.py --phase windows
+```
+
+该脚本针对`ipc-uncontended-wake-20261025`测量检查点，先核对其diagnose报告的24个源码hash；
+latency阶段复用`build/uncontended_wake_w2/sim`和`build/uncontended_wake_stats/sim-stats`，
+并核对已有统计记录中的binary/monitor hash。两个阶段输出到`build/ipc_sensitivity_20261025/`。
+需要先保留原检查点的报告、仿真器和统计归档；不适合作为任意RTL版本的通用参数扫描器。
+
+latency阶段扫描1/3/5/10/20拍，windows阶段通过独立Verilator宏wrapper测试PRF64、
+ROB32+PRF64、IQ16、LSQ32、四者组合，以及ROB32分别与IQ16/LSQ32的交叉对照；
+后者各测1/10/20拍。可用`--configs rob32_iq16`只运行指定容量组。ROB32与PRF64对照，
+避免把物理寄存器配套扩容的影响误算为ROB收益。默认配置与官方构建/测试脚本不变。
+每个新配置先依次检查qsort/hanoi/queens，再跑W2全部19项correctness；首项失败即停止。
+全部perf点使用官方`make perf MAX_CYCLES=50000000`，普通/LOCAL_STATS版输入hash、
+答案、周期逐项一致，并检查提交数、排他分类和load所有权；无自动综合、合并或推送。
+
+`LATENCY`同时改变指令/数据AXI读和写响应；它不是D-cache模型，也不把内部访存级数降至一拍。
+容量实验只测IPC，不能沿用原配置PPA，更不能把IPC变化直接当成整体吞吐收益。
