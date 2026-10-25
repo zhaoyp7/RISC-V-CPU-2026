@@ -250,22 +250,49 @@ module rob #(
   logic [LW-1:0]            lsq_ptr_c;
   logic [32*PW-1:0]         recover_rat_c;
   integer i_mask, i_reg, i_mask_idx;
-  integer i_rat, i_rat_idx;
 
   // 恢复时的 RAT：从已提交 crat 出发，按程序序重放 branch 及更老的
   // 在飞表项。仅靠 crat 会丢失尚未提交的 branch 自身 rd 映射（例如
   // jalr 写 ra），导致恢复后重新取指的指令读到旧物理寄存器。
-  always_comb begin
-    recover_rat_c = '0;
-    for (i_rat = 0; i_rat < 32; i_rat = i_rat + 1)
-      recover_rat_c[i_rat*PW +: PW] = crat[i_rat];
-    for (i_rat = 0; i_rat < DEPTH; i_rat = i_rat + 1) begin
-      i_rat_idx = (head + i_rat) & MASK;
-      if (entry_valid[i_rat_idx] && (i_rat <= br_age_i) &&
-          entry_reg_we[i_rat_idx])
-        recover_rat_c[entry_rd[i_rat_idx]*PW +: PW] =
-            entry_dest_tag[i_rat_idx];
+  // Fixed physical leaves avoid rotating rd/tag arrays and dynamic writes
+  // into the packed RAT. Age order is (wrapped, physical slot), where slots
+  // below head are younger than slots at/above head. A balanced tree selects
+  // the youngest surviving writer independently for each architectural rd.
+  localparam integer RAT_LEAVES = 1 << $clog2(DEPTH);
+  wire [DEPTH-1:0] rat_writer, rat_wrapped;
+  for (genvar s = 0; s < DEPTH; s = s + 1) begin : gen_rat_writer
+    localparam [RW-1:0] SLOT = RW'(s);
+    wire [RW-1:0] age;
+    assign age = SLOT - head;
+    assign rat_writer[s] = entry_valid[s] && entry_reg_we[s] &&
+                            (32'(age) <= br_age_i);
+    assign rat_wrapped[s] = head > SLOT;
+  end
+  for (genvar rd = 0; rd < 32; rd = rd + 1) begin : gen_recover_rat
+    for (genvar n = 1; n < 2*RAT_LEAVES; n = n + 1) begin : gen_node
+      wire valid, wrapped;
+      wire [PW-1:0] tag;
+      if (n >= RAT_LEAVES) begin : gen_leaf
+        localparam integer SLOT = n - RAT_LEAVES;
+        if (SLOT < DEPTH) begin : gen_entry
+          assign valid = rat_writer[SLOT] && (entry_rd[SLOT] == 5'(rd));
+          assign wrapped = rat_wrapped[SLOT];
+          assign tag = entry_dest_tag[SLOT];
+        end else begin : gen_padding
+          assign valid = 1'b0;
+          assign wrapped = 1'b0;
+          assign tag = '0;
+        end
+      end else begin : gen_select
+        wire take_right;
+        assign take_right = gen_node[2*n+1].valid &&
+                              (!gen_node[2*n].valid || gen_node[2*n+1].wrapped || !gen_node[2*n].wrapped);
+        assign valid = gen_node[2*n].valid || gen_node[2*n+1].valid;
+        assign wrapped = take_right ? gen_node[2*n+1].wrapped : gen_node[2*n].wrapped;
+        assign tag = take_right ? gen_node[2*n+1].tag : gen_node[2*n].tag;
+      end
     end
+    assign recover_rat_c[rd*PW +: PW] = gen_node[1].valid ? gen_node[1].tag : crat[rd];
   end
 
   always_comb begin

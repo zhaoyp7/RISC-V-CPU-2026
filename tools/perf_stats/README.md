@@ -97,3 +97,17 @@ wrapper与*.with_defines.ys。已有完整报告时prepare拒绝覆盖。
 W1验证结果归档后可用`prepare_window_ppa.py <配置> --verify`检查报告、宏配置、两档仿真器、
 两档19/19日志、7个库hash、工具及SDC/ABC约束，并生成相对原参数候选的comparison.json。
 源码与默认参数不改；默认build/sim和build/synth的main报告保持独立。
+
+## 已映射ROB的面积逻辑锥
+
+```sh
+python3 tools/perf_stats/rob_area_cones.py \
+  --report build/synth/rob32_fixed_match/diagnose/report.json \
+  --out build/rob_area_profile_20261025/cones.json
+```
+
+按保存的design.json追踪恢复RAT、掩码、LSQ指针等寄存器D端及组合输出的逻辑锥，
+遇到寄存器停止。使用实际库单元面积，并检查单元总和与正式ROB面积/时序面积一致。
+cone_area含共享单元，不可相加；exclusive_partition将每个组合单元只计一次。
+exclusive仅表示未被其他已分析组共享，不代表可全部删除；复位、使能与反馈选择也可能包含在锥内。
+当前commit子模块按一个组合单元处理，来源和design hash保存在输出JSON。

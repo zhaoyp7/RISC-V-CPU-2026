@@ -131,6 +131,7 @@ struct ExpReg {
     uint32_t redirect_pc = 0, squash_idx = 0;
     uint64_t free_mask = 0, busy_mask = 0;
     uint8_t lsq_ptr = 0;
+    uint32_t rat[32] = {};
 };
 
 struct RefRob {
@@ -236,6 +237,13 @@ struct RefRob {
                 r.squash_valid = true;
                 r.squash_idx = b.idx;
                 r.recover_valid = true;
+
+                // Independent program-order replay, including the branch's
+                // own destination; younger writers do not survive recovery.
+                for (int rg = 0; rg < 32; ++rg) r.rat[rg] = crat[rg];
+                for (int i = 0; i <= e.br_pos; ++i)
+                    if (q[(size_t)i].reg_we)
+                        r.rat[q[(size_t)i].rd] = q[(size_t)i].dest;
 
                 r.free_mask = ~0ull;
                 r.free_mask &= ~1ull;
@@ -428,6 +436,11 @@ struct Harness {
         if ((bool)dut->recover_valid != r.recover_valid)
             report(tag, "recover_valid", -1, dut->recover_valid, r.recover_valid);
         if (r.recover_valid) {
+            for (int rg = 0; rg < 32; ++rg) {
+                uint32_t actual = get_bits(dut->recover_rat, rg * PW, PW);
+                if (actual != r.rat[rg])
+                    report(tag, "recover_rat", rg, actual, r.rat[rg]);
+            }
             uint64_t fm = (uint64_t)dut->recover_free_mask;
             uint64_t bm = (uint64_t)dut->recover_busy_mask;
             if (fm != r.free_mask) {
@@ -717,6 +730,42 @@ void run_completion_boundaries(Harness& h) {
     }
 }
 
+void run_recovery_rat_boundaries(Harness& h) {
+    for (int branch_writes = 0; branch_writes < 2; ++branch_writes)
+        for (int target = 0; target < DEPTH; ++target) {
+            h.reset();
+            Inputs in;
+            in.u[0] = make_uop(0xb000, 5, 27, true);
+            h.step(in, "seed-committed-rat");
+            in = {}; in.comp_valid[0] = true; in.comp_tag[0] = 5;
+            h.step(in, "seed-rat-complete");
+            h.step(Inputs{}, "seed-rat-commit");
+            while (h.ref.head != (uint32_t)target) {
+                in = {}; in.u[0] = make_uop(0xb004, 6, 0, false);
+                h.step(in, "rat-wrap-allocate");
+                in = {}; in.comp_valid[0] = true; in.comp_tag[0] = 6;
+                h.step(in, "rat-wrap-complete");
+                h.step(Inputs{}, "rat-wrap-commit");
+            }
+            const int rd[] = {0, 5, 5, 5, 31, 5, 5, 27};
+            for (int i = 0; i < 8; ++i) {
+                in = {};
+                bool writes = i != 3 && (i != 5 || branch_writes);
+                in.u[0] = make_uop(0xb100 + 4*i, 18+i, rd[i], writes);
+                if (i == 5) {
+                    in.u[0].is_jalr = branch_writes;
+                    in.u[0].is_branch = !branch_writes;
+                }
+                h.step(in, "rat-live-prefix-writers");
+            }
+            in = {}; in.br_valid = true; in.br_tag = 23;
+            in.br_taken = true; in.br_target = 0xc000;
+            in.cdb_valid = true; in.cdb_tag = 20;
+            h.step(in, "rat-branch-prefix-recovery");
+            h.step(Inputs{}, "rat-recovery-pulse");
+        }
+}
+
 void run_random(Harness& h, long iters) {
     h.reset();
     uint32_t next_tag = 1;
@@ -818,6 +867,7 @@ int main(int argc, char** argv) {
     run_directed(h);
     run_capacity_boundaries(h);
     run_completion_boundaries(h);
+    run_recovery_rat_boundaries(h);
     run_random(h, random_iters);
 
     printf("rob_tb: W=%d checked=%ld fails=%ld\n", W, h.checked, h.fails);
