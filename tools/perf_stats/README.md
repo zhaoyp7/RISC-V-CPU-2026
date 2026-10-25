@@ -118,3 +118,10 @@ exclusive仅表示未被其他已分析组共享，不代表可全部删除；�
 新增LOAD_LAT/LOAD_USE只读观察FIFO时间戳与IQ消费者seq，排除地址预填，避免把物理tag复用当作同一消费者。
 analyze_load_latency.py检查原有计数器不变、阶段守恒并输出平均延迟；适用于本轮LDQ_DEPTH=8配置。
 测量口径与复现见[load延迟实验](../../docs/experiments/load-latency.md)。
+
+## 数据缓存轨迹
+
+独立wrapper注入data_access_trace.sv与LOCAL_DATA_ACCESS_TRACE，配合collect.py保留真实请求/响应、store写掩码和数据。
+analyze_cache_trace.py按周期回放小缓存，包含失效、延迟填充、写分配与共享端口，并对模型命中值和真实响应比对；
+它测量固定轨迹机会，不提供端到端IPC预测。模型边界测试：python3 test/cache_trace_test/cache_trace_test.py。
+详见[轨迹实验](../../docs/experiments/dcache-trace.md)。
