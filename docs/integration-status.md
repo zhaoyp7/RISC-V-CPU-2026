@@ -1,5 +1,20 @@
 # 集成状态（P1 完成，P2 进入性能优化）
 
+## 最新完成：ROB32固定槽匹配trial（未全面达标）
+
+分支feat/freq-rob32-match，基于5394ea0，迁移52d7c72的完成搜索/one-hot更新，保留当前单槽准入。
+宏参数ROB32/PRF64/IQ8/LSQ16，默认配置文件仍ROB16/PRF48，main未改。
+W2/W1 IPC0.607639/0.549105；diagnose23,429.641 µm²/376.47 MHz。
+较原32：频率+7.243%、面积+23.007 µm²（+0.098%）；较旧16：IPC×Fmax+6.248%、面积+13.891%。
+面积不增和380 MHz目标均未完全达到，只保留独立trial，不升级默认或合main；不自动新RTL或opt。
+四组（32/默认16 × W1/W2）各19/19，全部正确性/perf周期同各自基线；完整run_all ALL PASS。
+ROB完整随机W1/W2检查108050/108048通过；普通/统计版全部计数器同原32基线。
+24个候选输入hash（仅ROB改变）、7库、工具及全部时序/ABC约束核对一致，实际容量确认32/64/8/16。
+当前首条为ROB取消→LSU→CDB ready→分支资格→ROB/rename准入→前端I$，D端2.616 ns，原恢复busy路径不再首位。
+下一步优先拆解ROB表项与恢复网络面积；若继续频率则应针对新前端准入链，不能重复旧瓶颈定位。
+默认参数本轮仅功能/IPC验证，没有本RTL的默认16项PPA，不能复用旧400 MHz；默认build/sim及main报告仍是旧main归档。
+一次diagnose，无opt/合main/推送；归档build/synth/rob32_fixed_match/，详见[ROB32固定匹配](experiments/rob32-fixed-match.md)。
+
 ## 最新完成：三组窗口PPA对照（默认不改）
 
 功能RTL仍1d142db，分支feat/ipc-uncontended-wake；只新增参数覆盖工具、测试和文档。

@@ -11,6 +11,8 @@ MAX_CYCLES=50000000；普通/统计仿真器使用独立build目录，不覆盖b
 运行前核对当前24个功能输入与参考报告的hash，默认参考build/synth/opt/report.json。
 候选RTL可用--reference-report指定它自己的diagnose报告，不能将新统计冒充旧opt版本的数据。
 --skip-build仅用于两份仿真器已经由相同源码/监视器构建的情况；--plain-sim可复用已验证的普通仿真器。
+若需要独立的统计版构建目录，可结合`--skip-build --stats-sim <路径>`复用已构建的统计仿真器。
+使用宏覆盖的实验还应保留两版wrapper和参数manifest；源码hash本身不能表示宏配置。
 
 输出目录包含results.json、两份仿真器、脚本/监视器快照、每例driver日志、stdout/stderr
 以及输入hash。检查两版输入、答案、周期一致，提交数与软件指令数一致；所有模块的周期相同。

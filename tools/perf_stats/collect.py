@@ -24,14 +24,17 @@ def main():
     ap.add_argument("--out", type=Path, default=ROOT / "build/perf_stats_20261025")
     ap.add_argument("--skip-build", action="store_true")
     ap.add_argument("--plain-sim", type=Path, help="reuse a plain simulator built from the reference RTL")
+    ap.add_argument("--stats-sim", type=Path, help="with --skip-build, reuse an independently built statistics simulator")
     ap.add_argument("--reference-report", type=Path, default=ROOT / "build/synth/opt/report.json")
     args = ap.parse_args()
+    if args.stats_sim and not args.skip_build:
+        ap.error("--stats-sim requires --skip-build")
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=True)
     os.chdir(ROOT)
     env = dict(os.environ, APPIMAGE_EXTRACT_AND_RUN="1")
     plain = args.plain_sim.resolve() if args.plain_sim else ROOT / "build/main_perf_plain/sim"
-    stats = ROOT / "build/main_perf_stats/sim"
+    stats = args.stats_sim.resolve() if args.stats_sim else ROOT / "build/main_perf_stats/sim"
     monitor = ROOT / "tools/perf_stats/monitors.sv"
     image = ROOT / "cpu2026-tools-x86_64.AppImage"
     wrapper = out / "verilator_stats.py"
