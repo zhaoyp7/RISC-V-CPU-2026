@@ -12,9 +12,6 @@ constexpr int W=TB_W, R=TB_R, D=TB_D, IW=TB_IW, DW=150;
 #ifndef TB_ALU_ONLY
 #define TB_ALU_ONLY 0
 #endif
-#ifndef TB_EARLY_WAKE
-#define TB_EARLY_WAKE 0
-#endif
 using Bits=std::array<uint32_t,(DW+31)/32>;
 template<class V> void put(V& v,int off,int width,uint32_t x) {
     for(int b=0;b<width;++b) {
@@ -109,8 +106,6 @@ struct Test {
         std::array<bool,IW> pre{};
         for(int l=0;l<IW;++l)for(int i:order) {
             auto& e=entries[i];bool full=e.r1&&e.r2;
-            if(TB_EARLY_WAKE&&TB_ALU_ONLY&&l==1)
-                full=(e.r1||hit(s,get(e.bits,128,6)))&&(e.r2||hit(s,get(e.bits,135,6)));
             bool pf=e.r1&&!e.r2&&get(e.bits,117,1)&&!e.addr_sent;
             bool supported=!(TB_ALU_ONLY&&l==1)||lane1_ok(e.bits);
             if(!used[i]&&supported&&(full||(l==0&&pf))) {sel[l]=i;used[i]=true;pre[l]=!full;break;}
@@ -148,29 +143,6 @@ struct Test {
     }
     void run() {
         reset();
-        if(TB_EARLY_WAKE&&TB_ALU_ONLY&&IW==2) {
-            // One/two missing sources, simultaneous wakes, independent
-            // backpressure and squash at the exact wake edge.
-            for(int scenario=0;scenario<8;++scenario) {
-                reset();Stim t;t.n=1;t.base=20;
-                Bits b=uop(false,false,false,11,12);
-                put(b,102,1,1);put(b,103,5,0);
-                for(int off=113;off<=118;++off)put(b,off,1,0);
-                if(scenario==0)put(b,141,1,1);
-                if(scenario==1)put(b,135,6,11); // same broadcast wakes both
-                if(scenario==4)put(b,116,1,1); // load still waits for registered wake
-                t.bits[0]=b;step(t);
-                t={};t.wake_valid=1;t.wake_tag=11;t.ready=3;
-                if(R>1&&scenario==2) {t.wake_valid=3;t.wake_tag|=12<<6;}
-                if(scenario==3)t.ready=0;
-                if(scenario==5) {t.squash=true;t.cut=19;}
-                if(scenario==6) {t.squash=true;t.cut=20;}
-                step(t);
-                t={};t.wake_valid=1;t.wake_tag=12;t.ready=3;step(t);
-                t={};t.ready=3;step(t);step(t);
-            }
-            reset();
-        }
         if(TB_ALU_ONLY&&IW==2) {
             // For every unsupported class, lane1 must skip it, reserve
             // lane0's oldest entry under backpressure, and retain the loser.
@@ -256,7 +228,7 @@ struct Test {
                 step(t);base+=rng()%4; // includes equal ages, no wrap within batch
             }
         }
-        std::printf("IQ select W=%d R=%d IW=%d D=%d ALU_ONLY=%d EARLY_WAKE=%d cycles=%u checks=%u fails=%u\n",W,R,IW,D,TB_ALU_ONLY,TB_EARLY_WAKE,cycles,checks,fails);
+        std::printf("IQ select W=%d R=%d IW=%d D=%d ALU_ONLY=%d cycles=%u checks=%u fails=%u\n",W,R,IW,D,TB_ALU_ONLY,cycles,checks,fails);
     }
 };
 int main(int argc,char** argv) {

@@ -76,8 +76,8 @@ latency=10、MAX_CYCLES=50,000,000，使用官方make perf答案检查。
 | 最小周期 ns | 2.479492188 | 2.608398438 | +0.128906250 |
 | 2 ns目标WNS ns | -0.478914 | -0.608323 | -0.129409 |
 
-W2 IPC×Fmax **-2.985%**，W1 IPC×同配置诊断频率的趋势也不能据此当作W1实测频率。
-虽然rsort IPC+8.955%、两档geomean均有改善，但频率代价超过W2收益，因此不作为工作版本保留。
+W2 IPC×Fmax **-2.985%**。
+虽然rsort IPC+8.951%、两档geomean均有改善，但频率代价超过W2收益，因此不作为工作版本保留。
 试验完整提交保存在ipc-lane1-early-wake-trial-20261025；工作分支随后恢复8cbb580的功能RTL与原IQ测试矩阵。
 保留统计工具与load依赖数据回归，恢复版该消费者应在生产者广播后三个时钟沿返回。
 直接基线仍为W2/W1 IPC0.532763/0.499840、diagnose20,555.952 µm² /403.31 MHz；未合main。
@@ -107,8 +107,6 @@ W2 IPC×Fmax **-2.985%**，W1 IPC×同配置诊断频率的趋势也不能据此
 
 原始候选统计build/lane1_early_stats/，另归档候选statistics/；这些是接收事件，不等于节省周期。
 
-
-
 ## 复现与归档
 
 ```sh
@@ -129,3 +127,10 @@ APPIMAGE_EXTRACT_AND_RUN=1 make synth MODE=diagnose SYNTH_OUT=build/synth/lane1_
 ```sh
 python3 tools/perf_stats/collect.py --plain-sim build/lane1_early_w2/sim --reference-report build/synth/lane1_early_candidate/diagnose/report.json --out build/lane1_early_stats
 ```
+
+## 恢复后复核
+
+功能RTL及原IQ测试文件逐字节恢复8cbb580；当前24个功能输入hash全部匹配403.31 MHz报告。
+恢复版新增load→ALU回归W1/W2仍580/606项通过，确认一/双源读取新PRF数据、恰好一次结果、广播后三个沿完成。
+恢复没有引入新功能RTL，完整correctness/perf/run_all沿用同源8cbb580的已验证记录，不再重复综合。
+trial标签和build/synth/lane1_early_candidate/仍保留383.38 MHz试验，两个版本不混用。

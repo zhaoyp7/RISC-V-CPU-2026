@@ -10,6 +10,7 @@ W1/W2各19/19、run_all ALL PASS，新增四档IQ参考1,245,951项通过，后�
 新瓶颈ROB取消→LSU结果valid→CDB→IQ提前wake/选择→后端寄存器，D端2.553 ns。
 试验源码、仿真器、报告和统计归档build/synth/lane1_early_candidate/，不覆盖默认main或403.31版报告。
 恢复后仍采用W2/W1 IPC0.532763/0.499840、diagnose20,555.952 µm² /403.31 MHz的候选；main仍f4a0555。
+恢复后24个输入hash与403.31报告匹配，新增后端回归580/606项通过；完整测试沿用同源8cbb580记录。
 本轮无opt、未合main、未推送。详见[提前唤醒试验](experiments/lane1-early-wake.md)。
 
 ## 选定候选：ALU1候选选择（未合main）

@@ -34,9 +34,5 @@ module issue_queue_select_top (
 `ifndef IQ_TEST_ALU_ONLY
 `define IQ_TEST_ALU_ONLY 0
 `endif
-`ifndef IQ_TEST_EARLY_WAKE
-`define IQ_TEST_EARLY_WAKE 0
-`endif
-  issue_queue #(.IW(`IQ_TEST_IW), .LANE1_ALU_ONLY(`IQ_TEST_ALU_ONLY),
-                .LANE1_EARLY_WAKE(`IQ_TEST_EARLY_WAKE)) dut (.*);
+  issue_queue #(.IW(`IQ_TEST_IW), .LANE1_ALU_ONLY(`IQ_TEST_ALU_ONLY)) dut (.*);
 endmodule

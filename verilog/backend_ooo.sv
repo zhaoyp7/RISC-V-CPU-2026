@@ -183,7 +183,7 @@ module backend_ooo #(
   logic [1:0]  issue_ready;
   logic [7:0]  iq_count, iq_free;
 
-  issue_queue #(.W(W), .IW(2), .LANE1_ALU_ONLY(1), .LANE1_EARLY_WAKE(1)) u_iq (
+  issue_queue #(.W(W), .IW(2), .LANE1_ALU_ONLY(1)) u_iq (
     .clk            (clk),
     .reset          (reset),
     .in_valid       (skid_drain ? skid_vmask : '0),
@@ -379,9 +379,8 @@ module backend_ooo #(
   logic [31:0] issue_src1, issue_src2;
   logic [31:0] p_src1, p_src2;
   logic [31:0] a0_src1, a0_src2;
-  // lane0只按寄存ready选择，直连LSU读口的数据已在前一沿写入PRF。
-  // ALU1允许CDB本拍唤醒后进入a1缓冲，同沿写PRF，下一拍才读数据；
-  // a0也有缓冲，因此六个读口仍不需要当前拍CDB数据旁路。
+  // IQ 只按寄存后的 ready 位选择，操作数在选择前的时钟沿已写入 PRF。
+  // a0/a1 还会再缓冲一拍，因此六个读口均不需要当前拍 CDB 数据旁路。
   // dispatch/skid/IQ 入队的同拍 wake 匹配仍保留，防止漏掉唯一一次广播。
   assign issue_src1 = prf_rdata[0 +: 32];
   assign issue_src2 = prf_rdata[32 +: 32];
