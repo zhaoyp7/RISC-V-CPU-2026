@@ -72,3 +72,26 @@ ROB32+PRF64、IQ16、LSQ32、四者组合，以及ROB32分别与IQ16/LSQ32的交
 
 `LATENCY`同时改变指令/数据AXI读和写响应；它不是D-cache模型，也不把内部访存级数降至一拍。
 容量实验只测IPC，不能沿用原配置PPA，更不能把IPC变化直接当成整体吞吐收益。
+
+## 窗口候选的独立PPA验证
+
+```sh
+python3 tools/perf_stats/prepare_window_ppa.py rob32_prf64
+APPIMAGE_EXTRACT_AND_RUN=1 make synth MODE=diagnose \
+  SYNTH_OUT=build/synth/ipc_rob32_prf64 \
+  YOSYS="$REPO_ROOT/build/synth/ipc_rob32_prf64/yosys.py"
+APPIMAGE_EXTRACT_AND_RUN=1 make test MAX_CYCLES=50000000 \
+  BUILD=build/synth/ipc_rob32_prf64/w1 \
+  VERILATOR="$REPO_ROOT/build/synth/ipc_rob32_prf64/verilator_w1.py"
+APPIMAGE_EXTRACT_AND_RUN=1 make perf MAX_CYCLES=50000000 \
+  SIM="$REPO_ROOT/build/synth/ipc_rob32_prf64/w1/sim"
+```
+
+`REPO_ROOT`为仓库绝对路径。其他两组名称为`rob32_lsq32`、`window32`，保持逐组综合。
+prepare先核对已有W2普通/统计版及24个功能输入hash，复制W2仿真器、参数和统计到独立目录。
+宏定义写入生成的Yosys脚本开头，wrapper在elaborate结束时检查ROB/PRF/IQ/LSQ实际位宽，
+不匹配即停止。报告的源码hash本身不能描述宏覆盖，复现必须同时保留configuration.json、
+wrapper与*.with_defines.ys。已有完整报告时prepare拒绝覆盖。
+W1验证结果归档后可用`prepare_window_ppa.py <配置> --verify`检查报告、宏配置、两档仿真器、
+两档19/19日志、7个库hash、工具及SDC/ABC约束，并生成相对原参数候选的comparison.json。
+源码与默认参数不改；默认build/sim和build/synth的main报告保持独立。

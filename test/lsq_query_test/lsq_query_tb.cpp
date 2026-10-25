@@ -4,6 +4,12 @@
 #include <cstdint>
 #include <cstdio>
 
+constexpr unsigned index_width(unsigned size) {
+    unsigned bits = 0;
+    for (unsigned value = size - 1; value; value >>= 1) ++bits;
+    return bits;
+}
+
 struct Harness {
     Vlsq& d;
     unsigned checks = 0, fails = 0;
@@ -48,7 +54,7 @@ struct Harness {
     }
     void commit_store(unsigned id, int id2=-1) {
         d.commit_valid=(id2>=0)?3:1; d.commit_is_store=d.commit_valid;
-        d.commit_id=id | ((id2>=0?unsigned(id2):0) << ((TB_DEPTH==16)?4:3));
+        d.commit_id=id | ((id2>=0?unsigned(id2):0) << index_width(TB_DEPTH));
         tick(); d.commit_valid=0; d.commit_is_store=0; d.eval();
     }
     void drain(unsigned id, uint32_t base, uint32_t data_base, unsigned mask) {
@@ -60,7 +66,7 @@ struct Harness {
     }
     void consume() { d.query_resp_ready=1; tick(); d.query_resp_ready=0; d.eval(); }
     void allocation_boundaries() {
-        constexpr unsigned lw=TB_DEPTH==16?4:3;
+        constexpr unsigned lw=index_width(TB_DEPTH);
         // A stalled two-lane request must remain atomic when only one id frees.
         reset();alloc(0,10,false);
         if(TB_W==2)alloc(TB_DEPTH-1,11,false);
@@ -88,7 +94,7 @@ struct Harness {
         if(TB_W==2){query(102,0x5004);response(false,true,0x55667788);consume();}
 
         reset();
-        if(TB_W==2) {
+        if constexpr (TB_W==2) {
             d.alloc_valid=3;d.alloc_id=0;d.alloc_fire=1;d.eval();
             check(!d.alloc_ready,"duplicate free ids reject whole group");tick();
             check(d.count==0,"duplicate id request makes no partial allocation");

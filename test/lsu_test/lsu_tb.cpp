@@ -23,7 +23,12 @@
 namespace {
 
 constexpr int PRF = 6;
-constexpr int LSQ = (TB_LSQ_DEPTH == 16) ? 4 : 3;
+constexpr int index_width(unsigned size) {
+    int bits = 0;
+    for (unsigned value = size - 1; value; value >>= 1) ++bits;
+    return bits;
+}
+constexpr int LSQ = index_width(TB_LSQ_DEPTH);
 constexpr int ROB = 5;
 constexpr int DW = 124 + 3 * PRF + LSQ + ROB;
 constexpr int IN_WORDS = (DW + 31) / 32;

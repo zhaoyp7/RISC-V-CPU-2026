@@ -1,17 +1,26 @@
 # RISC-V CPU 2026 — 协作者交接（P2 功能完成，性能优化中）
 
-## 最新完成：延迟与窗口容量仿真测量
+## 最新完成：三组窗口PPA对照（默认不改）
 
-仍在feat/ipc-uncontended-wake，功能RTL保持1d142db；未改默认配置、未综合或合main。
-W2默认10拍延迟：原配置IPC0.538263；ROB32+PRF64为0.607639（+12.889%），
-再加LSQ32为0.620532（+15.284%），IQ16+LSQ32完整组合0.639400（+18.790%）。
-单独PRF64无收益，单独IQ16/LSQ32仅+0.160%/+0.016%；ROB32后扩IQ/LSQ才有明显组合收益。
-原配置外部LATENCY10→5/1时IPC0.640466/0.751973，包含取指与数据读写，不等同D-cache效果。
-26个配置×延迟点、312次逐例perf调用，普通/统计版答案/输入/周期一致；七个容量组W2各19/19。
-24个输入hash及默认构建脚本未改；容量组尚无W1、run_all或PPA结论。
-下一步先独立diagnose ROB32/PRF64/IQ8/LSQ16，再按频率/面积代价决定是否加入LSQ32、IQ16；本轮未启动。
-工具tools/perf_stats/sensitivity.py，原始归档build/ipc_sensitivity_20261025/；
-详见[延迟与窗口实验](experiments/ipc-sensitivity.md)。下方无争用提示数据仍是原参数候选的实测PPA。
+功能RTL仍1d142db，分支feat/ipc-uncontended-wake；只新增参数覆盖工具、测试和文档。
+三组均完成W2 diagnose、W1/W2各19/19和两档perf，最终run_all ALL PASS（含LSQ32新矩阵）。
+W2普通/统计版周期一致；24个源码hash、显式宏配置、7个库hash、工具与时序/ABC约束已核对。
+
+| 配置 ROB/PRF/IQ/LSQ | W2 IPC | W1 IPC | diagnose面积 µm² | MHz | W2 IPC×Fmax变化 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 原参数16/48/8/16 | 0.538263 | 0.504223 | 20,571.946 | 400.00 | — |
+| 第一组：ROB32+PRF64（32/64/8/16） | 0.607639 | 0.549105 | 23,406.633 | 351.05 | -0.927% |
+| 第二组：再加LSQ32（32/64/8/32） | 0.620532 | 0.558531 | 27,459.844 | 356.67 | +2.796% |
+| 第三组：再加IQ16（32/64/16/32） | 0.639400 | 0.567505 | 29,817.241 | 347.71 | +3.260% |
+
+当前已测IPC×Fmax最好为第三组：再加IQ16，较400 MHz原参数候选+3.260%，面积+44.941%。
+第一组净吞吐未改善；扩大容量的IPC收益不能直接当作整核收益，三组均未设为默认。
+三组瓶颈是squash索引→LSU取消→CDB tag→ROB完成搜索/恢复busy掩码；下一步优先评估32项ROB的该控制链，
+旧固定槽位匹配52d7c72可作参考，但尚未移植或验证。不自动追加新RTL或opt。
+本轮3次完整有效diagnose，另有首组宏未生效时主动中止的尝试，无report，独立保留。
+默认build/sim与默认diagnose/opt仍为main归档；main仍f4a0555，未合并或推送。
+归档build/synth/ipc_{rob32_prf64,rob32_lsq32,window32}/，复现必须保留宏manifest及wrapper。
+详见[窗口PPA实验](experiments/ipc-window-ppa.md)和[前置容量测量](experiments/ipc-sensitivity.md)。
 
 ## 当前工作分支：无争用计算结果提示（独立IPC候选）
 
