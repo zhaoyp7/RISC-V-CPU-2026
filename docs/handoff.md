@@ -1,6 +1,18 @@
 # RISC-V CPU 2026 — 协作者交接（P2 功能完成，性能优化中）
 
-## 当前工作分支：ALU1候选选择（未合main）
+## ALU1提前唤醒试验（2026-10-25，不采纳）
+
+标签ipc-lane1-early-wake-trial-20261025保留试验；工作分支feat/ipc-lane1-early-wake恢复8cbb580功能RTL。
+W2 IPC0.532763→0.543730（+2.058%），W1 .499840→.507784（+1.589%）。
+一次diagnose20,569.059 µm² /383.38 MHz，较403.31版面积+0.064%、频率-4.942%，W2 IPC×Fmax-2.985%，因此回退。
+W1/W2各19/19、run_all ALL PASS，新增四档IQ参考1,245,951项通过，后端580/606项通过；
+普通/统计版答案和周期一致，24个源码hash及7个库hash匹配。qsort/rsort实际提前接收25,602/82,375次。
+新瓶颈ROB取消→LSU结果valid→CDB→IQ提前wake/选择→后端寄存器，D端2.553 ns。
+试验源码、仿真器、报告和统计归档build/synth/lane1_early_candidate/，不覆盖默认main或403.31版报告。
+恢复后仍采用W2/W1 IPC0.532763/0.499840、diagnose20,555.952 µm² /403.31 MHz的候选；main仍f4a0555。
+本轮无opt、未合main、未推送。详见[提前唤醒试验](experiments/lane1-early-wake.md)。
+
+## 选定候选：ALU1候选选择（未合main）
 
 分支feat/ipc-lane1-select，标签ipc-lane1-select-20261025，基于f21ac1f的ROB单槽接收候选。
 lane0保持原年龄优先；lane1在剩余的普通ALU候选中选最老项，资格入队时寄存。

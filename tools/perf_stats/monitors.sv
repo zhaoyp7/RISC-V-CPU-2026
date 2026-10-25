@@ -313,4 +313,69 @@ bind backend_ooo perf_lane1_stats #(.D(`CPU_RS_DEPTH)) perf_lane1_monitor (
   .uop(u_iq.uop),.seq(u_iq.seq),.lane0_slot(u_iq.sel_idx[0]),
   .out_valid(iq_out_valid),.out_ready(issue_ready),.lane1_ok(j_lane_ok)
 );
+
+// Hypothetical ALU1 wake-through selection; source data is read only after
+// the ALU1 buffer edge, at which the same CDB has written the PRF.
+module perf_early1_stats #(parameter D=8, PW=`CPU_PRF_IDX_W, R=`CPU_CDB_NUM) (
+  input logic clk, reset, squash_valid, lane1_accept,
+  input logic [31:0] squash_seq,
+  input logic [D-1:0] valid, eligible, src1_ready, src2_ready,
+  input logic [D*PW-1:0] src1_tag, src2_tag,
+  input logic [D*32-1:0] seq,
+  input logic [R-1:0] wake_valid,
+  input logic [R*PW-1:0] wake_tag,
+  input logic [7:0] lane0_slot, lane1_slot,
+  input logic [1:0] out_valid, out_ready
+);
+  longint cycles, opportunity, can_accept, idle_opportunity, no_offer_opportunity;
+  longint actual_early, one_source, two_sources;
+  integer i, r, best;
+  logic h1, h2, early_wins;
+  logic [31:0] best_seq;
+  always_comb begin
+    best=-1;best_seq='1;h1=0;h2=0;early_wins=0;
+    for(i=0;i<D;i=i+1) begin
+      h1=src1_ready[i];h2=src2_ready[i];
+      for(r=0;r<R;r=r+1) begin
+        h1=h1||(wake_valid[r]&&wake_tag[r*PW+:PW]==src1_tag[i*PW+:PW]);
+        h2=h2||(wake_valid[r]&&wake_tag[r*PW+:PW]==src2_tag[i*PW+:PW]);
+      end
+      if(valid[i]&&eligible[i]&&h1&&h2&&
+         !(squash_valid&&seq[i*32+:32]>squash_seq)&&
+         !(out_valid[0]&&i==int'(lane0_slot))&&
+         (best<0||seq[i*32+:32]<best_seq)) begin
+        best=i;best_seq=seq[i*32+:32];early_wins=!(src1_ready[i]&&src2_ready[i]);
+      end
+    end
+  end
+  always_ff @(posedge clk) begin
+    if(reset) begin
+      cycles<=0;opportunity<=0;can_accept<=0;idle_opportunity<=0;no_offer_opportunity<=0;
+      actual_early<=0;one_source<=0;two_sources<=0;
+    end else begin
+      cycles<=cycles+1;
+      if(early_wins) begin
+        opportunity<=opportunity+1;
+        if(lane1_accept) can_accept<=can_accept+1;
+        if(!out_valid[1]) idle_opportunity<=idle_opportunity+1;
+        if(!(|out_valid)) no_offer_opportunity<=no_offer_opportunity+1;
+      end
+      if(out_valid[1]&&out_ready[1]&&!(src1_ready[lane1_slot]&&src2_ready[lane1_slot])) begin
+        actual_early<=actual_early+1;
+        if(!src1_ready[lane1_slot]&&!src2_ready[lane1_slot]) two_sources<=two_sources+1;
+        else one_source<=one_source+1;
+      end
+    end
+  end
+  final $fdisplay(32'h80000002,"[STATS] EARLY1 cycles=%0d opportunity=%0d can_accept=%0d idle_opportunity=%0d no_offer_opportunity=%0d actual_early=%0d one_source=%0d two_sources=%0d",cycles,opportunity,can_accept,idle_opportunity,no_offer_opportunity,actual_early,one_source,two_sources);
+endmodule
+bind backend_ooo perf_early1_stats #(.D(`CPU_RS_DEPTH)) perf_early1_monitor (
+  .clk(clk),.reset(reset),.squash_valid(sq_valid),.squash_seq(squash_seq),.lane1_accept(a1_accept),
+  .valid(u_iq.valid),.eligible(u_iq.lane1_eligible),
+  .src1_ready(u_iq.src1_ready),.src2_ready(u_iq.src2_ready),
+  .src1_tag(u_iq.src1_tag),.src2_tag(u_iq.src2_tag),.seq(u_iq.seq),
+  .wake_valid(cdb_wake_valid),.wake_tag(cdb_wake_tag),
+  .lane0_slot(u_iq.sel_idx[0]),.lane1_slot(u_iq.sel_idx[1]),
+  .out_valid(iq_out_valid),.out_ready(issue_ready)
+);
 `endif

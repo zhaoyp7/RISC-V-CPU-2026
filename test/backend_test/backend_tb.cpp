@@ -749,6 +749,46 @@ int main(int argc, char** argv) {
         }
     }
 
+    // A load wakes an ordinary ALU while no registered-ready candidate is
+    // available. The ALU1 buffer must read the PRF after the CDB write edge.
+    for(int both=0;both<2;++both) {
+        h.auto_respond=true;h.reset();h.auto_respond=false;
+        const uint32_t seed=0x12345678;
+        h.write_word(0x7500,seed,15);
+        Uop producer;
+        producer.dest=40;producer.rob=1;producer.reg_we=1;
+        producer.is_load=1;producer.wb_sel=WB_MEM;producer.imm=0x7500;
+        h.expect(h.dispatch_one(producer),"early wake load accepted");
+        for(int n=0;n<32&&h.ld_pending.empty();++n)h.tick();
+        h.expect(h.ld_pending.size()==1,"early wake producer waits for memory");
+        Uop consumer;
+        consumer.dest=41;consumer.rob=2;consumer.reg_we=1;
+        consumer.src1=40;consumer.src1_ready=0;
+        consumer.b_sel=both?B_REG:B_IMM;consumer.imm=7;
+        if(both) {consumer.src2=40;consumer.src2_ready=0;}
+        h.expect(h.dispatch_one(consumer),"early wake consumer accepted");
+        for(int n=0;n<8;++n)h.tick();
+        h.expect(h.cdb_q.empty(),"consumer does not execute before producer");
+        h.auto_respond=true;
+        int producer_cycle=-1,consumer_cycle=-1;
+        for(int n=0;n<20;++n) {
+            h.tick();
+            while(!h.cdb_q.empty()) {
+                auto event=h.cdb_q.front();h.cdb_q.pop_front();
+                if(event.first==40) {
+                    h.expect(producer_cycle<0&&event.second==seed,"early wake producer returns once");
+                    producer_cycle=n;
+                } else {
+                    h.expect(event.first==41&&consumer_cycle<0&&event.second==(both?seed+seed:seed+7),
+                             "early wake consumer reads new PRF data exactly once");
+                    consumer_cycle=n;
+                }
+            }
+        }
+        h.expect(producer_cycle>=0&&consumer_cycle==producer_cycle+2,
+                 "ALU1 wake-through consumer returns two edges after producer");
+    }
+
     printf("\nW=%d checked=%ld fails=%ld\n", W, h.checks, h.fails);
     bool pass = (h.fails == 0);
     printf(pass ? "PASS\n" : "FAIL\n");

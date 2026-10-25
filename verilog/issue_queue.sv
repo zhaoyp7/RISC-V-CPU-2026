@@ -16,7 +16,9 @@ module issue_queue #(
   parameter integer D  = `CPU_RS_DEPTH,
   parameter integer IW = 1,
   // 后端第二通道只支持普通写回ALU；通用IQ默认仍保持逐年龄选择。
-  parameter integer LANE1_ALU_ONLY = 0
+  parameter integer LANE1_ALU_ONLY = 0,
+  // 仅用于后接PRF读/执行寄存级的普通ALU通道。
+  parameter integer LANE1_EARLY_WAKE = 0
 ) (
   input  logic clk,
   input  logic reset,
@@ -255,7 +257,19 @@ module issue_queue #(
         if (LANE1_ALU_ONLY) begin : gen_alu_only
           // 分类在入队时寄存；只在本通道候选中按原年龄关系选最老项。
           // lane0即使被反压也保留其候选，不能在两个通道重复输出。
-          wire [D-1:0] candidates = cand_issue & lane1_eligible & ~pick0;
+          wire [D-1:0] candidates, ready_for_lane1;
+          for (genvar g = 0; g < D; g = g + 1) begin : gen_ready
+            if (LANE1_EARLY_WAKE) begin : gen_early
+              // 本拍CDB在接收沿写PRF；ALU1缓冲下一拍才读PRF。
+              // lane0和访存候选不使用此旁路。
+              assign ready_for_lane1[g] = valid[g] &&
+                  (src1_ready[g] || tag_hit(src1_tag[g*PW +: PW])) &&
+                  (src2_ready[g] || tag_hit(src2_tag[g*PW +: PW]));
+            end else begin : gen_registered
+              assign ready_for_lane1[g] = cand_issue[g];
+            end
+          end
+          assign candidates = ready_for_lane1 & lane1_eligible & ~pick0;
           for (genvar g = 0; g < D; g = g + 1) begin : gen_pick
             assign picks[D+g] = candidates[g] && !(|(older[g] & candidates));
           end

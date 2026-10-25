@@ -766,3 +766,14 @@ W2/W1 IPC0.532763/0.499840，较上轮+0.814%/+0.200%；一次diagnose20,555.952
 首条路径a0源tag→PRF→ALU0→结果寄存器2.419 ns，后续IPC方向仍需核对load依赖等待与唤醒，不能直接加深流水。
 本轮无opt、未合main、未推送，报告归档build/synth/lane1_select_candidate/。
 详见[ALU1选择实验](../experiments/lane1-select.md)。
+
+## 39. ALU1受限提前wake与控制链瓶颈
+
+基于8cbb580，只有普通ALU1允许CDB当拍唤醒并进入a1，下一拍读PRF；lane0/访存仍寄存ready。
+两档19/19、run_all ALL PASS，新增IQ四档1,245,951项、后端580/606项通过，普通/统计版周期相同。
+W2/W1 IPC0.543730/0.507784，较403.31版+2.058%/+1.589%；一次diagnose20,569.059 µm² /383.38 MHz。
+频率-4.942%、面积+0.064%、W2 IPC×Fmax-2.985%，不采纳，保留trial标签并恢复8cbb580功能RTL。
+ROB取消→LSU→CDB→IQ→后端接收的2.553 ns新路径表明，即使只提前ALU1，仍会接回全局控制链。
+后续不能直接扩大同拍wake范围；先证明独立lookahead资格、实际写PRF与取消/仲裁一致，或转向其他瓶颈。
+完整归档build/synth/lane1_early_candidate/，24个源码hash匹配，无opt/合main/推送。
+详见[提前wake试验](../experiments/lane1-early-wake.md)。

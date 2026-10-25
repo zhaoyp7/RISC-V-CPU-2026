@@ -29,6 +29,7 @@ run_select() {
     depth=$3
     iw=$4
     alu_only=${5:-0}
+    early_wake=${6:-0}
     python3 "$root/tools/unit/build.py" \
         --top issue_queue_select_top \
         --tb "$here/issue_queue_select_tb.cpp" \
@@ -38,10 +39,11 @@ run_select() {
         --define "CPU_ISSUE_WIDTH=$w" --define "CPU_CDB_NUM=$r" \
         --define "CPU_RS_DEPTH=$depth" --define "IQ_TEST_IW=$iw" \
         --define "IQ_TEST_ALU_ONLY=$alu_only" \
+        --define "IQ_TEST_EARLY_WAKE=$early_wake" \
         --define CPU_LSQ_DEPTH=8 --define CPU_PRF_SIZE=64 --define CPU_ROB_DEPTH=32 \
         --cxx-define "TB_W=$w" --cxx-define "TB_R=$r" \
         --cxx-define "TB_D=$depth" --cxx-define "TB_IW=$iw" \
-        --cxx-define "TB_ALU_ONLY=$alu_only"
+        --cxx-define "TB_ALU_ONLY=$alu_only" --cxx-define "TB_EARLY_WAKE=$early_wake"
 }
 
 run_select 2 2 8 1
@@ -53,3 +55,7 @@ run_select 1 1 8 2 1
 run_select 2 2 8 2 1
 run_select 2 2 6 2 1
 run_select 2 2 16 2 1
+run_select 1 1 8 2 1 1
+run_select 2 2 8 2 1 1
+run_select 2 2 6 2 1 1
+run_select 2 2 16 2 1 1
