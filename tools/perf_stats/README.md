@@ -8,9 +8,9 @@ python3 tools/perf_stats/collect.py --out build/perf_stats_20261025
 MAX_CYCLES=50000000；普通/统计仿真器使用独立build目录，不覆盖build/sim。
 统计版仅注入LOCAL_STATS与monitors.sv；官方filelist和功能RTL不改动。
 
-运行前核对当前24个功能输入与build/synth/opt/report.json的hash，确保分析的是已记录的main。
-若研究新的功能RTL，应先明确修改此基线核对策略，不能将新统计冒充旧opt版本的数据。
---skip-build仅用于两份仿真器已经由相同源码/监视器构建的情况。
+运行前核对当前24个功能输入与参考报告的hash，默认参考build/synth/opt/report.json。
+候选RTL可用--reference-report指定它自己的diagnose报告，不能将新统计冒充旧opt版本的数据。
+--skip-build仅用于两份仿真器已经由相同源码/监视器构建的情况；--plain-sim可复用已验证的普通仿真器。
 
 输出目录包含results.json、两份仿真器、脚本/监视器快照、每例driver日志、stdout/stderr
 以及输入hash。检查两版输入、答案、周期一致，提交数与软件指令数一致；所有模块的周期相同。
@@ -30,3 +30,6 @@ MAX_CYCLES=50000000；普通/统计仿真器使用独立build目录，不覆盖b
 仅指tail满，两者不是同一种停顿。
 
 本次结果与分析见[当前main统计](../../docs/experiments/main-stats-20261025.md)。
+
+ADMISSION监视器按原始FQ条数区分单/双条机会（不使用容量裁剪后的dec_valid），
+同时记录ROB仅剩一槽时实际接收及无同拍提交的接收次数。可用于容量策略前后对照。

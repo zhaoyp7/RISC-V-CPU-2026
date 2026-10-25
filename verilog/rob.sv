@@ -27,6 +27,7 @@ module rob #(
   input  logic [W-1:0]                 in_pred_taken,
   input  logic [W*32-1:0]              in_pred_target,
   output logic                         in_ready,
+  output logic [W-1:0]                 in_capacity,
   output logic [W*`CPU_ROB_TAG_W-1:0]  alloc_rob_idx,
 
   // 完成口（R 条 CDB）
@@ -117,14 +118,14 @@ module rob #(
   always_comb begin
     n_valid = '0;
     for (i_alloc = 0; i_alloc < W; i_alloc = i_alloc + 1)
-      if (in_valid[i_alloc]) n_valid = n_valid + 1'b1;
+      if (in_valid[i_alloc] && in_capacity[i_alloc]) n_valid = n_valid + 1'b1;
   end
 
   integer i_ar;
   always_comb begin
     alloc_rob_idx = '0;
     for (i_ar = 0; i_ar < W; i_ar = i_ar + 1)
-      if (in_valid[i_ar])
+      if (in_valid[i_ar] && in_capacity[i_ar])
         alloc_rob_idx[i_ar*RW +: RW] = (head + count + i_ar) & MASK;
   end
 
@@ -301,8 +302,12 @@ module rob #(
       if (commit_valid[i_commit_cnt]) n_commit = n_commit + 1'b1;
   end
 
+  // Prefix capacity from registered occupancy only; no same-cycle commit credit.
+  for (genvar lane = 0; lane < W; lane = lane + 1) begin : gen_input_capacity
+    assign in_capacity[lane] = (count + lane < DEPTH);
+  end
   assign in_ready = !flush_young && !recover_valid && !redirect_valid &&
-                    ((count + W) <= DEPTH);
+                    (count < DEPTH);
 
   // ---- 完成搜索（组合） ----------------------------------------------------
   logic [R-1:0]  cdb_hit;
@@ -420,7 +425,7 @@ module rob #(
         if (in_ready) begin
           for (i_alloc2 = 0; i_alloc2 < W; i_alloc2 = i_alloc2 + 1) begin
             i_alloc_idx = (head + count + i_alloc2) & MASK;
-            if (in_valid[i_alloc2]) begin
+            if (in_valid[i_alloc2] && in_capacity[i_alloc2]) begin
               entry_valid[i_alloc_idx]   <= 1'b1;
               entry_pc[i_alloc_idx]      <= in_uop[i_alloc2*`CPU_RENAME_W + `CPU_DISPATCH_PC_OFF +: 32];
               entry_inst[i_alloc_idx]    <= in_uop[i_alloc2*`CPU_RENAME_W + `CPU_DISPATCH_INST_OFF +: 32];

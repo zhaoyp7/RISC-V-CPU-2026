@@ -20,6 +20,7 @@ module frontend_ooo #(
   input  logic        reset,
 
   input  logic        backend_ready,
+  input  logic [W-1:0] decode_capacity,
 
   input  logic        redirect_valid,
   input  logic [31:0] redirect_pc,
@@ -169,8 +170,13 @@ module frontend_ooo #(
   logic pop_fire;
   logic [FCW-1:0] pop_n, pop_credit;
 
-  assign pop_n    = (fq_count >= W) ? W[FCW-1:0] : fq_count;
-  assign pop_fire = (fq_count != 0) && rename_ready;
+  integer i_pop;
+  always_comb begin
+    pop_n = '0;
+    for (i_pop = 0; i_pop < W; i_pop = i_pop + 1)
+      if (i_pop < fq_count && decode_capacity[i_pop]) pop_n = pop_n + 1'b1;
+  end
+  assign pop_fire = (pop_n != 0) && rename_ready;
   assign pop_credit = pop_fire ? pop_n : '0;
 
   // 空间保守计算：response 最多 2 条、fetch 最多 2 条。
@@ -325,7 +331,7 @@ module frontend_ooo #(
     dec_pred_taken  = '0;
     dec_pred_target = '0;
     for (i_out = 0; i_out < W; i_out = i_out + 1) begin
-      if (i_out < fq_count) begin
+      if (i_out < pop_n) begin
         dec_valid[i_out] = fq_valid[(fq_head + i_out) % FDEPTH];
         dec_uop[i_out*`CPU_DECODE_W +: `CPU_DECODE_W] =
             fq_uop[((fq_head + i_out) % FDEPTH)*`CPU_DECODE_W +: `CPU_DECODE_W];
@@ -373,7 +379,7 @@ module frontend_ooo #(
       // 先清 pop 的槽位，再写 push；若两者同槽，push 必须胜出。
       if (pop_fire) begin
         for (i_slot = 0; i_slot < W; i_slot = i_slot + 1)
-          if (i_slot < fq_count)
+          if (i_slot < pop_n)
             fq_valid[(fq_head + i_slot) % FDEPTH] <= 1'b0;
         fq_head <= (fq_head + pop_n) % FDEPTH;
       end

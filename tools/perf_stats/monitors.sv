@@ -214,4 +214,41 @@ bind lsu perf_load_head_stats #(
   .rq_valid($root.student_top.u_backend.u_lsu.rq_valid & ~$root.student_top.u_backend.u_lsu.rq_discard),.rq_tag($root.student_top.u_backend.u_lsu.rq_tag),
   .md_head(md_head),.rq_head(rq_head),.md_count(ld_count),.rq_count(rq_count)
 );
+// Probe admission opportunities before changing the scalar group handshake.
+module perf_admission_stats #(parameter W=2) (
+  input logic clk, reset, one_slot, controls_ok, free_tag, committing, accept_fire,
+  input logic [31:0] fq_count
+);
+  longint cycles, one_slot_cycles, gated, empty, single, pair, no_tag;
+  longint single_no_commit, pair_no_commit, accepted, accepted_no_commit;
+  always_ff @(posedge clk) begin
+    if(reset) begin
+      cycles<=0;one_slot_cycles<=0;gated<=0;empty<=0;single<=0;pair<=0;no_tag<=0;
+      single_no_commit<=0;pair_no_commit<=0;accepted<=0;accepted_no_commit<=0;
+    end else begin
+      cycles<=cycles+1;
+      if(one_slot) begin
+        one_slot_cycles<=one_slot_cycles+1;
+        if(accept_fire) begin
+          accepted<=accepted+1;if(!committing) accepted_no_commit<=accepted_no_commit+1;
+        end
+        if(!controls_ok) gated<=gated+1;
+        else if(fq_count==0) empty<=empty+1;
+        else if(!free_tag) no_tag<=no_tag+1;
+        else if(fq_count==1) begin
+          single<=single+1;if(!committing) single_no_commit<=single_no_commit+1;
+        end else begin
+          pair<=pair+1;if(!committing) pair_no_commit<=pair_no_commit+1;
+        end
+      end
+    end
+  end
+  final $fdisplay(32'h80000002,"[STATS] ADMISSION cycles=%0d one_slot=%0d gated=%0d empty=%0d single=%0d pair=%0d no_tag=%0d single_no_commit=%0d pair_no_commit=%0d accepted=%0d accepted_no_commit=%0d",cycles,one_slot_cycles,gated,empty,single,pair,no_tag,single_no_commit,pair_no_commit,accepted,accepted_no_commit);
+endmodule
+bind core_ooo perf_admission_stats #(.W(W)) perf_admission_monitor (
+  .clk(clk),.reset(reset),.one_slot(u_rob.count==(`CPU_ROB_DEPTH-1)),
+  .controls_ok(backend_ready && !u_rob.flush_young && !u_rob.recover_valid && !rob_redirect_valid),
+  .free_tag(u_rename.free_count!=0),.committing(|rob_cm_valid),
+  .fq_count(32'(u_front.fq_count)),.accept_fire(|ren_fire)
+);
 `endif

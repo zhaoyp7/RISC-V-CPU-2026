@@ -50,6 +50,7 @@ struct Harness {
         d.refill_resp_valid=0;d.refill_resp_valid1=0;d.eval();
     }
     void reset() {
+        d.decode_capacity=(1u<<TB_W)-1;
         d.reset=1;d.backend_ready=0;d.rename_ready=0;d.redirect_valid=0;d.redirect_pc=0;
         d.br_update_valid=0;d.br_update_pc=0;d.br_update_taken=0;d.br_update_target=0;
         d.br_update_uncond=0;d.br_update_is_jalr=0;d.br_update_tag=0;
@@ -94,6 +95,37 @@ struct Harness {
             check(records[i].pc==4*i && !records[i].taken,"stalled response order and snapshot");
         check(d.pc_out==16,"PC stays at first unissued request while backend is stalled");
         d.rename_ready=0;
+    }
+    void partial_decode_capacity() {
+        if(TB_W!=2)return;
+        reset();update(4,0x80);settle();
+        d.backend_ready=1;d.rename_ready=0;tick();tick();d.backend_ready=0;
+        for(int i=0;i<64;++i)tick();
+        uint64_t targets=d.dec_pred_target;
+        bool second_taken=(d.dec_pred_taken>>1)&1;
+        uint32_t second_target=uint32_t(targets>>32);
+        check(second_taken && second_target==0x80,"partial group includes nonzero taken prediction snapshot");
+        d.decode_capacity=1;d.rename_ready=1;tick();
+        check(records.size()==1 && records[0].pc==0,"one slot consumes only first decoded instruction");
+        d.rename_ready=0;tick();
+        check(d.dec_valid==1 && field(d.dec_uop,1,32)==4,"second decoded instruction retained at FIFO head");
+        check(bool(d.dec_pred_taken&1)==second_taken && uint32_t(d.dec_pred_target)==second_target,
+              "retained instruction keeps prediction snapshot");
+        d.decode_capacity=0;d.rename_ready=1;
+        for(int i=0;i<5;++i)tick();
+        check(records.size()==1 && d.dec_valid==0,"zero capacity consumes nothing even when rename is ready");
+        d.decode_capacity=1;tick();d.decode_capacity=3;tick();
+        check(records.size()==4,"single then dual admission preserves exact instruction count");
+        const uint32_t expected[]={0,4,0x80,0x84};
+        for(unsigned i=0;i<records.size();++i)check(records[i].pc==expected[i],"partial admission preserves program order");
+        check(d.pc_out==0x88,"partial decode capacity does not generate extra fetches");
+        // Redirect while a suffix remains queued after a one-instruction pop.
+        d.rename_ready=0;d.backend_ready=1;tick();tick();d.backend_ready=0;
+        for(int i=0;i<64;++i)tick();
+        d.decode_capacity=1;d.rename_ready=1;tick();redirect(0x100);until(4);
+        for(unsigned i=0;i<4 && i<records.size();++i)
+            check(records[i].pc==0x100+4*i,"redirect drops partially consumed group suffix");
+        d.decode_capacity=3;d.rename_ready=0;d.backend_ready=0;
     }
     void response_skew(int slow_bank) {
         reset();latency[0]=slow_bank==0?9:0;latency[1]=slow_bank==1?9:0;
@@ -169,7 +201,7 @@ int main(int argc,char** argv) {
     // Reset discards any pending training valid and predictor table state.
     d.backend_ready=0;d.rename_ready=0;h.update(0,0x100);h.reset();h.until(1);
     if(!h.records.empty())h.check(h.records[0].pc==0 && !h.records[0].taken,"reset drops pending training");
-    h.backend_stall_responses();h.response_skew(0);h.response_skew(1);
+    h.backend_stall_responses();h.partial_decode_capacity();h.response_skew(0);h.response_skew(1);
     std::printf("BPU training / response queues W=%d checks=%u fails=%u\n",TB_W,h.checks,h.fails);
     return h.fails?1:0;
 }

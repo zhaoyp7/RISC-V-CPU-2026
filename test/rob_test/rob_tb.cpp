@@ -174,7 +174,7 @@ struct RefRob {
         e.flush = e.br_pos >= 0 && e.br_mispredict;
 
         e.in_ready = !e.flush && !cur_recover && !cur_redirect &&
-                     (q.size() + (size_t)W <= (size_t)DEPTH);
+                     (q.size() < (size_t)DEPTH);
 
         e.n_commit = 0;
         // rename 在 recover_valid 拍装载恢复快照并忽略 commit 反馈，
@@ -273,7 +273,7 @@ struct RefRob {
         if (e.in_ready) {
             uint32_t base = (old_head + (uint32_t)old_size) & (DEPTH - 1);
             for (int l = 0; l < W; ++l) {
-                if (in.u[l].dest == 0) continue;
+                if (in.u[l].dest == 0 || (size_t)l >= (size_t)DEPTH-old_size) continue;
                 Entry x;
                 x.idx = (base + (uint32_t)l) & (DEPTH - 1);
                 x.pc = in.u[l].pc;
@@ -381,6 +381,10 @@ struct Harness {
 
     void check_comb(const ExpComb& e, const char* tag) {
         ++checked;
+        unsigned capacity=0;
+        for(int l=0;l<W;++l) if(ref.q.size()+l<DEPTH) capacity|=1u<<l;
+        if((unsigned)dut->in_capacity!=capacity)
+            report(tag,"input prefix capacity",-1,dut->in_capacity,capacity);
         if ((bool)dut->in_ready != e.in_ready) {
             report(tag, "in_ready", -1, dut->in_ready, e.in_ready);
         }
@@ -663,6 +667,25 @@ bool run_directed(Harness& h) {
     return ok;
 }
 
+void run_capacity_boundaries(Harness& h) {
+    h.reset();
+    for(int i=0;i<DEPTH-1;++i) {
+        Inputs in;in.u[0]=make_uop(0xb000+4*i,i+1,0,false);
+        h.step(in,"fill-to-one-free-slot");
+    }
+    Inputs in;
+    for(int l=0;l<W;++l)in.u[l]=make_uop(0xc000+4*l,40+l,0,false);
+    h.step(in,"accept-only-capacity-prefix");
+    if(h.ref.q.size()!=DEPTH)h.report("capacity","last slot",-1,h.ref.q.size(),DEPTH);
+    in={};in.cdb_valid=true;in.cdb_tag=1;h.step(in,"complete-head-while-full");
+    in={};for(int l=0;l<W;++l)in.u[l]=make_uop(0xd000+4*l,45+l,0,false);
+    h.step(in,"full-does-not-borrow-same-cycle-commit");
+    if(h.ref.q.size()!=DEPTH-1)h.report("capacity","full commit only",-1,h.ref.q.size(),DEPTH-1);
+    h.step(in,"reuse-single-slot-after-commit-edge");
+    if(h.ref.q.size()!=DEPTH)h.report("capacity","wrapped last slot",-1,h.ref.q.size(),DEPTH);
+    h.reset();
+}
+
 // Cover every circular head position, including duplicate tags straddling wrap.
 // Observe only external commit/recovery signals through the ordered-queue model.
 void run_completion_boundaries(Harness& h) {
@@ -793,6 +816,7 @@ int main(int argc, char** argv) {
     h.dut = &dut;
 
     run_directed(h);
+    run_capacity_boundaries(h);
     run_completion_boundaries(h);
     run_random(h, random_iters);
 

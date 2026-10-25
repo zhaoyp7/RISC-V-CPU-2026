@@ -86,6 +86,7 @@ module core_ooo #(
   logic                       rob_br_uncond;
 
   logic                       rob_in_ready;
+  logic [W-1:0]               rob_in_capacity;
   logic [W*RW-1:0]            alloc_rob_idx;
 
   // cdb/complete 解包
@@ -146,6 +147,7 @@ module core_ooo #(
     .clk               (clk),
     .reset             (reset),
     .backend_ready     (backend_ready && rob_in_ready),
+    .decode_capacity   (rob_in_capacity),
     .redirect_valid    (rob_redirect_valid),
     .redirect_pc       (rob_redirect_pc),
     .br_update_valid   (br_valid),
@@ -205,6 +207,7 @@ module core_ooo #(
     .in_pred_taken      (dec_pred_taken),
     .in_pred_target     (dec_pred_target),
     .in_ready           (rob_in_ready),
+    .in_capacity        (rob_in_capacity),
     .alloc_rob_idx      (alloc_rob_idx),
     .cdb_valid          (cdb_valid),
     .cdb_tag            (cdb_tag),

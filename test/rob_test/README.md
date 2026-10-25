@@ -27,7 +27,7 @@ ROB_W=2 sh test/rob_test/run.sh --quick
 
 ## 2. 接口与语义
 
-- **分配**：接收 rename 的 `in_uop` / `in_old_tag`，按程序序分配 `rob_idx`
+- **分配**：按in_ready和低位连续in_capacity接收有效前缀，接收rename的`in_uop` / `in_old_tag`，按程序序分配`rob_idx`
   （循环缓冲索引），同时保存前端给出的 `pred_taken/pred_target`。
 - **完成**：`cdb` 与 `complete[W]` 按 `dest_tag` 定位表项，置 `done`；
   `exception` 一并记录。若接口测试给出多个同tag有效项，保持原实现的规则：
@@ -53,7 +53,7 @@ ROB_W=2 sh test/rob_test/run.sh --quick
 - `in_ready` 在 `recover_valid/redirect_valid` 脉冲期间为 0，避免恢复同拍
   再接收新 uop；
 - 分配与提交同拍时，新表项索引按**提交前**的 head/count 计算；ROB 满时
-  本拍不接收（保守但正确）。
+  本拍不接收（保守但正确）。仅剩一槽时容量为01，可接收lane0；不借当拍提交空间。
 
 ## 4. 测试分组
 
@@ -84,3 +84,6 @@ PASS
 - W=1/W=2 随机对拍通过；
 - Yosys `proc; opt; check` 0 problems；
 - 已纳入正式OoO核心；测试台和其参考模型保持独立。
+
+容量边界覆盖：填到仅剩一槽、只接收所提供前缀、满队列同拍commit不借空间、释放沿后绕回复用。
+参考以有序队列剩余容量限定接受条数，逐拍核对容量mask及提交/恢复状态。

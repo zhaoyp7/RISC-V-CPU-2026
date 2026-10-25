@@ -656,3 +656,11 @@ diagnose 20,505.024 µm² / 402.36 MHz，opt **19,808.712 µm² / 456.12 MHz**�
 实际约7分20秒，唯一一次opt，无新增RTL；沿用W1/W2各19/19、run_all及IPC0.5221/0.4988验证。
 标签freq-age-matrix-opt-20261024，完整归档build/synth/iq_age_matrix_opt_checkpoint/。未合main、未推送。
 详见同源opt对比记录。
+
+## 实验 33：ROB单槽接收（IPC小幅改善，保留候选）
+
+基于f4a0555，新增寄存占用容量mask，前端按可接受前缀出队，ROB只分配实际前缀，不借当拍提交空间。
+W1/W2各19/19、run_all ALL PASS，ROB28,094/28,038、前端293/325项通过，W1周期不变。
+W2 IPC0.5221→0.5285（+1.217%）；diagnose20,535.904 µm² /401.25 MHz，较基线面积+0.151%、频率-0.274%。
+IPC×Fmax+0.939%，保留ipc-rob-single-slot-20261025独立候选，不合main、不跑opt。
+单槽实际接收qsort28,061/rsort23,026次，候选普通/统计版周期相同，详见rob-single-slot.md。

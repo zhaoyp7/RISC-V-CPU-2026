@@ -1,8 +1,21 @@
 # 集成状态（P1 完成，P2 进入性能优化）
 
-## 当前检查点：opt 456.12 MHz / 19,808.71 µm²
+## 当前工作分支：ROB单槽接收IPC候选（未合main）
 
-当前分支`main`，主线检查点`main-freq-age-matrix-20261025`。
+分支`feat/ipc-rob-single-slot`，标签`ipc-rob-single-slot-20261025`，基于f4a0555。
+候选W2 IPC **0.5285**（主线0.5221，+1.217%），W1 **0.4988**且19项正确性/6项perf周期逐项相同。
+候选diagnose **20,535.904 µm² / 401.25 MHz**；同模式主线20,505.024 /402.36，面积+0.151%、频率-0.274%。
+诊断IPC×Fmax+0.939%，作为独立IPC候选保留；W1/W2各19/19、run_all ALL PASS、24个输入hash匹配。
+ROB边界28,094/28,038、前端非零预测快照专项293/325项通过，配置及LOCAL_STATS lint通过。
+ROB按寄存count给出in_capacity前缀，前端按容量输出/弹出前缀并保留后缀；不借当拍commit空间，无新增流水拍数。
+候选普通/统计版六项周期相同，单槽实际接收qsort28,061/rsort23,026次，其中无同拍提交13,185/17,416次。
+main仍保留f4a0555的功能RTL（同ba7ceb6），默认build/sim及diagnose/opt是主线基线，不对应候选。
+候选仿真器build/rob_single_slot_w{1,2}/sim，报告/源码/统计在build/synth/rob_single_slot_candidate/。
+本轮无opt、未合main、未推送。详见[ROB单槽实验](experiments/rob-single-slot.md)。
+
+## main基线检查点：opt 456.12 MHz / 19,808.71 µm²
+
+main基线检查点`main-freq-age-matrix-20261025`。
 测量检查点仍为`freq-age-matrix-opt-20261024`，源码与ba7ceb6相同。
 本次用户授权的一次opt已完成；RTL与ba7ceb6完全一致，ROB固定槽位匹配trial仍回退。
 

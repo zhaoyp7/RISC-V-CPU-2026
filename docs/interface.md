@@ -381,3 +381,11 @@ REFILL提前选refill_index，写入仍受原响应与flush条件控制；没有
 redirect/reset保持原清理优先级，响应缓冲不能覆盖未消费的decode数据。
 ROB分支解析、redirect/squash的对外时序不变；请求FIFO保存发请求当拍的预测快照，
 后续训练不得改写在途指令的预测metadata。
+
+### ROB按寄存容量限制前端出队（IPC单槽实验）
+
+ROB的in_capacity[W]是由寄存count计算的低位连续容量掩码，不借用当拍commit释放。
+in_ready表示非恢复/redirect且至少有一个空槽；每lane实际接收条件是in_valid && in_ready && in_capacity。
+core将容量传给frontend.decode_capacity，前端只提供并弹出该容量内的队首前缀，其余指令及预测快照留在FIFO。
+rename仍整组处理当前提供的前缀，ROB/dispatch/rename共享实际接收mask；单槽时不会分配第二条的tag/LSQ id。
+取消仍由既有ready/redirect门控生效，不增加流水拍数。外部student_top接口和总线布局不变。

@@ -23,12 +23,14 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--out", type=Path, default=ROOT / "build/perf_stats_20261025")
     ap.add_argument("--skip-build", action="store_true")
+    ap.add_argument("--plain-sim", type=Path, help="reuse a plain simulator built from the reference RTL")
+    ap.add_argument("--reference-report", type=Path, default=ROOT / "build/synth/opt/report.json")
     args = ap.parse_args()
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=True)
     os.chdir(ROOT)
     env = dict(os.environ, APPIMAGE_EXTRACT_AND_RUN="1")
-    plain = ROOT / "build/main_perf_plain/sim"
+    plain = args.plain_sim.resolve() if args.plain_sim else ROOT / "build/main_perf_plain/sim"
     stats = ROOT / "build/main_perf_stats/sim"
     monitor = ROOT / "tools/perf_stats/monitors.sv"
     image = ROOT / "cpu2026-tools-x86_64.AppImage"
@@ -47,12 +49,13 @@ def main():
             subprocess.run(command, env=dict(env, **(extra_env or {})),
                            stdout=f, stderr=subprocess.STDOUT, check=True)
 
-    report = json.loads((ROOT / "build/synth/opt/report.json").read_text())
+    report = json.loads(args.reference_report.resolve().read_text())
     for source in report["inputs"]:
         assert digest(Path(source["path"])) == source["sha256"], source["path"]
     if not args.skip_build:
-        print("Building plain and instrumented simulators", flush=True)
-        run(["make", "build", "BUILD=build/main_perf_plain", "JOBS=4"], out / "build-plain.log")
+        print("Building requested simulators", flush=True)
+        if not args.plain_sim:
+            run(["make", "build", "BUILD=build/main_perf_plain", "JOBS=4"], out / "build-plain.log")
         run(["make", "build", "BUILD=build/main_perf_stats", "JOBS=4", "VERILATOR=" + str(wrapper)], out / "build-stats.log")
     assert plain.is_file() and stats.is_file()
     shutil.copy2(plain, out / "sim-plain")
@@ -97,6 +100,10 @@ def main():
         assert required <= counters.keys(), counters.keys()
         assert len({x["cycles"] for x in counters.values()}) == 1
         assert counters["ROB"]["cycles"] == cycles[0]
+        if "ADMISSION" in counters:
+            admission = counters["ADMISSION"]
+            assert sum(admission[k] for k in ("gated", "empty", "single", "pair", "no_tag")) == admission["one_slot"]
+            assert admission["accepted"] <= admission["one_slot"]
         iq, ls, rb, lq = [counters[k] for k in ("IQ_EXTRA", "LSU_EXTRA", "ROB_EXTRA", "LSQ")]
         assert sum(iq[k] for k in ("empty", "wait_sources", "cancel_no_offer", "other_no_offer", "offered")) == iq["cycles"]
         assert sum(ls[k] for k in ("pending_squash", "executed", "blocked", "credits", "mem_wait", "result_wait", "other_wait", "pending_no_r")) == ls["pending"]
@@ -115,7 +122,7 @@ def main():
         print(f"{case}: answers/cycles identical, cycles={cycles[0]}, IPC={row['ipc']:.6f}", flush=True)
 
     result = dict(head=subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
-                  source_inputs=report["inputs"], monitor_sha256=digest(monitor),
+                  source_inputs=report["inputs"], reference_report=str(args.reference_report.resolve()), monitor_sha256=digest(monitor),
                   simulators={"plain": digest(plain), "stats": digest(stats)},
                   max_cycles=50000000, latency=10, width=2, benchmarks=rows,
                   ipc_geomean=math.exp(sum(math.log(x["ipc"]) for x in rows) / len(rows)))
