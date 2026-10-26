@@ -530,6 +530,13 @@ module lsu #(
     end else begin
       store_complete_valid_q <= 1'b0;
 
+      // Retired slots no longer own their old age/discard metadata. A new
+      // enqueue below takes priority if head and tail happen to coincide.
+      if (md_resp_fire)
+        md_valid[md_head] <= 1'b0;
+      if (rq_pop)
+        rq_valid[rq_head] <= 1'b0;
+
       // ---- load issue：入元数据队列 --------------------------------------
       if (load_issue && !r_illegal && !ld_fwd) begin
         md_valid[md_tail]         <= 1'b1;
@@ -574,9 +581,12 @@ module lsu #(
       // ---- squash：标记年轻条目 ------------------------------------------
       if (squash_valid) begin
         for (i = 0; i < LDQ_DEPTH; i = i + 1) begin
-          if (md_valid[i] && (md_seq[i*32 +: 32] > squash_seq))
+          if (md_valid[i] &&
+              !(load_issue && !r_illegal && !ld_fwd && md_tail == MDW'(i)) &&
+              (md_seq[i*32 +: 32] > squash_seq))
             md_discard[i] <= 1'b1;
-          if (rq_valid[i] && (rq_seq[i*32 +: 32] > squash_seq))
+          if (rq_valid[i] && !(rq_push && rq_tail == MDW'(i)) &&
+              (rq_seq[i*32 +: 32] > squash_seq))
             rq_discard[i] <= 1'b1;
         end
       end
