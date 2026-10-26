@@ -22,6 +22,9 @@
 #ifndef TB_READ_CACHE
 #define TB_READ_CACHE 0
 #endif
+#ifndef TB_CACHE_ENQUEUE_BYPASS
+#define TB_CACHE_ENQUEUE_BYPASS 0
+#endif
 #ifndef TB_DCACHE_INDEX_BITS
 #define TB_DCACHE_INDEX_BITS 3
 #endif
@@ -509,6 +512,20 @@ void run_read_cache(Harness& h) {
         h.expect(h.issue(u,addr,value),"cache store issue");
         h.commit(1,true,false);h.expect(h.wait_idle("cache store drains"),"cache store memory completion");
     };
+
+#if TB_CACHE_ENQUEUE_BYPASS
+    h.reset();h.write_word(a,7,15);h.auto_respond=false;
+    h.expect(h.alloc(0,1,false),"early query load allocate");
+    h.expect(h.issue(load_uop(0,10),a,0),"early query load enqueue");
+    h.tick();h.expect(h.accepted_loads.empty(),"early query preserves snapshot edge");
+    h.tick();h.expect(h.accepted_loads.size()==1,"idle query captures enqueue without LP wait");
+    h.auto_respond=true;h.dut->load_result_ready=1;wait_results(1);
+    if(!h.results.empty()) {
+        h.expect(h.results.front()==std::make_pair(10u,7u),"early query tagged response");
+        h.results.pop_front();
+    }
+    h.commit(0,false,true);h.expect(h.wait_idle("early query idle"),"early query owner released");
+#endif
 
     h.reset();h.write_word(a,0x80ff81feu,15);
     h.expect(read(a,0x80ff81feu)==1,"cold cache sends one memory request");

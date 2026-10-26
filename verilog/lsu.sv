@@ -514,7 +514,7 @@ module lsu #(
         r_illegal <= q_illegal;
       end
       if (q_accept) begin
-        q_valid <= lp_select_valid;
+        q_valid <= lp_select_valid || (`CPU_DCACHE_ENABLE && load_enqueue);
         if (lp_select_valid) begin
           q_id <= lp_select_id;
           q_addr <= lp_addr[lp_select_id*32 +: 32];
@@ -523,6 +523,16 @@ module lsu #(
           q_size <= lp_size[lp_select_id*2 +: 2];
           q_unsigned <= lp_unsigned[lp_select_id];
           q_illegal <= lp_illegal[lp_select_id];
+        end else if (`CPU_DCACHE_ENABLE && load_enqueue) begin
+          // An idle query slot can capture a newly enqueued load directly.
+          // Its LP owner remains valid; q/r exclusion prevents reselection.
+          q_id <= issue_lsq;
+          q_addr <= issue_addr;
+          q_seq <= issue_seq;
+          q_tag <= issue_dest;
+          q_size <= issue_mem_size;
+          q_unsigned <= issue_mem_unsigned;
+          q_illegal <= issue_illegal;
         end
       end
     end
