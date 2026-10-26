@@ -84,6 +84,31 @@ module student_top (
   logic [3:0]  st_req_wstrb;
   logic        st_req_ready;
   logic        st_resp_valid;
+  logic        ms_st_valid, ms_st_ready;
+
+  generate if (`CPU_LINE_CACHE_ENABLE) begin : gen_line_cache
+    logic cache_store_ready;
+    assign ms_st_valid = st_req_valid && cache_store_ready;
+    assign st_req_ready = ms_st_ready && cache_store_ready;
+    load_line_cache #(.INDEX_BITS(`CPU_LINE_CACHE_INDEX_BITS)) u_cache (
+      .clk(clock), .reset(reset),
+      .req_valid(ld_req_valid), .req_addr(ld_req_addr), .req_ready(ld_req_ready),
+      .resp_valid(ld_resp_valid), .resp_data(ld_resp_rdata),
+      .mem_valid(dl_req_valid), .mem_addr(dl_req_addr), .mem_ready(dl_req_ready),
+      .mem_resp_valid(dl_resp_valid), .mem_resp_data(dl_resp_rdata),
+      .store_fire(st_req_valid && st_req_ready), .store_addr(st_req_addr),
+      .store_data(st_req_wdata), .store_mask(st_req_wstrb),
+      .store_ready(cache_store_ready), .store_resp_valid(st_resp_valid)
+    );
+  end else begin : gen_no_line_cache
+    assign dl_req_valid = ld_req_valid;
+    assign dl_req_addr = ld_req_addr;
+    assign ld_req_ready = dl_req_ready;
+    assign ld_resp_valid = dl_resp_valid;
+    assign ld_resp_rdata = dl_resp_rdata;
+    assign ms_st_valid = st_req_valid;
+    assign st_req_ready = ms_st_ready;
+  end endgenerate
 
   core_ooo u_core (
     .clk               (clock),
@@ -142,16 +167,16 @@ module student_top (
     .if2_req_addr    (if_refill_addr1),
     .if2_resp_valid  (if_refill_resp_valid1),
     .if2_resp_rdata  (if_refill_rdata1),
-    .ld_req_valid    (ld_req_valid),
-    .ld_req_addr     (ld_req_addr),
-    .ld_req_ready    (ld_req_ready),
-    .ld_resp_valid   (ld_resp_valid),
-    .ld_resp_rdata   (ld_resp_rdata),
-    .st_req_valid    (st_req_valid),
+    .ld_req_valid    (dl_req_valid),
+    .ld_req_addr     (dl_req_addr),
+    .ld_req_ready    (dl_req_ready),
+    .ld_resp_valid   (dl_resp_valid),
+    .ld_resp_rdata   (dl_resp_rdata),
+    .st_req_valid    (ms_st_valid),
     .st_req_addr     (st_req_addr),
     .st_req_wdata    (st_req_wdata),
     .st_req_wstrb    (st_req_wstrb),
-    .st_req_ready    (st_req_ready),
+    .st_req_ready    (ms_st_ready),
     .st_resp_valid   (st_resp_valid),
     .data_req_valid  (1'b0),
     .data_req_we     (1'b0),

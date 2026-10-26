@@ -639,7 +639,7 @@ module lsu #(
   // Hits are local LSU results after the LSQ snapshot, never responses on the
   // untagged in-order memory interface. Stores remain write-through/drained.
   // Default disabled; experiments explicitly select a small generated config.
-  generate if (`CPU_DCACHE_ENABLE) begin : gen_read_cache
+  generate if (`CPU_DCACHE_ENABLE && !`CPU_LINE_CACHE_ENABLE) begin : gen_read_cache
     localparam integer CB = `CPU_DCACHE_INDEX_BITS;
     localparam integer CW = `CPU_DCACHE_WAYS;
     localparam integer CS = 1 << CB;
