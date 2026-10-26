@@ -22,7 +22,7 @@ module perf_tag_pressure #(parameter CW=7, parameter NW=2)(
   end
   final $fdisplay(32'h80000002,"[STATS] TAG_PRESSURE cycles=%0d accepted=%0d tag_wait=%0d zero_stall=%0d one_stall=%0d free_one=%0d",cycles,accepted,tag_wait,zero_stall,one_stall,free_one);
 endmodule
-bind rename perf_tag_pressure #(.CW(FCW),.NW($clog2(W+1))) perf_tag_pressure_monitor(
+bind rename perf_tag_pressure #(.CW(FCW),.NW(FCW)) perf_tag_pressure_monitor(
   .clk(clk),.reset(reset),.recover_valid(recover_valid),.out_ready(out_ready),
   .in_ready(in_ready),.free_count(free_count),.n_valid(n_valid)
 );

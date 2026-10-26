@@ -1,5 +1,17 @@
 # RISC-V CPU 2026 — 协作者交接（P2 功能完成，性能优化中）
 
+## 最新：派发接收已修复，PRF64继续保留（2026-10-26）
+
+生产源码faa8c87，当前分支feat/ipc-lsu-read-cache；默认cacheoff，main仍f4a0555。
+PRF64/W2 .668276，W1 .590333，diag23875.147µm²/375.37MHz；较ba7f吞吐+2.644%、面积效率−1.533%。
+PRF56两档19/19且hanoi恢复正常，但面积仅省99.844、F降367.29MHz，不采用。
+64四组各19/19、56复用同源默认两档，run_allALLPASS；plain/stats一致、24输入/7库/约束/实际存储尺寸核验。
+PRF52仅W2 .661974/19项PASS，无PPA；PRF48 statement_test失败（18/19），首控制流分歧在0xD4附近，尚未修复。
+32B缓存三smoke+六perf .659243，无完整19项/PPA；作为未来压缓存面积的候选，不升级。
+用户新规则：绝不并行综合，所有diagnose/opt持/tmp/riscv_cpu_synthesis.lock；其他任务可并行且监控内存。
+两次有效diag都已给用户三方表；无opt/合main/推送。详见experiments/admission-prf-hour.md。以下为历史状态。
+
+
 ## 最新状态：缓存候选已测，发现派发握手缺陷（2026-10-26）
 
 当前feat/ipc-lsu-read-cache，生产源码521fcc7。ROB32/PRF64/IQ8/LSQ16+D$64B：
