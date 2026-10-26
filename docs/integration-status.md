@@ -1,5 +1,22 @@
 # 集成状态（P1 完成，P2 进入性能优化）
 
+## 当前候选正式opt已完成：417.62MHz /22,315.19µm²（2026-10-26）
+
+生产04eee15，测量HEAD76e4f73；W2/ROB32/PRF64/IQ8/CDB2/LSQ16/D$32B。
+候选W2/W1 IPC .659404085311/.584500492456，opt22315.189220µm²/417.618271MHz。
+当前main f4a0555：W2 IPC .522108164153，opt19808.712260µm²/456.124722MHz。
+opt对opt较main：IPC+26.296%、面积+12.653%、频率−8.442%、IPC×频率+15.634%、单位面积吞吐+2.646%。
+候选diag→opt：面积−4.837%、频率+8.238%。性能分支保留，尚不自动合main；正式成绩仍未达到阶段2门槛。
+本轮用户只授权一次opt，15:57:12启动，耗时626.59秒，完成后已即时给同模式对比表。
+候选24生产输入与diag/七组正确性/完整单测逐hash一致，复用其验证结果；本轮不改RTL、不重复回归。
+main24归档源码已与git show当前main和快照逐项核验；7库/工具/SDC/ABC及六perf输入/答案/指令数匹配。
+实际综合容量32/64/8/16、缓存8word核验；归档build/synth/cache32_zero_opt_checkpoint/含verification/comparison/performance-comparability等JSON。
+综合全程持/tmp/riscv_cpu_synthesis.lock，内存保护未触发：最低MemAvailable3.552GiB、最低SwapFree3.499GiB。
+所有本轮后台任务已完成；默认配置及main不改，没有合并或推送，没有第二次综合。
+后续若优化时序，应重新定位opt扁平网表的_426523_/QN→_432976_/D（D端2.339ns），不直接沿用diag的层级关键链。
+详见docs/experiments/cache32-opt.md与docs/perf-log.md；Git自主授权持续，官方Makefile/config.mk/scripts/filelist/SRAM未改。
+以下为前置完成检查点。
+
 ## 当前候选：32B缓存＋x0组内旁路修复（2026-10-26，已完成核验）
 
 生产源码04eee15，当前分支feat/ipc-lsu-read-cache；默认cacheoff，main仍f4a0555。
