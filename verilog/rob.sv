@@ -15,7 +15,8 @@
 
 module rob #(
   parameter integer W     = `CPU_ISSUE_WIDTH,
-  parameter integer DEPTH = `CPU_ROB_DEPTH
+  parameter integer DEPTH = `CPU_ROB_DEPTH,
+  parameter integer BRANCH_PC_FROM_UPDATE = 0
 ) (
   input  logic        clk,
   input  logic        reset,
@@ -162,7 +163,7 @@ module rob #(
     br_idx = '0;
     br_pred_taken_c = 1'b0;
     br_pred_target_c = '0;
-    br_pc_c = '0;
+    br_pc_c = (BRANCH_PC_FROM_UPDATE != 0) ? br_update_pc : '0;
     br_uncond_c = 1'b0;
     // Fixed physical slots; the one-hot winner is the youngest matching
     // control uop, including duplicate-tag interface cases across wrap.
@@ -170,7 +171,8 @@ module rob #(
       br_idx = br_idx | (RW'(i_br) & {RW{br_pick[i_br]}});
       br_pred_taken_c = br_pred_taken_c | (entry_pred_taken[i_br] && br_pick[i_br]);
       br_pred_target_c = br_pred_target_c | (entry_pred_tgt[i_br] & {32{br_pick[i_br]}});
-      br_pc_c = br_pc_c | (entry_pc[i_br] & {32{br_pick[i_br]}});
+      if (BRANCH_PC_FROM_UPDATE == 0)
+        br_pc_c = br_pc_c | (entry_pc[i_br] & {32{br_pick[i_br]}});
       br_uncond_c = br_uncond_c | (entry_uncond[i_br] && br_pick[i_br]);
     end
     br_found = |br_match;
@@ -531,6 +533,17 @@ module rob #(
       end
     end
   end
+
+`ifndef SYNTHESIS
+  // The integrated backend supplies the PC of this same resolved uop.
+  // Keep the stored copy observable for simulation/trace and validate that
+  // opting into the narrower production path never changes redirection.
+  always_ff @(posedge clk) begin
+    if (!reset && BRANCH_PC_FROM_UPDATE && br_update_valid && br_found &&
+        br_update_pc != entry_pc[br_idx])
+      $fatal(1, "ROB branch update PC mismatch: update=%08x stored=%08x", br_update_pc, entry_pc[br_idx]);
+  end
+`endif
 
 `ifdef LOCAL_TRACE
   always_ff @(posedge clk) begin

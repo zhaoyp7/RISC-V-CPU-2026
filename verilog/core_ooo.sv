@@ -198,7 +198,7 @@ module core_ooo #(
   );
 
   // ---- ROB ----------------------------------------------------------------
-  rob #(.W(W)) u_rob (
+  rob #(.W(W), .BRANCH_PC_FROM_UPDATE(1)) u_rob (
     .clk                (clk),
     .reset              (reset),
     .in_valid           (ren_fire),

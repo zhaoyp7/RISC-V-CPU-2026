@@ -23,6 +23,9 @@
 #ifndef TB_W
 #define TB_W 1
 #endif
+#ifndef TB_BRANCH_PC_FROM_UPDATE
+#define TB_BRANCH_PC_FROM_UPDATE 0
+#endif
 
 namespace {
 
@@ -383,6 +386,16 @@ struct Harness {
         dut->complete_exception = ce;
         dut->br_update_valid = in.br_valid;
         dut->br_update_pc = in.br_pc;
+#if TB_BRANCH_PC_FROM_UPDATE
+        // This mode models the executing instruction supplying its own PC.
+        // Keep the independent ordered-queue reference unchanged.
+        for (auto it = ref.q.rbegin(); it != ref.q.rend(); ++it) {
+            if (it->control && it->dest == in.br_tag) {
+                dut->br_update_pc = it->pc;
+                break;
+            }
+        }
+#endif
         dut->br_update_taken = in.br_taken;
         dut->br_update_target = in.br_target;
         dut->br_update_is_jalr = in.br_jalr;

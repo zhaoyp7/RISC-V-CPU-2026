@@ -75,6 +75,8 @@ run "rename W=2" env RENAME_W=2 sh test/rename_test/run.sh $quick --seed "$seed"
 run "rename constant x0 sources W1/W2" sh test/rename_zero_test/run.sh
 run "rob W=1" env ROB_W=1 sh test/rob_test/run.sh $quick --seed "$seed"
 run "rob W=2" env ROB_W=2 sh test/rob_test/run.sh $quick --seed "$seed"
+run "rob update PC W=1" env ROB_W=1 ROB_UPDATE_PC=1 sh test/rob_test/run.sh $quick --seed "$seed"
+run "rob update PC W=2" env ROB_W=2 ROB_UPDATE_PC=1 sh test/rob_test/run.sh $quick --seed "$seed"
 run "frontend W=1" env FRONTEND_W=1 sh test/frontend_test/run.sh
 run "frontend W=2" env FRONTEND_W=2 sh test/frontend_test/run.sh
 run "BPU training / frontend response queues W1/W2" sh test/bpu_training_test/run.sh

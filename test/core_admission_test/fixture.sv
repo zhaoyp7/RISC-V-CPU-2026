@@ -93,7 +93,8 @@ endmodule
 
 module rob #(
   parameter integer W     = `CPU_ISSUE_WIDTH,
-  parameter integer DEPTH = `CPU_ROB_DEPTH
+  parameter integer DEPTH = `CPU_ROB_DEPTH,
+  parameter integer BRANCH_PC_FROM_UPDATE = 0
 ) (
   input  logic        clk,
   input  logic        reset,
