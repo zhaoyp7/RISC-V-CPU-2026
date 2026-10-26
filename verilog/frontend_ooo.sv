@@ -123,21 +123,24 @@ module frontend_ooo #(
 
   // 每路独立两槽响应队列：cache ready 只依赖寄存占用，消除跨 bank 响应依赖。
   logic [1:0] cache_resp_valid, cache_resp_ready, resp_push, resp_pop;
+  logic [1:0] resp_bypass, resp_pop_queue;
   logic [31:0] cache_resp_pc [0:1], cache_resp_inst [0:1];
   logic [1:0] resp_head, resp_tail;
   logic [1:0] resp_count [0:1];
   logic [63:0] resp_pc_q [0:1], resp_inst_q [0:1];
   assign resp_pop = {resp_accept1, resp_accept0};
-  assign resp0_valid = (resp_count[0] != 0);
-  assign resp1_valid = (resp_count[1] != 0);
-  assign resp0_pc = resp_pc_q[0][resp_head[0]*32 +: 32];
-  assign resp1_pc = resp_pc_q[1][resp_head[1]*32 +: 32];
-  assign resp0_inst = resp_inst_q[0][resp_head[0]*32 +: 32];
-  assign resp1_inst = resp_inst_q[1][resp_head[1]*32 +: 32];
+  assign resp0_valid = (resp_count[0] != 0) || cache_resp_valid[0];
+  assign resp1_valid = (resp_count[1] != 0) || cache_resp_valid[1];
+  assign resp0_pc = (resp_count[0] != 0) ? resp_pc_q[0][resp_head[0]*32 +: 32] : cache_resp_pc[0];
+  assign resp1_pc = (resp_count[1] != 0) ? resp_pc_q[1][resp_head[1]*32 +: 32] : cache_resp_pc[1];
+  assign resp0_inst = (resp_count[0] != 0) ? resp_inst_q[0][resp_head[0]*32 +: 32] : cache_resp_inst[0];
+  assign resp1_inst = (resp_count[1] != 0) ? resp_inst_q[1][resp_head[1]*32 +: 32] : cache_resp_inst[1];
   generate
     for (genvar bank = 0; bank < 2; bank = bank + 1) begin : gen_resp_queue
       assign cache_resp_ready[bank] = (resp_count[bank] < 2);
-      assign resp_push[bank] = cache_resp_valid[bank] && cache_resp_ready[bank];
+      assign resp_bypass[bank] = (resp_count[bank] == 0) && cache_resp_valid[bank] && resp_pop[bank];
+      assign resp_pop_queue[bank] = resp_pop[bank] && (resp_count[bank] != 0);
+      assign resp_push[bank] = cache_resp_valid[bank] && cache_resp_ready[bank] && !resp_bypass[bank];
       always_ff @(posedge clk) begin
         if (reset || redirect_valid) begin
           resp_head[bank] <= 1'b0;
@@ -149,8 +152,8 @@ module frontend_ooo #(
             resp_inst_q[bank][resp_tail[bank]*32 +: 32] <= cache_resp_inst[bank];
             resp_tail[bank] <= !resp_tail[bank];
           end
-          if (resp_pop[bank]) resp_head[bank] <= !resp_head[bank];
-          resp_count[bank] <= resp_count[bank] + {1'b0,resp_push[bank]} - {1'b0,resp_pop[bank]};
+          if (resp_pop_queue[bank]) resp_head[bank] <= !resp_head[bank];
+          resp_count[bank] <= resp_count[bank] + {1'b0,resp_push[bank]} - {1'b0,resp_pop_queue[bank]};
         end
       end
     end
