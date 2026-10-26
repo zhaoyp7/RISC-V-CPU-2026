@@ -1,5 +1,24 @@
 # 集成状态（P1 完成，P2 进入性能优化）
 
+## 当前候选：32B缓存＋x0组内旁路修复（2026-10-26，已完成核验）
+
+生产源码04eee15，当前分支feat/ipc-lsu-read-cache；默认cacheoff，main仍f4a0555。
+ROB32/PRF64/IQ8/CDB2/LSQ16，D$4set×2way×4B。
+W2/W1 IPC .659404085311/.584500492456；W2 diagnose23449.323680µm²/385.832705MHz。
+较原64B/faa8c87：面积−1.784%、吞吐+1.424%、单位面积吞吐+3.265%；
+较ba7f：吞吐+4.106%、单位面积吞吐+1.683%。保留组合候选与x0修复，仍需继续压面积。
+修复根因：前序写rd0跳转的完成tag不得覆盖后序x0源。旧W2黑盒529checks260fails，新W2零失败，W1 265零失败；完整随机参考200072/200074零失败。
+32B/64B/默认×W1/W2六组新跑各19/19，另ROB32/PRF48/64B W2恢复19/19，IPC .659214801。
+新run_all ALLPASS，普通/统计输入、答案、周期相同、计数守恒；24源码/7库/工具约束及实际容量/PRF存储核验。
+只有32B组合有新PPA；不得把修复后64B/默认/PRF48仿真数据与修复前PPA配成新实测行。
+本轮两次diagnose：原32B .659243/23459.209/383.952；组合修复 .659404/23449.324/385.833，均已即时给当前/前版/ba7f/main表。
+所有综合单实例持/tmp/riscv_cpu_synthesis.lock；第二次内存保护未触发，最低MemAvailable2.854GiB，最低SwapFree3.497GiB。
+归档build/synth/cache32_admission/和cache32_zero_fix/；docs/perf-log仅新增同时实测IPC/PPA的两行。
+所有本轮后台任务已完成；无opt/合main/推送。用户Git自主授权持续，官方Makefile/config.mk/scripts/filelist/SRAM均未修改。
+用户询问模板302f0cf：它已在HEAD祖先链，主要加入ABC驱动/负载约束，启用buffer与cell sizing；本轮沿用默认值，不改工具口径。
+下一方向按当前ROB→LSU→CDB→rename准入控制链与ROB/LSQ面积继续分析；不要盲目再缩PRF或只扫缓存容量。
+以下为前置历史记录。
+
 ## 最新：派发接收已修复，PRF64继续保留（2026-10-26）
 
 生产源码faa8c87，当前分支feat/ipc-lsu-read-cache；默认cacheoff，main仍f4a0555。
