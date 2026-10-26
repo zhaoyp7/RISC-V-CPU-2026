@@ -345,6 +345,60 @@ struct Harness {
     }
 };
 
+// A reused slot belongs to its new payload, even when enqueue and squash
+// coincide. Check both the result FIFO and request-metadata FIFO externally.
+void run_reused_slot_squash(Harness& h) {
+    h.reset();
+    h.write_word(0x1800, 0x12345678, 15);
+    h.auto_respond = false;
+    h.expect(h.alloc(0, 1, false), "reuse older load alloc");
+    Uop older; older.dest=10; older.is_load=1; older.lsq=0; older.rob=1;
+    h.expect(h.issue(older, 0x1800, 0), "reuse older load issue");
+    for (int n=0; n<16 && h.ld_pending.empty(); ++n) h.tick();
+    h.expect(h.ld_pending.size()==1, "reuse older response pending");
+    h.seq_base=100;
+    for (int n=0; n<8; ++n) {
+        h.expect(h.alloc(1, 2, false), "reuse younger local alloc");
+        Uop u; u.dest=20; u.is_load=1; u.lsq=1; u.rob=2; u.illegal=1;
+        h.expect(h.issue(u, 0x1900, 0), "reuse younger local issue");
+        h.dut->load_result_ready=1;
+        for (int i=0; i<32 && int(h.results.size())<n+1; ++i) h.tick();
+        h.expect(int(h.results.size())==n+1, "reuse younger local result");
+        h.commit(1, false, true);
+    }
+    h.results.clear(); h.clear_inputs(); h.auto_respond=true;
+    h.dut->squash_valid=1; h.dut->squash_seq=1; h.tick();
+    h.expect(h.ld_pending.empty(), "reuse older response consumed on squash");
+    h.dut->squash_valid=0; h.dut->load_result_ready=1;
+    for (int n=0; n<16; ++n) h.tick();
+    h.expect(h.results.size()==1 && h.results.front()==std::make_pair(10u,0x12345678u),
+             "result slot reuse preserves older payload on squash");
+
+    h.reset(); h.write_word(0x1800, 0x12345678, 15);
+    h.expect(h.alloc(0, 1, false), "metadata older reserved alloc");
+    h.seq_base=100;
+    for (int n=0; n<8; ++n) {
+        h.expect(h.alloc(1, 2, false), "metadata younger alloc");
+        Uop u; u.dest=20; u.is_load=1; u.lsq=1; u.rob=2;
+        h.expect(h.issue(u, 0x1900, 0), "metadata younger issue");
+        h.dut->load_result_ready=1;
+        for (int i=0; i<32 && int(h.results.size())<n+1; ++i) h.tick();
+        h.expect(int(h.results.size())==n+1, "metadata younger result");
+        h.commit(1, false, true);
+    }
+    h.results.clear(); h.load_ready=false;
+    h.expect(h.issue(older, 0x1800, 0), "metadata older issue after younger loads");
+    for (int n=0; n<16 && !h.dut->ld_req_valid; ++n) h.tick();
+    h.expect(h.dut->ld_req_valid, "metadata older request waits for memory");
+    h.clear_inputs(); h.load_ready=true;
+    h.dut->squash_valid=1; h.dut->squash_seq=1; h.tick();
+    h.expect(h.accepted_loads.size()==9, "metadata older request accepted on squash");
+    h.dut->squash_valid=0; h.dut->load_result_ready=1;
+    for (int n=0; n<16; ++n) h.tick();
+    h.expect(h.results.size()==1 && h.results.front()==std::make_pair(10u,0x12345678u),
+             "metadata slot reuse preserves older request on squash");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -354,6 +408,8 @@ int main(int argc, char** argv) {
     Vlsu dut{&context};
     Harness h;
     h.dut = &dut;
+    h.reset();
+    run_reused_slot_squash(h);
     h.reset();
 
     // ---- store: complete at issue, write only after commit ----------------

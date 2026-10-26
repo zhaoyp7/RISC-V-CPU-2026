@@ -309,8 +309,9 @@ struct Harness {
 
             for (int j = 0; j < l; ++j) {
                 if (!in.u[j].valid || !in.u[j].reg_we) continue;
-                if (in.u[j].rd == u.rs1) { x.src1 = dest[j]; x.src1_ready = false; }
-                if (in.u[j].rd == u.rs2) { x.src2 = dest[j]; x.src2_ready = false; }
+                // x0 is an architectural constant, including intra-bundle RAW.
+                if (u.rs1 != 0 && in.u[j].rd == u.rs1) { x.src1 = dest[j]; x.src1_ready = false; }
+                if (u.rs2 != 0 && in.u[j].rd == u.rs2) { x.src2 = dest[j]; x.src2_ready = false; }
                 if (in.u[j].rd == u.rd)  { x.old_tag = dest[j]; }
             }
 

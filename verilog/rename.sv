@@ -210,11 +210,13 @@ module rename #(
       // 旧映射也指向该前序 lane 的 dest。
       for (j_src = 0; j_src < W; j_src = j_src + 1) begin
         if ((j_src < i_src) && in_valid[j_src] && u_reg_we[j_src] &&
+            (u_rs1[i_src] != 5'd0) &&
             (u_rd[j_src] == u_rs1[i_src])) begin
           src1_tag[i_src] = dest_tag[j_src];
           src1_rdy[i_src] = 1'b0;
         end
         if ((j_src < i_src) && in_valid[j_src] && u_reg_we[j_src] &&
+            (u_rs2[i_src] != 5'd0) &&
             (u_rd[j_src] == u_rs2[i_src])) begin
           src2_tag[i_src] = dest_tag[j_src];
           src2_rdy[i_src] = 1'b0;
