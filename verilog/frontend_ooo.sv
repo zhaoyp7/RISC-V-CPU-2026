@@ -186,7 +186,9 @@ module frontend_ooo #(
   // 响应入队只看寄存空闲容量，不等待当拍rename出队或backend接收。
   assign fq_space_resp  = (fq_count + 2 <= FDEPTH);
 
-  assign fetch_fire = backend_ready && !redirect_valid && fq_space_fetch &&
+  // Existing request/cache credits bound prefetch while dispatch is stalled.
+  // Rename and ROB acceptance still control the actual decoded-uop pop.
+  assign fetch_fire = !redirect_valid && fq_space_fetch &&
                       fetch_ready0 && (!use2 || fetch_ready1);
   assign resp_accept0 = resp0_valid && (rq_count != 0) && fq_space_resp &&
                         !redirect_valid &&

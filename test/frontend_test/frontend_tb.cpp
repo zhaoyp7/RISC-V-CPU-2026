@@ -172,9 +172,14 @@ bool test_straight() {
     setup_straight();
     h.reset();
 
-    // 反压一段时间，确认之后能恢复
+    // Hold long enough for speculative request/response buffers to fill.
+    // No instruction may commit until the backend accepts work again.
     dut.force_stall = 1;
-    for (int i = 0; i < 10; ++i) h.tick();
+    for (int i = 0; i < 128; ++i) {
+        if (dut.commit_valid)
+            h.report("commit during initial backpressure", dut.commit_valid, 0);
+        h.tick();
+    }
     dut.force_stall = 0;
 
     int got = 0;
