@@ -1,7 +1,6 @@
 # Dispatch without rename acceptance under PRF pressure
 
-Status: acceptance gate corrected; W1/W2 directed tests pass, real PRF56 hanoi
-passes. Full regression and timing validation are in progress.
+Status: acceptance gate corrected and verified for the stated PRF64/56 configurations. W1/W2 directed and full-core regressions pass. Timing/statistics are verified; see admission-prf-hour.md. PRF48/ROB32 has a separate unresolved statement_test failure.
 
 With 521fcc7, ROB32/PRF56/LSQ16 and the 64B cache, qsort passes but hanoi
 times out at the official 50,000,000-cycle limit. A 100,000-cycle diagnostic
@@ -41,7 +40,7 @@ The correction is:
 rename, ROB and backend acceptance. The old W1/W2 tests each fail six of 72
 checks; the corrected versions each pass all 72. PRF56 W2 hanoi passes at 8863
 cycles. Full default/ROB32 W1/W2 and PRF56 correctness/perf, statistics and
-diagnose are running in independent archives under cache_admission_fix_64/56.
+diagnose completed in independent archives under cache_admission_fix_64/56.
 
 The corrected test is now included in `test/run_all.sh`. The earlier timed
 session retained a failing reproducer; the renewed one-hour authorization
