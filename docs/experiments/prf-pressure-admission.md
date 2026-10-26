@@ -1,6 +1,7 @@
 # Dispatch without rename acceptance under PRF pressure
 
-Status: reproduced; production RTL is not fixed yet.
+Status: acceptance gate corrected; W1/W2 directed tests pass, real PRF56 hanoi
+passes. Full regression and timing validation are in progress.
 
 With 521fcc7, ROB32/PRF56/LSQ16 and the 64B cache, qsort passes but hanoi
 times out at the official 50,000,000-cycle limit. A 100,000-cycle diagnostic
@@ -29,7 +30,7 @@ false and the other two ready signals true, the current RTL wrongly sends
 both lanes. The W2 test produces 72 checks and 6 failures; the failure log is
 preserved under `build/prf_admission_diagnosis/`.
 
-The proposed correction is:
+The correction is:
 
 ```diff
 -  assign ren_fire  = ren_valid & {W{ren_ready}};
@@ -37,13 +38,12 @@ The proposed correction is:
 ```
 
 `rename_ready` already includes `ren_ready`, so this coordinates frontend,
-rename, ROB and backend acceptance. This correction has not been applied or
-tested. Before accepting it, run the directed test in W1/W2, full default and
-ROB32 correctness/perf, the PRF56 hanoi reproducer and complete regression,
-then remeasure timing because the free-tag qualification enters dispatch.
+rename, ROB and backend acceptance. The old W1/W2 tests each fail six of 72
+checks; the corrected versions each pass all 72. PRF56 W2 hanoi passes at 8863
+cycles. Full default/ROB32 W1/W2 and PRF56 correctness/perf, statistics and
+diagnose are running in independent archives under cache_admission_fix_64/56.
 
-The pending test is intentionally excluded from `test/run_all.sh`; the earlier
-ALL PASS result describes the suite before this newly reproduced defect, not
-a claim that this new test passes. No PRF56 IPC geomean or PPA is reported.
-The user deadline expired during an execution gap before the correction could
-be implemented, so the reproducer and precise handoff are retained.
+The corrected test is now included in `test/run_all.sh`. The earlier timed
+session retained a failing reproducer; the renewed one-hour authorization
+carries out the fix and all required validation. PRF56 data is attributed only
+to new fixed-source measurements, never to the earlier failed configuration.

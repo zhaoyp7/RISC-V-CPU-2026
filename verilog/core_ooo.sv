@@ -247,7 +247,9 @@ module core_ooo #(
   );
 
   assign ren_ready = rob_in_ready && backend_ready;
-  assign ren_fire  = ren_valid & {W{ren_ready}};
+  // Rename holds valid under backpressure; downstream acceptance must also
+  // include successful tag allocation and recovery qualification.
+  assign ren_fire  = ren_valid & {W{rename_ready}};
   assign cm_valid  = rob_cm_valid;
 
   // ---- dispatch / commit / squash 打包 ------------------------------------
