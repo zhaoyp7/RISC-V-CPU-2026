@@ -26,3 +26,16 @@ Core correctness/perf, full units, statistics and diagnose are running under
 `build/synth/lsu_cache_query_stage_64b/`. Independent PRF56 and LSQ8 parameter
 probes use `build/cache_query_window_probes_20261026/`; they have no PPA until
 separately synthesized and verified. Default capacities remain unchanged.
+
+## Verified result
+
+521fcc7: W2/W1 IPC 0.668275932/0.590333035; diagnose 23875.147160µm²/375.917768MHz.
+Against ba7f0a3: W2 IPC +7.574%, frequency -4.442%, area +4.242%, IPC×frequency +2.795%, throughput/area -1.388%.
+Against 41b206e, W2 IPC improves 2.141% and frequency decreases slightly. The one pending-table cycle is a measured IPC improvement.
+Four configurations each19/19; default cache-off correctness/perf cycles unchanged. Full run_all ALL PASS. Six ordinary/statistics inputs, outputs, cycles and accounting agree.
+24 production input hashes, seven libraries, tools/constraints, elaboration and five simulator dimensions verified. One diagnose 12.12min, no opt.
+Critical path remains ROB→frontend I-cache, D2.604ns. Retain an independent IPC candidate; area efficiency remains below ba7f0a3, so do not upgrade defaults or main.
+
+Parameter probes: LSQ8 W2/W1 IPC0.588446/0.534335 (both19/19), down11.95% from this LSQ16 configuration; no PPA was run. PRF56 passed qsort but hanoi timed out at the official50,000,000-cycle limit. Its dispatch/rename acceptance defect is reproduced and documented separately; no PRF56 PPA or complete-correctness claim.
+
+Execution continuity: the renewed user goal ended at11:30CST. The clock advanced from11:07 to12:36 between tool checks, indicating a substantial execution gap whose platform cause is not confirmed. New optimization stopped on observing the expired deadline; only result recording and handoff followed. Continuous execution through11:30 was not achieved.

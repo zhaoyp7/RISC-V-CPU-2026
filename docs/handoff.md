@@ -1,5 +1,19 @@
 # RISC-V CPU 2026 — 协作者交接（P2 功能完成，性能优化中）
 
+## 最新状态：缓存候选已测，发现派发握手缺陷（2026-10-26）
+
+当前feat/ipc-lsu-read-cache，生产源码521fcc7。ROB32/PRF64/IQ8/LSQ16+D$64B：
+W2/W1 IPC .668276/.590333，diagnose23875.147µm²/375.92MHz。
+较ba7f0a3 IPC+7.574%、F−4.442%、面积+4.242%、吞吐+2.795%、单位面积吞吐−1.388%。
+四组各19/19，run_allALLPASS，普通/统计输入答案周期一致，24源码/7库/约束/尺寸核验。仅保留独立候选，默认cacheoff，main仍f4a0555。
+LSQ8 W2 .588446（19/19），IPC下降11.95%，无PPA；PRF56 hanoi50M超时。
+PRF56暴露core_ooo的ren_fire仅用ren_ready、未限定rename_ready：tag不足时ROB/后端可能接收rename未接受的指令。
+新增test/core_admission_test独立fixture在未改生产RTL上72checks/6fails复现；尚未修复，不计入历史run_all通过结论，也未加入run_all。
+建议下一任务：以rename实际接收资格限定派发，先让该定向测试通过，再重跑默认/ROB32 W1/W2及PRF56完整回归与PPA。不要直接合main。
+新目标11:30未能连续执行：时钟从约11:07跳到12:36；中断原因未确认。发现截止已过后停止追加优化，仅记录交接。无opt/合main/推送。
+详见[查询优化](experiments/cache-query-bypass.md)与[派发接收缺陷](experiments/prf-pressure-admission.md)。以下为历史检查点。
+
+
 ## 最新实验：64B读缓存暂不采用（2026-10-26）
 
 分支feat/ipc-lsu-read-cache，功能37e3b1d；默认缓存关闭，main仍f4a0555。
