@@ -367,6 +367,7 @@ struct Harness {
 };
 
 void run_response_bypass(Harness& h) {
+    constexpr bool bypass = !TB_READ_CACHE;
     auto prepare = [&](int count) {
         h.reset(); h.auto_respond = false;
         for (int i = 0; i < count; ++i) {
@@ -382,8 +383,12 @@ void run_response_bypass(Harness& h) {
 
     prepare(1);
     h.auto_respond=true;h.dut->load_result_ready=1;h.tick();
-    h.expect(h.last_memory_response && h.last_result_fire,
-             "empty result FIFO writes back at memory response edge");
+    h.expect(h.last_memory_response && h.last_result_fire==bypass,
+             "response follows configured direct or registered timing");
+    if(!bypass) {
+        h.tick();
+        h.expect(h.last_result_fire,"registered response writes back on next edge");
+    }
     h.expect(h.results.size()==1 && h.results.front()==std::make_pair(10u,0x12345678u),
              "direct response tag and value");
     for(int n=0;n<5;++n)h.tick();
@@ -419,11 +424,12 @@ void run_response_bypass(Harness& h) {
     prepare(2);
     h.auto_respond=true;h.dut->load_result_ready=1;
     h.dut->squash_valid=1;h.dut->squash_seq=h.seq_of_rob[1];h.tick();
-    h.expect(h.last_memory_response && h.last_result_fire && h.results.size()==1 &&
-             h.results.front().first==10,"older response survives same-cycle squash");
+    h.expect(h.last_memory_response && h.last_result_fire==bypass &&
+             h.results.size()==size_t(bypass),"squash preserves configured response timing");
     h.dut->squash_valid=0;h.tick();
-    h.expect(h.last_memory_response && !h.last_result_fire && h.results.size()==1,
-             "younger response is discarded after squash");
+    h.expect(h.last_memory_response && h.last_result_fire==!bypass &&
+             h.results.size()==1 && h.results.front().first==10,
+             "older response survives while younger response is discarded");
     for(int n=0;n<5;++n)h.tick();
     h.expect(h.results.size()==1,"discarded response never reappears");
 
@@ -459,7 +465,9 @@ void run_response_bypass(Harness& h) {
         h.expect(h.issue(u,0x1900,0),"direct formatted load issue");
         for(int n=0;n<32 && h.ld_pending.empty();++n)h.tick();
         h.auto_respond=true;h.dut->load_result_ready=1;h.tick();
-        h.expect(h.last_memory_response && h.last_result_fire,"formatted response is direct");
+        h.expect(h.last_memory_response && h.last_result_fire==bypass,
+                 "formatted response follows configured latency");
+        if(!bypass)h.tick();
         h.expect(h.results.size()==1 && h.results.front()==std::make_pair(12u,f.expected),
                  "direct byte/half signed and unsigned reference value");
     }

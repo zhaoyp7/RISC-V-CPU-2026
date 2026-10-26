@@ -428,7 +428,11 @@ module lsu #(
   // Empty result FIFO: expose the returning memory value immediately. A
   // stalled CDB still captures it in the reserved FIFO slot at this edge.
   // Existing queued results always retain priority over a new response.
-  assign response_bypass_valid = (rq_count == 0) && md_resp_keep;
+  // The cache configuration uses the registered result FIFO for both hits and
+  // external responses. This keeps cache/store control out of the same-cycle
+  // memory-result path through CDB and PRF; cache-disabled cores retain bypass.
+  assign response_bypass_valid = !`CPU_DCACHE_ENABLE &&
+                                  (rq_count == 0) && md_resp_keep;
   assign response_bypass_fire = response_bypass_valid && load_result_ready;
   assign rq_push = (md_resp_keep && !response_bypass_fire) || load_local_result;
   assign rq_pop  = (rq_count != 0) &&
