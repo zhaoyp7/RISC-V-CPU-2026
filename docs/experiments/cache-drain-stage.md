@@ -32,3 +32,13 @@ validation, units, stats and one diagnose run use
 
 Defaults remain cache-disabled. Official filelist, memory interfaces, Makefile,
 scripts and SRAM models are unchanged. No opt, main merge or push is requested.
+
+## Verified result
+
+41b206e: W2/W1 IPC 0.654268987/0.581953915; diagnose 23813.400860µm²/377.302874MHz.
+Versus ba7f0a3: IPC +5.319%, area +3.973%, frequency -4.090%, throughput +1.011%, throughput/area -2.848%.
+Four configurations 19/19, default cache-off cycles identical; run_all ALL PASS; plain/statistics inputs, outputs, cycles and counter accounting verified.
+24 source inputs, seven libraries, tool/constraints, simulation/synthesis dimensions and the maintenance-register widths verified. One diagnose 12.02min; no opt.
+The critical path moved to ROB→frontend I-cache (D2.594ns), so the targeted store-drain path was removed from first place. The throughput gain remains small and area efficiency is below baseline; retain an experiment, not a default upgrade.
+Capacity-only W2 IPC: 128B 0.664696, 256B 0.671590, each19/19; no PPA for these sizes.
+Next test: let an idle query stage capture a new load at enqueue, avoiding one pending-table cycle while retaining LP ownership and oldest-candidate priority.
