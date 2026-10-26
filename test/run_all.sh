@@ -72,6 +72,7 @@ run "icache index=10" env ICACHE_INDEX_BITS=10 \
     sh test/icache_pipe_test/run.sh $quick --cycles 5000 --seed "$seed"
 run "rename W=1" env RENAME_W=1 sh test/rename_test/run.sh $quick --seed "$seed"
 run "rename W=2" env RENAME_W=2 sh test/rename_test/run.sh $quick --seed "$seed"
+run "rename constant x0 sources W1/W2" sh test/rename_zero_test/run.sh
 run "rob W=1" env ROB_W=1 sh test/rob_test/run.sh $quick --seed "$seed"
 run "rob W=2" env ROB_W=2 sh test/rob_test/run.sh $quick --seed "$seed"
 run "frontend W=1" env FRONTEND_W=1 sh test/frontend_test/run.sh
