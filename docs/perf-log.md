@@ -1,5 +1,13 @@
 # 性能记录
 
+## 缓存配置统一寄存响应（2026-10-26，未采用）
+
+f5df7fa，ROB32+64B：W2/W1 IPC0.643215/0.575488，diagnose23,753.273µm²/353.59MHz。
+较ba7f0a3 IPC+3.540%，频率-10.117%，面积+3.710%，吞吐-6.936%。
+四组19/19、run_allALLPASS、普通/统计输入答案周期相同；24输入/7库/约束/实际尺寸核验，一次diag约11.79分钟。
+关键路径仍LSQ→LSU寄存器；下一步寄存排空维护payload并恢复响应直通。默认不改，无opt/合main/推送。
+归档build/synth/lsu_cache_registered_64b/，详见[寄存响应](experiments/cache-registered-response.md)。
+
 ## 64B非阻塞读缓存（2026-10-26，仅保留实验）
 
 37e3b1d，ROB32/PRF64/IQ8/LSQ16，8set/2way/4B line；默认enable0。
@@ -338,6 +346,7 @@ load/store 放入旧的 a0/a1 缓冲。优先做分析和方案设计，单次�
 | 2026-10-25 | `ipc-load-response-bypass-20261025` | W2/32/64/8/2/16/1KB×2 | 0.6212 | 22,865.599 (diag) | 368.08 (diag) | load响应直通；IPC+2.236%、Fmax-1.905%、IPC×Fmax+0.288%；独立候选 |
 | 2026-10-25 | `freq-rob-branch-match-20261025` | W2/32/64/8/2/16/1KB×2 | 0.6212 | 22,903.492 (diag) | 393.39 (diag) | 固定槽分支查找；IPC不变、Fmax+6.877%、面积+0.166%；小时累计IPC×Fmax+7.185% |
 | 2026-10-26 | `dcache-64b-trial-20261026` | W2/32/64/8/2/16/1KB×2 + D$64B/2way | 0.6541 | 23,800.891 (diag) | 329.47 (diag) | 独立trial；IPC+5.292%、频率−16.248%、吞吐−11.816%；默认关闭，不升级 |
+| 2026-10-26 | `f5df7fa` | W2/32/64/8/2/16/1KB×2 + D$64B/2way | 0.6432 | 23,753.273 (diag) | 353.59 (diag) | 缓存配置寄存MD响应；吞吐较ba7f−6.936%，独立trial不升级 |
 
 P2 基线 opt 综合：comb 16,361.326、seq 5,648.117、SRAM 2,278.903 µm²，
 min period 17.8320 ns（目标 2 ns，WNS −15.8320 ns）。diagnose 为 25,025.438 µm²、

@@ -29,3 +29,14 @@ until those measurements and source/library/configuration checks finish.
 The user renewed continuous-work authorization through 2026-10-26 11:30 CST.
 The earlier interruption is documented in the first cache experiment; the new
 authorization supersedes the earlier 07:30 stopping time.
+
+## Verified result (2026-10-26)
+
+W2/W1 IPC 0.643215223/0.575488141; diagnose 23753.272940 µm²/353.591160 MHz.
+Versus ba7f0a3: IPC +3.540%, area +3.710%, frequency -10.117%, IPC×frequency -6.936%, throughput/area -10.265%.
+Four configurations 19/19, cache-off defaults exact cycles; run_all ALL PASS; ordinary/statistics inputs, outputs and cycles agree.
+24 source inputs, seven libraries, tool/constraints, actual simulation/synthesis dimensions verified. One diagnose, 11.79 minutes, no opt.
+The critical path still starts in LSQ and now ends at an LSU register, D arrival 2.772ns. The response boundary helps but does not remove the late store-to-cache maintenance path.
+Retain experimental checkpoint f5df7fa; do not upgrade defaults. Next trial registers store-drain maintenance payload before the cache and restores external response bypass, with ordering tests.
+
+Registered-response 128B/256B W2 IPC 0.653218/0.660570, both 19/19; no PPA for these sizes.
