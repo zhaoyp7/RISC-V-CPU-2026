@@ -378,12 +378,14 @@ bind backend_ooo perf_early1_stats #(.D(`CPU_RS_DEPTH)) perf_early1_monitor (
   .lane0_slot(u_iq.sel_idx[0]),.lane1_slot(u_iq.sel_idx[1]),
   .out_valid(iq_out_valid),.out_ready(issue_ready)
 );
-// Probe an uncontended compute result without waiting for LSU valid or CDB.
+// Observe the registered-producer hint and verify its matching CDB grant.
 module perf_safe_wake_stats #(parameter D=8, PW=`CPU_PRF_IDX_W, R=`CPU_CDB_NUM) (
   input logic clk, reset, squash_valid, lane1_accept,
   input logic [31:0] squash_seq,
   input logic [2:0] compute_valid, compute_ready,
   input logic [3*PW-1:0] compute_tag,
+  input logic hint_valid,
+  input logic [PW-1:0] hint_tag,
   input logic [D-1:0] valid, eligible, src1_ready, src2_ready,
   input logic [D*PW-1:0] src1_tag, src2_tag,
   input logic [D*32-1:0] seq,
@@ -391,14 +393,14 @@ module perf_safe_wake_stats #(parameter D=8, PW=`CPU_PRF_IDX_W, R=`CPU_CDB_NUM) 
   input logic [1:0] out_valid, out_ready
 );
   longint cycles, hints, missing_grant, opportunity, can_accept, actual_early;
-  logic hint, h1, h2, early_wins;
+  logic hint, h1, h2, early_wins, grant_ok;
   logic [PW-1:0] tag;
   logic [31:0] best_seq;
   integer i, best;
   always_comb begin
-    hint=(R>=2)&&((compute_valid==3'b001)||(compute_valid==3'b010)||(compute_valid==3'b100));
-    tag='0;
-    for(i=0;i<3;i=i+1) tag=tag|(compute_tag[i*PW+:PW]&{PW{compute_valid[i]}});
+    hint=hint_valid;tag=hint_tag;grant_ok=0;
+    for(i=0;i<3;i=i+1)
+      if(compute_valid[i]&&compute_ready[i]&&compute_tag[i*PW+:PW]==tag)grant_ok=1;
     best=-1;best_seq='1;h1=0;h2=0;early_wins=0;
     for(i=0;i<D;i=i+1) begin
       h1=src1_ready[i]||(hint&&src1_tag[i*PW+:PW]==tag);
@@ -417,9 +419,9 @@ module perf_safe_wake_stats #(parameter D=8, PW=`CPU_PRF_IDX_W, R=`CPU_CDB_NUM) 
       cycles<=cycles+1;
       if(hint) begin
         hints<=hints+1;
-        if((compute_valid&compute_ready)!=compute_valid) begin
+        if(!grant_ok) begin
           missing_grant<=missing_grant+1;
-          $fatal(1,"uncontended compute hint was not written back");
+          $fatal(1,"guaranteed compute hint was not written back");
         end
       end
       if(early_wins) begin
@@ -439,6 +441,7 @@ bind backend_ooo perf_safe_wake_stats #(.D(`CPU_RS_DEPTH)) perf_safe_wake_monito
   .compute_valid({div_valid_q,alu1_valid_q,alu_valid_q}),
   .compute_ready({cdb_src_ready[3],cdb_src_ready[1],cdb_src_ready[0]}),
   .compute_tag({div_tag_q,alu1_tag_q,alu_tag_q}),
+  .hint_valid(iq_lookahead_valid),.hint_tag(iq_lookahead_tag),
   .valid(u_iq.valid),.eligible(u_iq.lane1_eligible),
   .src1_ready(u_iq.src1_ready),.src2_ready(u_iq.src2_ready),
   .src1_tag(u_iq.src1_tag),.src2_tag(u_iq.src2_tag),.seq(u_iq.seq),

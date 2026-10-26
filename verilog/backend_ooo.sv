@@ -674,15 +674,16 @@ module backend_ooo #(
   logic [N-1:0]                   cdb_src_ready;
   logic [`CPU_CDB_BUS_W-1:0]      cdb_out;
 
-  // 至多一个计算结果，加上至多一个LSU结果，R>=2时必定都获准写回。
-  // 只读寄存valid/tag，不依赖当拍squash、LSU valid或CDB仲裁结果。
+  // Source 0 owns the first CDB lane when R>=2. If absent, a sole remaining
+  // compute producer is also guaranteed alongside at most one LSU result.
+  // The hint reads registered producers, without LSU/arbiter feedback.
   wire [2:0] compute_pending = {div_valid_q, alu1_valid_q, alu_valid_q};
   assign iq_lookahead_valid = (R >= 2) &&
-      ((compute_pending == 3'b001) || (compute_pending == 3'b010) ||
+      (alu_valid_q || (compute_pending == 3'b010) ||
        (compute_pending == 3'b100));
-  assign iq_lookahead_tag = (alu_tag_q & {PW{alu_valid_q}}) |
-                            (alu1_tag_q & {PW{alu1_valid_q}}) |
-                            (div_tag_q & {PW{div_valid_q}});
+  assign iq_lookahead_tag = alu_valid_q ? alu_tag_q :
+                            ((alu1_tag_q & {PW{alu1_valid_q}}) |
+                             (div_tag_q & {PW{div_valid_q}}));
 
   always_comb begin
     cdb_src_valid = '0;
@@ -711,7 +712,7 @@ module backend_ooo #(
     cdb_src_exc[3] = div_exc_q;
   end
 
-  cdb #(.W(2), .R(R)) u_cdb (
+  cdb #(.W(2), .R(R), .PRIORITY_ALU0(1)) u_cdb (
     .clk           (clk),
     .reset         (reset),
     .src_valid     (cdb_src_valid),

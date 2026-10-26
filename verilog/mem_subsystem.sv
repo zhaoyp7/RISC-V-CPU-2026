@@ -441,14 +441,29 @@ module load_line_cache #(
   logic [2:0] store_head, store_tail;
   logic [3:0] store_count;
   wire [INDEX_BITS-1:0] st_index = store_addr[INDEX_BITS+4:5];
-  wire st_hit = store_addr[31:28] == 0 && line_valid[st_index] &&
-                              line_tag[st_index] == store_addr[27:INDEX_BITS+5];
+  logic st_partial, pending_partial;
+  // A word already written by this fill will not be overwritten again.
+  // The queued byte update can therefore preserve the line, including when
+  // the word arrives at the same edge as the store is accepted.
+  always_comb begin
+    st_partial=0;pending_partial=0;
+    for(integer k=0;k<2;k=k+1)begin
+      if(m_valid[k] && !m_unc[k] && m_install[k])begin
+        if(m_addr[k][31:5]==store_addr[31:5] &&
+           (m_words[k][store_addr[4:2]] ||
+            (return_valid && return_slot==1'(k) && return_word==store_addr[4:2])))st_partial=1;
+        if(m_addr[k][31:5]==store_addr_q[31:5] && m_words[k][store_addr_q[4:2]])pending_partial=1;
+      end
+    end
+  end
+  wire st_hit = store_addr[31:28] == 0 &&
+       ((line_valid[st_index] && line_tag[st_index] == store_addr[27:INDEX_BITS+5]) || st_partial);
   wire store_pop = store_resp_valid && store_count != 0;
   wire [31:5] completed_store_line = store_line[store_head];
   wire completed_store_miss = store_pop && store_miss[store_head];
   wire [INDEX_BITS-1:0] sp_index = store_addr_q[INDEX_BITS+4:5];
   wire store_write = store_pending && !refill_write &&
-     line_valid[sp_index] && line_tag[sp_index] == store_addr_q[27:INDEX_BITS+5];
+     ((line_valid[sp_index] && line_tag[sp_index] == store_addr_q[27:INDEX_BITS+5]) || pending_partial);
   wire store_advance = store_pending && !refill_write;
   assign store_ready = !reset && store_count < 8 && (!store_pending || store_advance);
 
@@ -473,21 +488,27 @@ module load_line_cache #(
   wire [31:0] bank_data [0:7];
   wire [31:0] hit_data = bank_data[lookup_word];
   wire head_lookup = lookup_pending && lookup_slot == q_head;
-  assign resp_valid = !reset && q_count != 0 && (q_done[q_head] || head_lookup);
-  assign resp_data = head_lookup ? hit_data : q_data[q_head];
+  // The oldest waiter can consume its returning word without storing and
+  // re-reading it. Later completions still wait behind the ordered head.
+  wire head_return = return_valid && q_count != 0 && !q_done[q_head] &&
+      !head_lookup && q_mshr[q_head]==return_slot && q_word[q_head]==return_word;
+  assign resp_valid = !reset && q_count != 0 && (q_done[q_head] || head_lookup || head_return);
+  assign resp_data = head_lookup ? hit_data : (head_return ? mem_resp_data : q_data[q_head]);
   wire pop = resp_valid;
 
-  wire bank_we = refill_write || store_write;
-  wire [INDEX_BITS-1:0] bank_index = refill_write ? m_addr[return_slot][INDEX_BITS+4:5] :
-                                                (store_write ? sp_index : r_index);
-  wire [2:0] bank_word = refill_write ? return_word :
-                                      (store_write ? store_addr_q[4:2] : r_word);
   wire [31:0] bank_wdata = refill_write ? mem_resp_data : store_data_q;
   wire [3:0] bank_mask = refill_write ? 4'hf : store_mask_q;
   for(genvar b=0;b<8;b=b+1) begin : gen_bank
+    // Only this bank consumes its operation. Independent address/WE selects
+    // prevent one final driver from feeding all 32 byte-lane macro pins.
+    wire refill_this = refill_write && return_word==3'(b);
+    wire store_this = store_write && store_addr_q[4:2]==3'(b);
+    wire read_this = hit_read && r_word==3'(b);
+    wire [INDEX_BITS-1:0] address = refill_this ? m_addr[return_slot][INDEX_BITS+4:5] :
+                                               (store_this ? sp_index : r_index);
     sram_fakeram #(.DEPTH(LINES),.WIDTH(32),.WRITE_GRANULARITY(8)) u_data (
-      .clk(clk), .en((refill_write || store_write || hit_read) && bank_word == 3'(b)),
-      .we(bank_we), .wmask(bank_mask), .addr(bank_index), .wdata(bank_wdata),
+      .clk(clk), .en(refill_this || store_this || read_this),
+      .we(refill_this || store_this), .wmask(bank_mask), .addr(address), .wdata(bank_wdata),
       .rdata(bank_data[b])
     );
   end
@@ -501,7 +522,7 @@ module load_line_cache #(
   wire [1:0] poison_fill;
   for(genvar k=0;k<2;k=k+1)begin : gen_poison
     assign poison_fill[k] = m_valid[k] && !m_unc[k] &&
-        ((store_fire && store_addr[31:5]==m_addr[k][31:5]) ||
+        ((store_fire && !st_hit && store_addr[31:5]==m_addr[k][31:5]) ||
          (completed_store_miss && completed_store_line==m_addr[k][31:5]));
   end
   // Constant row writes avoid wide shift/mask networks from variable-index
@@ -554,7 +575,8 @@ module load_line_cache #(
         m_returned[return_slot]<=m_returned[return_slot]+1'b1;
         m_words[return_slot][return_word]<=1;
         for(integer n=0;n<QDEPTH;n=n+1)
-          if(q_valid[n] && !q_done[n] && !(lookup_pending && lookup_slot==QW'(n)) &&
+          if(q_valid[n] && !q_done[n] && !(pop && q_head==QW'(n)) &&
+             !(lookup_pending && lookup_slot==QW'(n)) &&
              q_mshr[n]==return_slot && q_word[n]==return_word)begin
             q_data[n]<=mem_resp_data;q_done[n]<=1;
           end
@@ -586,7 +608,7 @@ module load_line_cache #(
         end
         // Allocation and a store event may coincide; the old m_valid is zero.
         if(allocate && free_slot==1'(k) && r_cached &&
-           ((store_fire && store_addr[31:5]==req_addr[31:5]) ||
+           ((store_fire && !st_hit && store_addr[31:5]==req_addr[31:5]) ||
             (completed_store_miss && completed_store_line==req_addr[31:5])))
           m_install[k]<=0;
       end

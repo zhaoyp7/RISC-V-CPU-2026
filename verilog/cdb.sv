@@ -13,7 +13,8 @@
 
 module cdb #(
   parameter integer W = `CPU_ISSUE_WIDTH,
-  parameter integer R = `CPU_CDB_NUM
+  parameter integer R = `CPU_CDB_NUM,
+  parameter integer PRIORITY_ALU0 = 0
 ) (
   input  logic clk,
   input  logic reset,
@@ -43,6 +44,15 @@ module cdb #(
 
     for (r = 0; r < R; r = r + 1) begin
       found = 1'b0;
+      // With a second lane available, reserve the first lane for source 0.
+      // Remaining sources retain the rotating search and cannot be duplicated.
+      if(PRIORITY_ALU0 && R>=2 && r==0 && src_valid[0])begin
+        found=1'b1;chosen[0]=1'b1;src_ready[0]=1'b1;
+        cdb_out[`CPU_CDB_VALID_OFF]=1'b1;
+        cdb_out[`CPU_CDB_TAG_OFF +: PW]=src_tag[0 +: PW];
+        cdb_out[`CPU_CDB_VALUE_OFF +: 32]=src_value[0 +: 32];
+        cdb_out[`CPU_CDB_EXCEPTION_OFF]=src_exception[0];
+      end
       for (k = 0; k < N; k = k + 1) begin
         idx = (last + r + k + 1) % N;
         if (!found && !chosen[idx] && src_valid[idx]) begin
@@ -56,6 +66,7 @@ module cdb #(
         end
       end
     end
+    if(PRIORITY_ALU0 && R>=2)src_ready[0]=src_valid[0];
   end
 
   always_ff @(posedge clk) begin

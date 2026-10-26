@@ -15,7 +15,8 @@
 
 module lsu #(
   parameter integer W         = `CPU_ISSUE_WIDTH,
-  parameter integer LDQ_DEPTH = 8
+  parameter integer LDQ_DEPTH = 8,
+  parameter integer NO_STORE_BYPASS = `CPU_LINE_CACHE_ENABLE
 ) (
   input  logic clk,
   input  logic reset,
@@ -237,10 +238,12 @@ module lsu #(
   logic                      r_unsigned, r_illegal;
   logic                      lsq_query_ready, lsq_query_resp_valid, query_send;
   logic                      query_ready, load_enqueue;
+  logic                      lsq_stores_empty, q_fast_locked, q_fast_eligible, q_fast_fire;
+  wire q_query_valid = q_active && !q_fast_eligible;
 
   assign q_squashed = q_valid && squash_valid && (q_seq > squash_seq);
   assign q_active = q_valid && !q_squashed;
-  assign query_send = q_active && lsq_query_ready;
+  assign query_send = q_query_valid && lsq_query_ready;
   assign r_squashed = r_valid && squash_valid && (r_seq > squash_seq);
   assign r_active = r_valid && !r_squashed && lsq_query_resp_valid;
 
@@ -326,22 +329,30 @@ module lsu #(
   end
 
   logic load_issue, store_issue, store_addr_issue;
-  logic load_miss, load_local_result;
-  assign load_issue       = r_active && query_ready;
-  assign load_miss        = load_issue && !r_illegal && !ld_fwd && !dc_hit;
-  assign load_local_result = load_issue && (r_illegal || ld_fwd || dc_hit);
+  logic load_miss, load_local_result, r_load_issue;
+  // A load already in q has passed issue/address generation. With no live
+  // store entries it needs no LSQ snapshot; any later allocation is younger.
+  // Once offered under backpressure, retain this mode until acceptance/flush.
+  assign q_fast_eligible = (NO_STORE_BYPASS != 0) && `CPU_LINE_CACHE_ENABLE &&
+      q_active && !q_illegal && !r_valid && (lsq_stores_empty || q_fast_locked);
+  assign q_fast_fire = q_fast_eligible && ld_space && ld_req_ready;
+  assign r_load_issue    = r_active && query_ready;
+  assign load_issue      = r_load_issue || q_fast_fire;
+  assign load_miss       = (r_load_issue && !r_illegal && !ld_fwd && !dc_hit) || q_fast_fire;
+  assign load_local_result = r_load_issue && (r_illegal || ld_fwd || dc_hit);
   assign store_addr_issue = issue_valid && issue_ready && issue_is_store &&
                             issue_addr_only;
   assign store_issue      = issue_valid && issue_ready && issue_is_store &&
                             !issue_addr_only;
 
-  assign ld_req_valid = r_active && !r_illegal && !query_blocked && !ld_fwd && !dc_hit && ld_space;
-  assign ld_req_addr  = r_addr;
+  assign ld_req_valid = ((r_active && !r_illegal && !query_blocked && !ld_fwd && !dc_hit) ||
+                         q_fast_eligible) && ld_space;
+  assign ld_req_addr  = q_fast_eligible ? q_addr : r_addr;
 
   // 消歧阻塞时释放查询级，但不删除等待表项；内存 valid 等待 ready 时保留
   // 查询级，保证请求地址稳定。store 始终能通过独立入口填入 LSQ。
   assign r_accept = !r_valid || r_squashed || query_blocked || load_issue;
-  assign q_accept = !q_valid || q_squashed || query_send;
+  assign q_accept = !q_valid || q_squashed || query_send || q_fast_fire;
 
   // address-only：只把 store 地址写进 LSQ，不产生 complete，也不触发写。
   logic        prefill_valid;
@@ -402,7 +413,7 @@ module lsu #(
     .drain_wstrb     (drain_wstrb),
     .drain_fire      (drain_fire),
     .store_resp_valid(st_resp_valid),
-    .query_valid     (q_active),
+    .query_valid     (q_query_valid),
     .query_seq       (q_seq),
     .query_addr      (q_addr),
     .query_ready     (lsq_query_ready),
@@ -412,7 +423,8 @@ module lsu #(
     .query_blocked   (lsq_query_blocked),
     .query_fwd_valid (lsq_query_fwd_valid),
     .query_fwd_data  (lsq_query_fwd_data),
-    .count           (lsq_count)
+    .count           (lsq_count),
+    .stores_empty    (lsq_stores_empty)
   );
 
   // ---- 本拍结果入队条件 ---------------------------------------------------
@@ -469,6 +481,7 @@ module lsu #(
     if (reset) begin
       lp_valid <= '0;
       q_valid <= 1'b0;
+      q_fast_locked <= 1'b0;
       q_id <= '0;
       q_addr <= '0;
       q_seq <= '0;
@@ -490,7 +503,9 @@ module lsu #(
             (lp_seq[lp_squash_i*32 +: 32] > squash_seq))
           lp_valid[lp_squash_i] <= 1'b0;
       if (load_issue)
-        lp_valid[r_id] <= 1'b0;
+        lp_valid[q_fast_eligible ? q_id : r_id] <= 1'b0;
+      if(q_accept)q_fast_locked<=0;
+      else if(q_fast_eligible && ld_space && !ld_req_ready)q_fast_locked<=1;
       if (load_enqueue) begin
         lp_valid[issue_lsq] <= 1'b1;
         lp_addr[issue_lsq*32 +: 32] <= issue_addr;
@@ -567,12 +582,12 @@ module lsu #(
       // ---- load issue：入元数据队列 --------------------------------------
       if (load_miss) begin
         md_valid[md_tail]         <= 1'b1;
-        md_tag[md_tail*PW +: PW]  <= r_tag;
-        md_seq[md_tail*32 +: 32]  <= r_seq;
-        md_lsq[md_tail*LW +: LW]  <= r_id;
-        md_off[md_tail*2 +: 2]    <= r_addr[1:0];
-        md_size[md_tail*2 +: 2]   <= r_size;
-        md_unsigned[md_tail]      <= r_unsigned;
+        md_tag[md_tail*PW +: PW]  <= q_fast_eligible ? q_tag : r_tag;
+        md_seq[md_tail*32 +: 32]  <= q_fast_eligible ? q_seq : r_seq;
+        md_lsq[md_tail*LW +: LW]  <= q_fast_eligible ? q_id : r_id;
+        md_off[md_tail*2 +: 2]    <= q_fast_eligible ? q_addr[1:0] : r_addr[1:0];
+        md_size[md_tail*2 +: 2]   <= q_fast_eligible ? q_size : r_size;
+        md_unsigned[md_tail]      <= q_fast_eligible ? q_unsigned : r_unsigned;
         md_discard[md_tail]       <= 1'b0;
         md_tail <= (md_tail == LDQ_DEPTH - 1) ? '0 : md_tail + 1'b1;
       end
@@ -586,7 +601,7 @@ module lsu #(
         rq_tag[rq_tail*PW +: PW]   <= load_local_result ?
                                       r_tag : md_tag[md_head*PW +: PW];
         rq_value[rq_tail*32 +: 32] <=
-            (load_issue && r_illegal) ? 32'b0 :
+            (r_load_issue && r_illegal) ? 32'b0 :
             (load_issue && ld_fwd) ?
               format_load(ld_fwd_data, r_size, r_addr[1:0], r_unsigned) :
             (load_issue && dc_hit) ?
@@ -595,7 +610,7 @@ module lsu #(
                           md_off[md_head*2 +: 2], md_unsigned[md_head]);
         rq_seq[rq_tail*32 +: 32]   <= load_local_result ?
                                       r_seq : md_seq[md_head*32 +: 32];
-        rq_exc[rq_tail]            <= load_issue && r_illegal;
+        rq_exc[rq_tail]            <= r_load_issue && r_illegal;
         rq_discard[rq_tail]        <= squash_valid &&
                                       ((load_local_result ?
                                         r_seq : md_seq[md_head*32 +: 32])
@@ -842,7 +857,7 @@ module lsu #(
       st_cycles <= st_cycles + 1;
       if (load_issue) st_ld_issue <= st_ld_issue + 1;
       if (load_issue && ld_fwd) st_ld_fwd <= st_ld_fwd + 1;
-      if (load_issue && r_illegal) st_illegal_ld <= st_illegal_ld + 1;
+      if (r_load_issue && r_illegal) st_illegal_ld <= st_illegal_ld + 1;
       if (md_resp_fire) st_ld_resp <= st_ld_resp + 1;
       if (load_result_valid && !load_result_ready)
         st_load_result_wait <= st_load_result_wait + 1;

@@ -74,7 +74,8 @@ module lsq #(
   output logic                         query_fwd_valid,
   output logic [31:0]                  query_fwd_data,
 
-  output logic [7:0]                   count
+  output logic [7:0]                   count,
+  output logic                         stores_empty
 );
 
   localparam integer LW = `CPU_LSQ_IDX_W;
@@ -85,6 +86,7 @@ module lsq #(
 
   logic [D-1:0]    valid;
   logic [D-1:0]    is_store;
+  assign stores_empty = !(|(valid & is_store));
   logic [D*RW-1:0] rob;
   logic [D*32-1:0] seq;
   logic [D-1:0]    addr_known;

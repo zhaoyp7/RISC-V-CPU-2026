@@ -25,6 +25,9 @@
 #ifndef TB_CACHE_ENQUEUE_BYPASS
 #define TB_CACHE_ENQUEUE_BYPASS 0
 #endif
+#ifndef TB_NO_STORE_BYPASS
+#define TB_NO_STORE_BYPASS 0
+#endif
 #ifndef TB_DCACHE_INDEX_BITS
 #define TB_DCACHE_INDEX_BITS 3
 #endif
@@ -1120,10 +1123,10 @@ int main(int argc, char** argv) {
                  "tree request count after squash and q/r exclusion");
         std::vector<int> expected_ids;
         expected_ids.push_back(3);
-        expected_ids.push_back(8 % TB_LSQ_DEPTH);
+        if(!(round==2 && TB_NO_STORE_BYPASS))expected_ids.push_back(8 % TB_LSQ_DEPTH);
         if (round == 2) {
             for (int id = 0; id < TB_LSQ_DEPTH; ++id)
-                if (id != expected_ids[0] && id != expected_ids[1]) expected_ids.push_back(id);
+                if (id != 3 && (TB_NO_STORE_BYPASS || id != 8 % TB_LSQ_DEPTH)) expected_ids.push_back(id);
         } else {
             for (int age = 2; age < keep; ++age) expected_ids.push_back((5 * age + 3) % TB_LSQ_DEPTH);
         }
@@ -1136,6 +1139,30 @@ int main(int argc, char** argv) {
         for (int id : expected_ids) h.commit(id, false, true);
         h.expect(h.wait_idle("tree arbitration drain"), "tree arbitration idle");
     }
+
+#if TB_NO_STORE_BYPASS
+    // Empty-store q may issue without first reserving the r snapshot stage.
+    h.reset();h.auto_respond=false;h.write_word(0x1c00,0x13572468u,15);
+    h.expect(h.alloc(0,1,false),"empty-store direct load allocate");
+    Uop quick;quick.dest=26;quick.is_load=1;quick.lsq=0;quick.rob=1;
+    h.expect(h.issue(quick,0x1c00,0),"empty-store direct load enqueue");
+    h.tick();h.expect(h.accepted_loads.size()==1,"empty-store load skips snapshot edge");
+    h.auto_respond=true;h.expect(h.wait_load_result(0x13572468u,26,"direct q data"),"direct q metadata value");
+
+    // A younger, still-unknown store cannot revoke a previously offered load.
+    h.reset();h.auto_respond=false;h.load_ready=false;
+    h.write_word(0x1c00,0x24681357u,15);
+    h.expect(h.alloc(0,1,false),"locked direct load allocate");
+    h.expect(h.issue(quick,0x1c00,0),"locked direct load enqueue");
+    for(int i=0;i<8;i++)h.tick();
+    h.expect(dut.ld_req_valid&&dut.ld_req_addr==0x1c00,"direct request offered under backpressure");
+    h.expect(h.alloc(1,2,true),"younger unknown store allocate while direct request stalled");
+    for(int i=0;i<4;i++){
+        h.expect(dut.ld_req_valid&&dut.ld_req_addr==0x1c00,"direct request survives younger store allocation");h.tick();
+    }
+    h.load_ready=true;h.auto_respond=true;
+    h.expect(h.wait_load_result(0x24681357u,26,"locked q data"),"locked direct request completes once");
+#endif
 
     // ---- address carry boundaries, wraparound and arbitrary immediates -----
     h.reset();
