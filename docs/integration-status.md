@@ -1,6 +1,19 @@
 # 集成状态（P1 完成，P2 进入性能优化）
 
-## 当前检查点：opt 456.12 MHz / 19,808.71 µm²
+## main正确性修复合并（2026-10-26）
+
+本次从原main f4a0555独立整理三项修复：3710dd1派发接收、ef5e2aex0组内旁路、81391caLSU FIFO槽复用。
+生产文件仅core_ooo.sv/rename.sv/lsu.sv三变；默认W2/ROB16/PRF48/IQ8/CDB2/LSQ16及I$容量不变，无D-cache或性能结构合入。
+原版定向复现：派发W1/W2各72检查6失败，x0 W2 529检查260失败，LSU两种槽复用共2失败；修复后全部零失败。
+完整rename参考200072/200074零失败，run_all ALLPASS。默认W1/W2及压力W2/ROB32/PRF48三组各19/19。
+新默认W2/W1 IPC .522150576060/.498844480672；压力W2仅作为正确性覆盖，IPC .584363386070，不提升为默认配置。
+24生产输入及三档实际容量/PRF存储48字核验。本轮无综合；原456.12MHz/19808.712µm²属于修复前f4a0555，不代表修复后main的PPA。
+性能候选标签cache32-zero-opt-20261026与feat/ipc-lsu-read-cache仍指向29e0fc8，24源码匹配其opt报告，未改写。
+候选正式opt仍为W2 IPC .659404/22315.189µm²/417.618MHz，生产源码04eee15；仅作独立候选保留。
+回滚点main-before-correctness-20261026保留f4a0555；验证归档build/main_correctness_merge_20261026/。
+详见[独立正确性修复](experiments/main-correctness-merge.md)。以下均为修复前历史测量，不能直接当作新main数据。
+
+## 修复前main历史检查点：opt 456.12 MHz / 19,808.71 µm²
 
 当前分支`main`，主线检查点`main-freq-age-matrix-20261025`。
 测量检查点仍为`freq-age-matrix-opt-20261024`，源码与ba7ceb6相同。

@@ -1,6 +1,19 @@
 # 性能记录
 
-## 当前 main：opt 456.12 MHz / 19,808.71 µm²
+## main正确性修复合并（2026-10-26）
+
+本次从原main f4a0555独立整理三项修复：3710dd1派发接收、ef5e2aex0组内旁路、81391caLSU FIFO槽复用。
+生产文件仅core_ooo.sv/rename.sv/lsu.sv三变；默认W2/ROB16/PRF48/IQ8/CDB2/LSQ16及I$容量不变，无D-cache或性能结构合入。
+原版定向复现：派发W1/W2各72检查6失败，x0 W2 529检查260失败，LSU两种槽复用共2失败；修复后全部零失败。
+完整rename参考200072/200074零失败，run_all ALLPASS。默认W1/W2及压力W2/ROB32/PRF48三组各19/19。
+新默认W2/W1 IPC .522150576060/.498844480672；压力W2仅作为正确性覆盖，IPC .584363386070，不提升为默认配置。
+24生产输入及三档实际容量/PRF存储48字核验。本轮无综合；原456.12MHz/19808.712µm²属于修复前f4a0555，不代表修复后main的PPA。
+性能候选标签cache32-zero-opt-20261026与feat/ipc-lsu-read-cache仍指向29e0fc8，24源码匹配其opt报告，未改写。
+候选正式opt仍为W2 IPC .659404/22315.189µm²/417.618MHz，生产源码04eee15；仅作独立候选保留。
+回滚点main-before-correctness-20261026保留f4a0555；验证归档build/main_correctness_merge_20261026/。
+详见[独立正确性修复](experiments/main-correctness-merge.md)。以下均为修复前历史测量，不能直接当作新main数据。
+
+## 修复前main f4a0555：opt 456.12 MHz / 19,808.71 µm²
 
 主线检查点`main-freq-age-matrix-20261025`（合并记录382072d），测量标签
 `freq-age-matrix-opt-20261024`；RTL同ba7ceb6，已回退的ROB固定槽位匹配trial未纳入。
@@ -15,13 +28,13 @@
 W2/W1 IPC为 **0.5221 / 0.4988**；opt面积分项为组合13,126.199、时序5,521.563、SRAM1,160.951 µm²。
 W1/W2各19/19、run_all ALL PASS；24个源码输入、7个库文件和全部时序约束核对一致。
 2026-10-25已快进合入main，合并后代码与已验证分支一致。原main bc795ae保留在
-`main-before-freq-age-matrix-20261025`，默认diagnose/opt报告与当前RTL的hash匹配。
+`main-before-freq-age-matrix-20261025`，默认diagnose/opt报告与修复前f4a0555的RTL哈希匹配。
 完整报告归档`build/synth/iq_age_matrix_opt_checkpoint/`；详见[同源opt及合并记录](experiments/iq-age-matrix-opt.md)。
 
-## 分 benchmark（当前 main，W1/W2）
+## 分 benchmark（修复前main f4a0555，W1/W2）
 
 主线标签`main-freq-age-matrix-20261025`；latency=10、MAX_CYCLES=50,000,000。
-本表为当前RTL的实测值，W2/W1 geomean为0.522108164152558/0.4988444806718703。
+本表为修复前f4a0555源码的实测值，W2/W1 geomean为0.522108164152558/0.4988444806718703。
 响应容量组合、连续四轮及ROB完成匹配trial的两档perf周期逐项一致，共用此表。
 
 | benchmark | instructions | W2 cycles | W2 IPC | W1 cycles | W1 IPC |
@@ -35,7 +48,7 @@ W1/W2各19/19、run_all ALL PASS；24个源码输入、7个库文件和全部时
 | **GEOMEAN** | | | **0.5221** | | **0.4988** |
 
 
-## 当前main性能计数器（2026-10-25）
+## 修复前main性能计数器（2026-10-25）
 
 普通/LOCAL_STATS两版均通过官方六项perf，答案、输入和周期逐项相同，geomean仍为0.5221。
 独立bind监视器只读内部状态，不修改功能RTL或官方filelist；默认综合的24个源码hash保持一致。
@@ -91,7 +104,7 @@ load/store 放入旧的 a0/a1 缓冲。优先做分析和方案设计，单次�
 ## 完整核心
 
 本表只保留同时实测IPC、面积和频率的记录；W1兼容性及单独IPC结果见实验说明。
-中间检查点保留历史测量值，已回退trial按原决定标注；当前main为末尾opt行。
+中间检查点保留历史测量值，已回退trial按原决定标注；修复前main对应freq-age-matrix-opt行；修复后main仅有功能与IPC验证，不增加未综合行。
 
 | 日期 | commit / tag | 配置（W/ROB/PRF/RS/CDB/LSQ/I$） | IPC geomean | 面积 µm² | 频率 MHz | 备注 |
 | --- | --- | --- | ---: | ---: | ---: | --- |
@@ -128,7 +141,8 @@ load/store 放入旧的 a0/a1 缓冲。优先做分析和方案设计，单次�
 | 2026-10-24 | `freq-r3-age-matrix-20261024` | W2/16/48/8/2/16/1KB×2 | 0.5221 | 20,505.024 (diag) | 402.36 (diag) | 四轮3：IQ年龄关系寄存；同源opt见末行 |
 | 2026-10-24 | `freq-r4-cdb-parallel-trial-20261024` | W2/16/48/8/2/16/1KB×2 | 0.5221 | 20,482.585 (diag) | 385.25 (diag) | 四轮4：频率-4.25%，回退至402.36版；无opt |
 | 2026-10-24 | `freq-rob-completion-match-trial-20261024` | W2/16/48/8/2/16/1KB×2 | 0.5221 | 20,487.732 (diag) | 404.26 (diag) | 单项+0.474%，按小收益准则回退402.36；无opt |
-| 2026-10-24 | `freq-age-matrix-opt-20261024` / `main-freq-age-matrix-20261025` | W2/16/48/8/2/16/1KB×2 | 0.5221 | 19,808.712 (opt) | 456.12 (opt) | **当前main**；2026-10-25合入，同源ba7ceb6；较diag面积-3.40%、频率+13.36% |
+| 2026-10-24 | `freq-age-matrix-opt-20261024` / `main-freq-age-matrix-20261025` | W2/16/48/8/2/16/1KB×2 | 0.5221 | 19,808.712 (opt) | 456.12 (opt) | **修复前main f4a0555**；2026-10-25合入，同源ba7ceb6；较diag面积-3.40%、频率+13.36% |
+| 2026-10-26 | `cache32-zero-opt-20261026`（29e0fc8） | W2/32/64/8/2/16/1KB×2 + D$32B | 0.6594 | 22,315.189 (opt) | 417.62 (opt) | 独立性能候选，标签完整保留；未合入main |
 
 P2 基线 opt 综合：comb 16,361.326、seq 5,648.117、SRAM 2,278.903 µm²，
 min period 17.8320 ns（目标 2 ns，WNS −15.8320 ns）。diagnose 为 25,025.438 µm²、
