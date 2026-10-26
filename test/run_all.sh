@@ -80,9 +80,6 @@ run "frontend W=2" env FRONTEND_W=2 sh test/frontend_test/run.sh
 run "BPU training / frontend response queues W1/W2" sh test/bpu_training_test/run.sh
 run "LSQ query snapshot depth8/depth16/depth32" sh test/lsq_query_test/run.sh
 run "lsu v2" sh test/lsu_test/run.sh
-run "LSU empty-store snapshot bypass" sh test/lsu_test/run.sh \
-    --define CPU_LINE_CACHE_ENABLE=1 --define CPU_DCACHE_ENABLE=1 \
-    --cxx-define TB_NO_STORE_BYPASS=1
 run "LSU 64B read cache / ordering and invalidation" sh test/lsu_cache_test/run.sh
 run "mem_subsystem v2" sh test/mem_subsystem_test/run.sh
 run "nonblocking line cache / order and write races" sh test/line_cache_test/run.sh

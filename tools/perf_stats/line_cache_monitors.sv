@@ -50,33 +50,3 @@ bind load_line_cache perf_line_cache cache_monitor (
  .m_valid(m_valid),.q_count(q_count),.flight_count(flight_count),.q_done(q_done),.q_head(q_head)
 );
 `endif
-
-`ifdef LOCAL_STATS
-`ifdef PERF_FAST_LOAD
-module perf_empty_store_load (
- input wire clk,reset,q_active,q_illegal,r_valid,empty,
- input wire fast_valid,fast_fire,locked,ld_space,ld_ready
-);
- longint cycles,pending,opportunity,offered,sent,lock_cycles,wait_cache,wait_credit,store_block;
- always_ff @(posedge clk)begin
-  if(reset)begin
-   cycles<=0;pending<=0;opportunity<=0;offered<=0;sent<=0;
-   lock_cycles<=0;wait_cache<=0;wait_credit<=0;store_block<=0;
-  end else begin
-   cycles<=cycles+1;pending<=pending+q_active;
-   opportunity<=opportunity+(q_active&&!q_illegal&&!r_valid&&empty);
-   offered<=offered+fast_valid;sent<=sent+fast_fire;lock_cycles<=lock_cycles+locked;
-   wait_cache<=wait_cache+(fast_valid&&ld_space&&!ld_ready);
-   wait_credit<=wait_credit+(fast_valid&&!ld_space);
-   store_block<=store_block+(q_active&&!empty&&!locked);
-  end
- end
- final $fdisplay(32'h80000002,"[STATS] LOAD_FAST cycles=%0d pending=%0d opportunity=%0d offered=%0d sent=%0d lock_cycles=%0d wait_cache=%0d wait_credit=%0d store_block=%0d",cycles,pending,opportunity,offered,sent,lock_cycles,wait_cache,wait_credit,store_block);
-endmodule
-bind lsu perf_empty_store_load fast_load_monitor (
- .clk(clk),.reset(reset),.q_active(q_active),.q_illegal(q_illegal),.r_valid(r_valid),
- .empty(lsq_stores_empty),.fast_valid(q_fast_eligible),.fast_fire(q_fast_fire),
- .locked(q_fast_locked),.ld_space(ld_space),.ld_ready(ld_req_ready)
-);
-`endif
-`endif
