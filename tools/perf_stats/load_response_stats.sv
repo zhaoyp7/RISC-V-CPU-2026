@@ -39,7 +39,7 @@ module perf_response_bypass #(parameter CW=4, parameter BYPASS_ENABLED=1) (
   end
   final $fdisplay(32'h80000002,"[STATS] LOAD_BYPASS cycles=%0d responses=%0d kept=%0d direct=%0d buffered=%0d busy_fifo=%0d busy_cdb=%0d forced_queue=%0d writebacks=%0d queued_writebacks=%0d discarded_queue=%0d",cycles,responses,kept,direct,buffered,busy_fifo,busy_cdb,forced_queue,writebacks,queued_writebacks,discarded_queue);
 endmodule
-bind lsu perf_response_bypass #(.CW(MDW+1),.BYPASS_ENABLED(!`CPU_DCACHE_ENABLE)) perf_response_bypass_monitor (
+bind lsu perf_response_bypass #(.CW(MDW+1),.BYPASS_ENABLED(1)) perf_response_bypass_monitor (
   .clk(clk),.reset(reset),.md_resp_fire(md_resp_fire),.md_resp_keep(md_resp_keep),
   .response_bypass_valid(response_bypass_valid),.response_bypass_fire(response_bypass_fire),
   .rq_count(rq_count),.load_result_valid(load_result_valid),.load_result_ready(load_result_ready),.rq_pop(rq_pop)

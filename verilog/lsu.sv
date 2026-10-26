@@ -289,6 +289,7 @@ module lsu #(
   logic [31:0] ld_fwd_data;
   logic dc_hit;
   logic [31:0] dc_value;
+  logic dc_maintenance_busy;
   assign query_blocked = r_active && !r_illegal && lsq_query_blocked;
   assign ld_fwd        = r_active && !r_illegal &&
                          !lsq_query_blocked && lsq_query_fwd_valid;
@@ -428,11 +429,7 @@ module lsu #(
   // Empty result FIFO: expose the returning memory value immediately. A
   // stalled CDB still captures it in the reserved FIFO slot at this edge.
   // Existing queued results always retain priority over a new response.
-  // The cache configuration uses the registered result FIFO for both hits and
-  // external responses. This keeps cache/store control out of the same-cycle
-  // memory-result path through CDB and PRF; cache-disabled cores retain bypass.
-  assign response_bypass_valid = !`CPU_DCACHE_ENABLE &&
-                                  (rq_count == 0) && md_resp_keep;
+  assign response_bypass_valid = (rq_count == 0) && md_resp_keep;
   assign response_bypass_fire = response_bypass_valid && load_result_ready;
   assign rq_push = (md_resp_keep && !response_bypass_fire) || load_local_result;
   assign rq_pop  = (rq_count != 0) &&
@@ -465,7 +462,8 @@ module lsu #(
   assign store_complete_exception = store_complete_exc_q;
 
   assign busy = (|lp_valid) || q_valid || r_valid ||
-                (ld_count != 0) || (rq_count != 0) || (lsq_count != 0);
+                (ld_count != 0) || (rq_count != 0) || (lsq_count != 0) ||
+                dc_maintenance_busy;
 
   always_ff @(posedge clk) begin
     if (reset) begin
@@ -649,9 +647,30 @@ module lsu #(
     wire [CB-1:0] r_set = r_word[CB-1:0];
     wire [CT-1:0] r_tag = r_word[25:CB];
     wire store_inv = store_issue && (issue_addr[31:28] == 0);
-    wire drain_inv = drain_fire && (drain_addr[31:28] == 0);
+    // Store drain selection is late. Capture its cache-maintenance payload
+    // before comparing cache tags or selecting the cache data write port.
+    // The LSQ retains the store until its later response, so younger loads
+    // still forward or block while this one-cycle maintenance stage advances.
+    logic drain_pending, drain_aligned;
+    logic [25:0] drain_word_q;
+    logic [31:0] drain_data_q;
+    logic [3:0] drain_mask_q;
+    always_ff @(posedge clk) begin
+      if(reset)drain_pending <= 1'b0;
+      else begin
+        drain_pending <= drain_fire && drain_addr[31:28] == 0;
+        if(drain_fire)begin
+          drain_word_q <= drain_addr[27:2];
+          drain_aligned <= drain_addr[1:0] == 0;
+          drain_data_q <= drain_wdata;
+          drain_mask_q <= drain_wstrb;
+        end
+      end
+    end
+    assign dc_maintenance_busy = drain_pending;
+    wire drain_inv = drain_pending;
     wire [25:0] store_word = issue_addr[27:2];
-    wire [25:0] drain_word = drain_addr[27:2];
+    wire [25:0] drain_word = drain_word_q;
     wire request_invalidated = (store_inv && store_word == r_word) ||
                                (drain_inv && drain_word == r_word);
     wire [CE-1:0] invalidated;
@@ -691,7 +710,7 @@ module lsu #(
       else if(ld_req_valid && !ld_req_ready)miss_locked <= 1'b1;
     end
 
-    wire drain_allocate = drain_inv && drain_addr[1:0] == 0 && drain_wstrb == 4'hf &&
+    wire drain_allocate = drain_inv && drain_aligned && drain_mask_q == 4'hf &&
                             !(store_inv && store_word == drain_word);
     wire [25:0] response_word = miss_word[md_head];
     wire read_fill = md_resp_keep && fill_ok[md_head] &&
@@ -699,7 +718,7 @@ module lsu #(
                        !(drain_inv && drain_word == response_word);
     wire write_cache = drain_allocate || read_fill;
     wire [25:0] write_word = drain_allocate ? drain_word : response_word;
-    wire [31:0] write_data = drain_allocate ? drain_wdata : ld_resp_rdata;
+    wire [31:0] write_data = drain_allocate ? drain_data_q : ld_resp_rdata;
     wire [CB-1:0] write_set = write_word[CB-1:0];
     wire [CT-1:0] write_tag = write_word[25:CB];
     logic write_way;
@@ -757,6 +776,7 @@ module lsu #(
   end else begin : gen_no_read_cache
     assign dc_hit = 1'b0;
     assign dc_value = '0;
+    assign dc_maintenance_busy = 1'b0;
   end endgenerate
 
 `ifdef LOCAL_TRACE

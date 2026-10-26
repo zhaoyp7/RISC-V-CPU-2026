@@ -367,7 +367,7 @@ struct Harness {
 };
 
 void run_response_bypass(Harness& h) {
-    constexpr bool bypass = !TB_READ_CACHE;
+    constexpr bool bypass = true;
     auto prepare = [&](int count) {
         h.reset(); h.auto_respond = false;
         for (int i = 0; i < count; ++i) {
@@ -587,6 +587,34 @@ void run_read_cache(Harness& h) {
     }
     h.commit(0,false,true);h.expect(h.wait_idle("unknown store completion"),"unknown store final idle");
 
+    // An older load can fill after a younger store's issue-time invalidation.
+    // The later committed drain must still invalidate that old cached word.
+    h.reset();h.write_word(a,7,15);
+    h.expect(h.alloc(0,1,false),"refill-before-drain older load allocate");
+    h.expect(h.alloc(1,2,true),"refill-before-drain partial store allocate");
+    Uop partial=st;partial.mem_size=BYTE;
+    h.expect(h.issue(partial,a,9),"partial store issues before older load returns");
+    h.expect(h.issue(load_uop(0,10),a,0),"older load ignores younger partial store");
+    h.dut->load_result_ready=1;wait_results(1);
+    if(!h.results.empty()) {
+        h.expect(h.results.front()==std::make_pair(10u,7u),"older refill contains old word");
+        h.results.pop_front();
+    }
+    h.commit(0,false,true);h.store_ready=false;h.commit(1,true,false);
+    h.expect(h.alloc(0,1,false),"younger load before partial drain allocate");
+    h.expect(h.issue(load_uop(0,11),a,0),"younger load before partial drain issue");
+    requests=h.accepted_loads.size();h.dut->load_result_ready=1;
+    for(int n=0;n<8;++n)h.tick();
+    h.expect(h.results.empty() && h.accepted_loads.size()==requests,
+             "older partial store blocks resident old cache word");
+    h.store_ready=true;wait_results(1);
+    if(!h.results.empty()) {
+        h.expect(h.results.front()==std::make_pair(11u,9u),"partial drain invalidates later old refill");
+        h.results.pop_front();
+    }
+    h.expect(h.accepted_loads.size()==requests+1,"partial drain requires fresh memory value");
+    h.commit(0,false,true);h.expect(h.wait_idle("refill-before-drain idle"),"partial drain final idle");
+
     // Invalidation cancels an already outstanding cache fill, even if that
     // speculative store is later squashed without changing memory.
     h.reset();h.write_word(a,7,15);h.auto_respond=false;
@@ -628,7 +656,8 @@ void run_read_cache(Harness& h) {
     h.expect(h.issue(st,b,11),"fill-port store issue");h.commit(1,true,false);
     h.expect(h.alloc(0,1,false),"fill-port load allocate");
     h.expect(h.issue(load_uop(0,10),a,0),"fill-port load issue");wait_requests(1);
-    h.auto_respond=true;h.store_ready=true;h.dut->load_result_ready=1;h.tick();
+    h.store_ready=true;h.tick(); // Capture the committed maintenance payload.
+    h.auto_respond=true;h.dut->load_result_ready=1;h.tick();
     wait_results(1);
     if(!h.results.empty()) {
         h.expect(h.results.front()==std::make_pair(10u,7u),"cache write conflict cannot drop load result");
