@@ -29,6 +29,10 @@ module issue_queue_select_top (
   output logic [`IQ_TEST_IW*32-1:0]                   out_seq,
   input  logic [`IQ_TEST_IW-1:0]                      out_ready,
 
+  output logic [`CPU_DISPATCH_W-1:0] memory_uop,
+  output logic [31:0] memory_seq,
+  output logic memory_addr_only,
+
   // status
   output logic [7:0]                         count,
   output logic [7:0]                         free_count
@@ -42,8 +46,12 @@ module issue_queue_select_top (
 `ifndef IQ_TEST_LOAD_HINT
 `define IQ_TEST_LOAD_HINT 0
 `endif
+`ifndef IQ_TEST_CONTROL_HINT
+`define IQ_TEST_CONTROL_HINT 0
+`endif
   issue_queue #(.IW(`IQ_TEST_IW), .LANE1_ALU_ONLY(`IQ_TEST_ALU_ONLY),
-                .LANE1_LOOKAHEAD(`IQ_TEST_LOOKAHEAD)) dut (
+                .LANE1_LOOKAHEAD(`IQ_TEST_LOOKAHEAD),
+                .LANE0_CONTROL_LOOKAHEAD(`IQ_TEST_CONTROL_HINT)) dut (
     .lookahead_valid(`IQ_TEST_LOAD_HINT ? 1'b0 : lookahead_valid),
     .lookahead_tag(lookahead_tag),
     .lookahead_load_valid(`IQ_TEST_LOAD_HINT ? lookahead_valid : 1'b0),

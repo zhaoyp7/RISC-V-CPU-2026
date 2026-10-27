@@ -15,6 +15,9 @@ constexpr int W=TB_W, R=TB_R, D=TB_D, IW=TB_IW, DW=150;
 #ifndef TB_LOOKAHEAD
 #define TB_LOOKAHEAD 0
 #endif
+#ifndef TB_CONTROL_HINT
+#define TB_CONTROL_HINT 0
+#endif
 using Bits=std::array<uint32_t,(DW+31)/32>;
 template<class V> void put(V& v,int off,int width,uint32_t x) {
     for(int b=0;b<width;++b) {
@@ -112,12 +115,28 @@ struct Test {
         std::array<bool,IW> pre{};
         for(int l=0;l<IW;++l)for(int i:order) {
             auto& e=entries[i];bool full=e.r1&&e.r2;
-            if(TB_LOOKAHEAD&&TB_ALU_ONLY&&l==1)
+            if((TB_LOOKAHEAD&&TB_ALU_ONLY&&l==1) ||
+               (TB_CONTROL_HINT&&l==0&&(get(e.bits,113,1)||get(e.bits,115,1))))
                 full=(e.r1||(s.hint&&get(e.bits,128,6)==s.hint_tag))&&
                      (e.r2||(s.hint&&get(e.bits,135,6)==s.hint_tag));
             bool pf=e.r1&&!e.r2&&get(e.bits,117,1)&&!e.addr_sent;
             bool supported=!(TB_ALU_ONLY&&l==1)||lane1_ok(e.bits);
             if(!used[i]&&supported&&(full||(l==0&&pf))) {sel[l]=i;used[i]=true;pre[l]=!full;break;}
+        }
+        int mem=-1;
+        for(int i=0;i<D;i++) {
+            const auto& e=entries[i];
+            bool store=get(e.bits,117,1),load=get(e.bits,116,1);
+            if(e.valid&&(load||store)&&e.r1&&(e.r2||(store&&!e.addr_sent))&&
+               (mem<0||e.seq<entries[mem].seq||(e.seq==entries[mem].seq&&i<mem)))mem=i;
+        }
+        bool mpf=mem>=0&&get(entries[mem].bits,117,1)&&!entries[mem].r2&&!entries[mem].addr_sent;
+        check(bool(d.memory_addr_only)==mpf,"memory prefill ignores hints and squash");
+        if(mem>=0) {
+            check(d.memory_seq==entries[mem].seq,"memory payload oldest registered-ready sequence");
+            bool same=true;
+            for(int bit=0;bit<DW;bit++)same &= get(d.memory_uop,bit,1)==get(entries[mem].bits,bit,1);
+            check(same,"memory payload matches independent registered-ready winner");
         }
         check(d.count==count,"occupied count");check(d.free_count==D-count,"free count");
         bool accept=free_after>=s.n;
@@ -152,6 +171,28 @@ struct Test {
     }
     void run() {
         reset();
+        if(TB_CONTROL_HINT) {
+            for(int kind=0;kind<4;kind++)for(int scenario=0;scenario<8;scenario++) {
+                reset();Stim t;t.n=1;t.base=20;
+                Bits b=uop(false,false,false,11,12);
+                put(b,102,1,1);put(b,103,5,0);
+                for(int off=113;off<=118;off++)put(b,off,1,0);
+                put(b,kind==0?113:kind==1?115:kind==2?116:117,1,1);
+                if(scenario==0||scenario==7)put(b,141,1,1);
+                if(scenario==1)put(b,135,6,11);
+                t.bits[0]=b;step(t);
+                t={};t.wake_valid=1;t.wake_tag=11;t.ready=3;t.hint=true;t.hint_tag=11;
+                if(R>1&&scenario==2){t.wake_valid=3;t.wake_tag|=12<<6;}
+                if(scenario==3)t.ready=0;
+                if(scenario==4){t.squash=true;t.cut=19;}
+                if(scenario==5){t.squash=true;t.cut=20;}
+                if(scenario==7)t.hint=false;
+                step(t);
+                t={};t.wake_valid=1;t.wake_tag=12;t.ready=3;step(t);
+                t={};t.ready=3;step(t);step(t);
+            }
+            reset();
+        }
         if(TB_LOOKAHEAD&&TB_ALU_ONLY&&IW==2) {
             for(int scenario=0;scenario<8;++scenario) {
                 reset();Stim t;t.n=1;t.base=20;

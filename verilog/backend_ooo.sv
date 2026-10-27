@@ -185,8 +185,11 @@ module backend_ooo #(
   logic iq_lookahead_valid;
   logic [PW-1:0] iq_lookahead_tag;
   logic iq_load_lookahead_valid;
+  logic [DW-1:0] memory_issue_uop;
+  logic [31:0] memory_issue_seq;
+  logic memory_issue_addr_only;
 
-  issue_queue #(.W(W), .IW(2), .LANE1_ALU_ONLY(1), .LANE1_LOOKAHEAD(1)) u_iq (
+  issue_queue #(.W(W), .IW(2), .LANE1_ALU_ONLY(1), .LANE1_LOOKAHEAD(1), .LANE0_CONTROL_LOOKAHEAD(1)) u_iq (
     .clk            (clk),
     .reset          (reset),
     .in_valid       (skid_drain ? skid_vmask : '0),
@@ -207,9 +210,20 @@ module backend_ooo #(
     .out_uop        (issue_uop),
     .out_seq        (issue_seq),
     .out_ready      (issue_ready),
+    .memory_uop(memory_issue_uop),.memory_seq(memory_issue_seq),
+    .memory_addr_only(memory_issue_addr_only),
     .count          (iq_count),
     .free_count     (iq_free)
   );
+
+`ifndef SYNTHESIS
+  always_ff @(posedge clk) if(!reset && iq_out_valid[0] && issue_ready[0] &&
+      (issue_uop[`CPU_DISPATCH_IS_LOAD_OFF] || issue_uop[`CPU_DISPATCH_IS_STORE_OFF]))begin
+    if(memory_issue_uop != issue_uop[0+:DW] || memory_issue_seq != issue_seq[0+:32] ||
+       memory_issue_addr_only != iq_out_addr_only[0])
+      $fatal(1,"memory payload differs from accepted IQ winner");
+  end
+`endif
 
   // ---------------------------------------------------------------------------
   // issue uop 字段
@@ -375,8 +389,8 @@ module backend_ooo #(
 
   always_comb begin
     prf_raddr = '0;
-    prf_raddr[0 +: PW]    = i_src1_tag;
-    prf_raddr[PW +: PW]   = i_src2_tag;
+    prf_raddr[0 +: PW]    = memory_issue_uop[`CPU_DISPATCH_SRC1_TAG_OFF+:PW];
+    prf_raddr[PW +: PW]   = memory_issue_uop[`CPU_DISPATCH_SRC2_TAG_OFF+:PW];
     prf_raddr[2*PW +: PW] = p_src1_tag;
     prf_raddr[3*PW +: PW] = p_src2_tag;
     prf_raddr[4*PW +: PW] = a0_src1_tag;
@@ -605,11 +619,11 @@ module backend_ooo #(
     .seq_base             (skid_seq),
     .squash_seq           (squash_seq),
     .issue_valid          (iq_out_valid[0] && issue_ready[0] && i_is_mem),
-    .issue_uop            (issue_uop[DW-1:0]),
-    .issue_seq            (issue_seq[31:0]),
+    .issue_uop            (memory_issue_uop),
+    .issue_seq            (memory_issue_seq),
     .issue_src1           (issue_src1),
     .issue_src2           (issue_src2),
-    .issue_addr_only      (addr_only_issue),
+    .issue_addr_only      (memory_issue_addr_only),
     .issue_ready          (lsu_issue_ready),
     .commit_valid         (cm_valid),
     .commit_is_store      (cm_is_store),

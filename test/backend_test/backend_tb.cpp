@@ -805,6 +805,49 @@ int main(int argc, char** argv) {
                  "uncontended compute follower returns two edges after consumer");
     }
 
+    // A held load writes a previously zero PRF slot. A dependent branch
+    // must use the new word, including two equal hinted sources and JALR LSB.
+    for(int kind=0;kind<5;kind++) {
+        h.auto_respond=true;h.reset();h.auto_respond=false;
+        const uint32_t seed=kind==2?0x80000123u:0x12345u;
+        h.write_word(0x7600,seed,15);
+        Uop producer;producer.dest=40;producer.rob=1;producer.reg_we=1;
+        producer.is_load=1;producer.wb_sel=WB_MEM;producer.imm=0x7600;
+        h.expect(h.dispatch_one(producer),"control hint producer dispatch");
+        for(int n=0;n<32&&h.ld_pending.empty();n++)h.tick();
+        h.expect(h.ld_pending.size()==1,"control hint held load");
+        Uop control;control.pc=0x900;control.dest=41;control.rob=2;
+        control.src1=40;control.src1_ready=0;control.imm=0x20;
+        if(kind==4){control.is_jalr=1;control.reg_we=1;control.wb_sel=WB_PC4;control.imm=6;}
+        else {control.is_branch=1;control.inst=0x63u|((kind==1?1u:kind==2?4u:0u)<<12);}
+        if(kind==3){control.src2=40;control.src2_ready=0;}
+        h.expect(h.dispatch_one(control),"control hint consumer dispatch");
+        for(int n=0;n<8;n++)h.tick();
+        h.expect(!h.br_seen&&h.cdb_q.empty()&&h.complete_q.empty(),"control waits before producer writeback");
+        h.auto_respond=true;int producer_cycle=-1,branch_cycle=-1,branch_count=0,complete_count=0,links=0;
+        for(int n=0;n<24;n++) {
+            h.tick();
+            while(!h.cdb_q.empty()) {
+                auto e=h.cdb_q.front();h.cdb_q.pop_front();
+                if(e.first==40){h.expect(producer_cycle<0&&e.second==seed,"control producer word once");producer_cycle=n;}
+                else {h.expect(kind==4&&e.first==41&&e.second==0x904,"JALR link word");links++;}
+            }
+            if(h.br_seen) {
+                h.expect(h.br_tag_seen==41,"control update tag");
+                h.expect(h.br_taken_seen==unsigned(kind!=0),"control uses new source for direction");
+                const uint32_t target=kind==4?((seed+6)&~1u):0x920u;
+                h.expect(h.br_target_seen==target,"control target and JALR alignment");
+                branch_cycle=n;branch_count++;h.br_seen=false;
+            }
+            while(!h.complete_q.empty()) {
+                h.expect(h.complete_q.front()==41,"control completion tag");
+                h.complete_q.pop_front();complete_count++;
+            }
+        }
+        h.expect(producer_cycle>=0&&branch_cycle>producer_cycle&&branch_count==1,"one branch after producer");
+        h.expect(kind==4?(links==1&&complete_count==0):(links==0&&complete_count==1),"control finishes exactly once");
+    }
+
     printf("\nW=%d checked=%ld fails=%ld\n", W, h.checks, h.fails);
     bool pass = (h.fails == 0);
     printf(pass ? "PASS\n" : "FAIL\n");
