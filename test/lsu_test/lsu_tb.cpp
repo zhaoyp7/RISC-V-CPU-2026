@@ -22,6 +22,9 @@
 #ifndef TB_READ_CACHE
 #define TB_READ_CACHE 0
 #endif
+#ifndef TB_QUERY_CUTTHROUGH
+#define TB_QUERY_CUTTHROUGH 0
+#endif
 #ifndef TB_CACHE_ENQUEUE_BYPASS
 #define TB_CACHE_ENQUEUE_BYPASS 0
 #endif
@@ -517,8 +520,15 @@ void run_read_cache(Harness& h) {
     h.reset();h.write_word(a,7,15);h.auto_respond=false;
     h.expect(h.alloc(0,1,false),"early query load allocate");
     h.expect(h.issue(load_uop(0,10),a,0),"early query load enqueue");
-    h.tick();h.expect(h.accepted_loads.empty(),"early query preserves snapshot edge");
+    h.expect(h.accepted_loads.empty(),"load request waits for registered LSQ snapshot");
+    h.tick();
+#if TB_QUERY_CUTTHROUGH
+    h.expect(h.accepted_loads.size()==1,"empty query stage forwards enqueue into snapshot");
+    h.tick();h.expect(h.accepted_loads.size()==1,"direct query is not also retained as duplicate owner");
+#else
+    h.expect(h.accepted_loads.empty(),"early query preserves snapshot edge");
     h.tick();h.expect(h.accepted_loads.size()==1,"idle query captures enqueue without LP wait");
+#endif
     h.auto_respond=true;h.dut->load_result_ready=1;wait_results(1);
     if(!h.results.empty()) {
         h.expect(h.results.front()==std::make_pair(10u,7u),"early query tagged response");

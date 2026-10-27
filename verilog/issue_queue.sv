@@ -36,6 +36,8 @@ module issue_queue #(
   // 不用于持久ready或lane0/访存选择；实际CDB仍负责状态更新。
   input  logic                               lookahead_valid,
   input  logic [`CPU_PRF_IDX_W-1:0]           lookahead_tag,
+  input  logic                               lookahead_load_valid,
+  input  logic [`CPU_PRF_IDX_W-1:0]           lookahead_load_tag,
 
   // dispatch sequence: lane i is seq_base + i
   input  logic [31:0]                        seq_base,
@@ -265,8 +267,10 @@ module issue_queue #(
           for (genvar g = 0; g < D; g = g + 1) begin : gen_ready
             if (LANE1_LOOKAHEAD) begin : gen_hint
               assign ready_for_lane1[g] = valid[g] &&
-                  (src1_ready[g] || (lookahead_valid && src1_tag[g*PW +: PW] == lookahead_tag)) &&
-                  (src2_ready[g] || (lookahead_valid && src2_tag[g*PW +: PW] == lookahead_tag));
+                  (src1_ready[g] || (lookahead_valid && src1_tag[g*PW +: PW] == lookahead_tag) ||
+                   (lookahead_load_valid && src1_tag[g*PW +: PW] == lookahead_load_tag)) &&
+                  (src2_ready[g] || (lookahead_valid && src2_tag[g*PW +: PW] == lookahead_tag) ||
+                   (lookahead_load_valid && src2_tag[g*PW +: PW] == lookahead_load_tag));
             end else begin : gen_registered
               assign ready_for_lane1[g] = cand_issue[g];
             end

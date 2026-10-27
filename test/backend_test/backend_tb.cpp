@@ -753,7 +753,7 @@ int main(int argc, char** argv) {
     }
 
     // A load wakes an ordinary ALU while no registered-ready candidate is
-    // available. The restored registered-wake pipeline must read new PRF data.
+    // available. The guaranteed load hint must read new PRF data after the write edge.
     for(int both=0;both<2;++both) {
         h.auto_respond=true;h.reset();h.auto_respond=false;
         const uint32_t seed=0x12345678;
@@ -799,8 +799,8 @@ int main(int argc, char** argv) {
                 }
             }
         }
-        h.expect(producer_cycle>=0&&consumer_cycle==producer_cycle+3,
-                 "registered-wake consumer returns three edges after producer");
+        h.expect(producer_cycle>=0&&consumer_cycle==producer_cycle+2,
+                 "load-hinted consumer returns two edges after producer");
         h.expect(follower_cycle==consumer_cycle+2,
                  "uncontended compute follower returns two edges after consumer");
     }

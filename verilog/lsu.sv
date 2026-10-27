@@ -15,7 +15,8 @@
 
 module lsu #(
   parameter integer W         = `CPU_ISSUE_WIDTH,
-  parameter integer LDQ_DEPTH = 8
+  parameter integer LDQ_DEPTH = 8,
+  parameter integer QUERY_CUTTHROUGH = `CPU_DCACHE_ENABLE
 ) (
   input  logic clk,
   input  logic reset,
@@ -240,7 +241,7 @@ module lsu #(
 
   assign q_squashed = q_valid && squash_valid && (q_seq > squash_seq);
   assign q_active = q_valid && !q_squashed;
-  assign query_send = q_active && lsq_query_ready;
+  assign query_send = query_input_valid && lsq_query_ready;
   assign r_squashed = r_valid && squash_valid && (r_seq > squash_seq);
   assign r_active = r_valid && !r_squashed && lsq_query_resp_valid;
 
@@ -257,8 +258,7 @@ module lsu #(
       if (g < LP_DEPTH) begin : gen_entry
         assign lp_tree_valid[LP_LEAVES+g] = lp_valid[g] &&
             !(q_valid && (q_id == LW'(g))) &&
-            !(r_valid && (r_id == LW'(g))) &&
-            !(squash_valid && (lp_seq[g*32 +: 32] > squash_seq));
+            !(r_valid && (r_id == LW'(g)));
         assign lp_tree_seq[LP_LEAVES+g] = lp_seq[g*32 +: 32];
         assign lp_tree_id[LP_LEAVES+g] = LW'(g);
       end else begin : gen_pad
@@ -276,9 +276,36 @@ module lsu #(
       assign lp_tree_id[g] = take_right ? lp_tree_id[2*g+1] : lp_tree_id[2*g];
     end
   endgenerate
-  assign lp_select_valid = lp_tree_valid[1];
+  wire lp_raw_select_valid = lp_tree_valid[1];
+  // If the oldest eligible owner is younger than the squash, every remaining
+  // owner is too. Keep cancellation off the age tree and payload mux.
+  assign lp_select_valid = lp_raw_select_valid &&
+      !(squash_valid && (lp_tree_seq[1] > squash_seq));
   assign lp_select_id = lp_tree_valid[1] ? lp_tree_id[1] : '0;
   assign lp_best_seq = lp_tree_valid[1] ? lp_tree_seq[1] : 32'hffff_ffff;
+
+  // Empty query stage may present a selected LP owner immediately. If the
+  // LSQ snapshot stalls, capture it in q exactly as before; accepted direct
+  // queries enter r once and must never also leave a duplicate q owner.
+  wire direct_query = QUERY_CUTTHROUGH && !q_valid;
+  wire candidate_valid = lp_select_valid || (`CPU_DCACHE_ENABLE && load_enqueue);
+  wire direct_candidate_valid = lp_raw_select_valid ? lp_select_valid :
+                                  (`CPU_DCACHE_ENABLE && load_enqueue);
+  wire query_input_valid = q_active || (direct_query && direct_candidate_valid);
+  wire [LW-1:0] candidate_id = lp_raw_select_valid ? lp_select_id : issue_lsq;
+  wire [31:0] candidate_addr = lp_raw_select_valid ? lp_addr[lp_select_id*32 +: 32] : issue_addr;
+  wire [31:0] candidate_seq = lp_raw_select_valid ? lp_best_seq : issue_seq;
+  wire [PW-1:0] candidate_tag = lp_raw_select_valid ? lp_tag[lp_select_id*PW +: PW] : issue_dest;
+  wire [1:0] candidate_size = lp_raw_select_valid ? lp_size[lp_select_id*2 +: 2] : issue_mem_size;
+  wire candidate_unsigned = lp_raw_select_valid ? lp_unsigned[lp_select_id] : issue_mem_unsigned;
+  wire candidate_illegal = lp_raw_select_valid ? lp_illegal[lp_select_id] : issue_illegal;
+  wire [LW-1:0] query_id = q_valid ? q_id : candidate_id;
+  wire [31:0] query_addr = q_valid ? q_addr : candidate_addr;
+  wire [31:0] query_seq = q_valid ? q_seq : candidate_seq;
+  wire [PW-1:0] query_tag = q_valid ? q_tag : candidate_tag;
+  wire [1:0] query_size = q_valid ? q_size : candidate_size;
+  wire query_unsigned = q_valid ? q_unsigned : candidate_unsigned;
+  wire query_illegal = q_valid ? q_illegal : candidate_illegal;
 
   // ---- LSQ 查询 -----------------------------------------------------------
   logic lsq_query_blocked;
@@ -402,9 +429,9 @@ module lsu #(
     .drain_wstrb     (drain_wstrb),
     .drain_fire      (drain_fire),
     .store_resp_valid(st_resp_valid),
-    .query_valid     (q_active),
-    .query_seq       (q_seq),
-    .query_addr      (q_addr),
+    .query_valid     (query_input_valid),
+    .query_seq       (query_seq),
+    .query_addr      (query_addr),
     .query_ready     (lsq_query_ready),
     .query_resp_valid(lsq_query_resp_valid),
     .query_resp_ready(r_accept),
@@ -444,7 +471,7 @@ module lsu #(
                                 ((rq_count != 0) && !rq_discard[rq_head] &&
                                  !(squash_valid &&
                                    (rq_seq[rq_head*32 +: 32] > squash_seq)));
-  assign load_result_tag       = response_bypass_valid ? md_tag[md_head*PW +: PW]
+  assign load_result_tag       = (rq_count == 0) ?  md_tag[md_head*PW +: PW]
                                                      : rq_tag[rq_head*PW +: PW];
   assign load_result_value     = response_bypass_valid ?
                                   format_load(ld_resp_rdata, md_size[md_head*2 +: 2],
@@ -505,16 +532,16 @@ module lsu #(
       // 消费/flush 旧快照与捕获新请求可同拍发生，新请求优先。
       if (query_send) begin
         r_valid <= 1'b1;
-        r_id <= q_id;
-        r_addr <= q_addr;
-        r_seq <= q_seq;
-        r_tag <= q_tag;
-        r_size <= q_size;
-        r_unsigned <= q_unsigned;
-        r_illegal <= q_illegal;
+        r_id <= query_id;
+        r_addr <= query_addr;
+        r_seq <= query_seq;
+        r_tag <= query_tag;
+        r_size <= query_size;
+        r_unsigned <= query_unsigned;
+        r_illegal <= query_illegal;
       end
       if (q_accept) begin
-        q_valid <= lp_select_valid || (`CPU_DCACHE_ENABLE && load_enqueue);
+        q_valid <= candidate_valid && !(direct_query && query_send);
         if (lp_select_valid) begin
           q_id <= lp_select_id;
           q_addr <= lp_addr[lp_select_id*32 +: 32];

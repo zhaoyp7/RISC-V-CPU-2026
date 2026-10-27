@@ -8,4 +8,4 @@ sh "$root/test/lsu_test/run.sh" \
     --define CPU_DCACHE_ENABLE=1 --define CPU_DCACHE_INDEX_BITS=3 \
     --define CPU_DCACHE_WAYS=2 --define CPU_DCACHE_LINE_BYTES=4 \
     --cxx-define TB_READ_CACHE=1 --cxx-define TB_DCACHE_INDEX_BITS=3 \
-    --cxx-define TB_DCACHE_WAYS=2 --cxx-define TB_CACHE_ENQUEUE_BYPASS=1 "$@"
+    --cxx-define TB_DCACHE_WAYS=2 --cxx-define TB_CACHE_ENQUEUE_BYPASS=1 --cxx-define TB_QUERY_CUTTHROUGH=1 "$@"

@@ -39,6 +39,13 @@ module issue_queue_select_top (
 `ifndef IQ_TEST_LOOKAHEAD
 `define IQ_TEST_LOOKAHEAD 0
 `endif
+`ifndef IQ_TEST_LOAD_HINT
+`define IQ_TEST_LOAD_HINT 0
+`endif
   issue_queue #(.IW(`IQ_TEST_IW), .LANE1_ALU_ONLY(`IQ_TEST_ALU_ONLY),
-                .LANE1_LOOKAHEAD(`IQ_TEST_LOOKAHEAD)) dut (.*);
+                .LANE1_LOOKAHEAD(`IQ_TEST_LOOKAHEAD)) dut (
+    .lookahead_valid(`IQ_TEST_LOAD_HINT ? 1'b0 : lookahead_valid),
+    .lookahead_tag(lookahead_tag),
+    .lookahead_load_valid(`IQ_TEST_LOAD_HINT ? lookahead_valid : 1'b0),
+    .lookahead_load_tag(lookahead_tag), .*);
 endmodule

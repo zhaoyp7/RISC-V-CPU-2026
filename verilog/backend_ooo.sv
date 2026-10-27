@@ -184,6 +184,7 @@ module backend_ooo #(
   logic [7:0]  iq_count, iq_free;
   logic iq_lookahead_valid;
   logic [PW-1:0] iq_lookahead_tag;
+  logic iq_load_lookahead_valid;
 
   issue_queue #(.W(W), .IW(2), .LANE1_ALU_ONLY(1), .LANE1_LOOKAHEAD(1)) u_iq (
     .clk            (clk),
@@ -196,6 +197,8 @@ module backend_ooo #(
     .wake_tag       (cdb_wake_tag),
     .lookahead_valid(iq_lookahead_valid),
     .lookahead_tag  (iq_lookahead_tag),
+    .lookahead_load_valid(iq_load_lookahead_valid),
+    .lookahead_load_tag(lsu_load_tag),
     .seq_base       (skid_seq),
     .squash_valid   (sq_valid),
     .squash_seq     (squash_seq),
@@ -678,6 +681,16 @@ module backend_ooo #(
   // compute producer is also guaranteed alongside at most one LSU result.
   // The hint reads registered producers, without LSU/arbiter feedback.
   wire [2:0] compute_pending = {div_valid_q, alu1_valid_q, alu_valid_q};
+  // At most one registered compute result plus one LSU result fits R>=2.
+  // This guarantee uses no arbiter ready or new lane1 selection feedback.
+  assign iq_load_lookahead_valid = (R >= 2) && lsu_load_valid &&
+      (compute_pending == 0 || compute_pending == 1 ||
+       compute_pending == 2 || compute_pending == 4);
+`ifndef SYNTHESIS
+  always_ff @(posedge clk) if (!reset && iq_load_lookahead_valid && !cdb_src_ready[2])
+    $fatal(1,"load lookahead without guaranteed CDB writeback");
+`endif
+
   assign iq_lookahead_valid = (R >= 2) &&
       (alu_valid_q || (compute_pending == 3'b010) ||
        (compute_pending == 3'b100));
