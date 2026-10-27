@@ -14,7 +14,8 @@
 
 module frontend_ooo #(
   parameter integer W      = `CPU_ISSUE_WIDTH,
-  parameter integer FDEPTH = 8
+  parameter integer FDEPTH = 8,
+  parameter integer WORD_BANKING = 0
 ) (
   input  logic        clk,
   input  logic        reset,
@@ -107,7 +108,7 @@ module frontend_ooo #(
   );
 
   // ---- 请求 FIFO（预测/配对信息） ----------------------------------------
-  logic [RDEPTH-1:0]   rq_use2, rq_p0t, rq_p1t;
+  logic [RDEPTH-1:0]   rq_use2, rq_p0t, rq_p1t, rq_first_bank;
   logic [RDEPTH*32-1:0] rq_p0tg, rq_p1tg;
   logic [RFW-1:0]      rq_head, rq_tail;
   logic [RCW-1:0]      rq_count;
@@ -128,13 +129,21 @@ module frontend_ooo #(
   logic [1:0] resp_head, resp_tail;
   logic [1:0] resp_count [0:1];
   logic [63:0] resp_pc_q [0:1], resp_inst_q [0:1];
-  assign resp_pop = {resp_accept1, resp_accept0};
-  assign resp0_valid = (resp_count[0] != 0) || cache_resp_valid[0];
-  assign resp1_valid = (resp_count[1] != 0) || cache_resp_valid[1];
-  assign resp0_pc = (resp_count[0] != 0) ? resp_pc_q[0][resp_head[0]*32 +: 32] : cache_resp_pc[0];
-  assign resp1_pc = (resp_count[1] != 0) ? resp_pc_q[1][resp_head[1]*32 +: 32] : cache_resp_pc[1];
-  assign resp0_inst = (resp_count[0] != 0) ? resp_inst_q[0][resp_head[0]*32 +: 32] : cache_resp_inst[0];
-  assign resp1_inst = (resp_count[1] != 0) ? resp_inst_q[1][resp_head[1]*32 +: 32] : cache_resp_inst[1];
+  wire first_bank = WORD_BANKING && rq_first_bank[rq_head];
+  assign resp_pop = first_bank ? {resp_accept0,resp_accept1} : {resp_accept1,resp_accept0};
+  wire [1:0] bank_resp_valid;
+  wire [31:0] bank_resp_pc [0:1], bank_resp_inst [0:1];
+  for(genvar rb=0;rb<2;rb=rb+1)begin : gen_order_response
+    assign bank_resp_valid[rb] = (resp_count[rb]!=0) || cache_resp_valid[rb];
+    assign bank_resp_pc[rb] = (resp_count[rb]!=0) ? resp_pc_q[rb][resp_head[rb]*32+:32] : cache_resp_pc[rb];
+    assign bank_resp_inst[rb] = (resp_count[rb]!=0) ? resp_inst_q[rb][resp_head[rb]*32+:32] : cache_resp_inst[rb];
+  end
+  assign resp0_valid = bank_resp_valid[first_bank];
+  assign resp1_valid = bank_resp_valid[!first_bank];
+  assign resp0_pc = bank_resp_pc[first_bank];
+  assign resp1_pc = bank_resp_pc[!first_bank];
+  assign resp0_inst = bank_resp_inst[first_bank];
+  assign resp1_inst = bank_resp_inst[!first_bank];
   generate
     for (genvar bank = 0; bank < 2; bank = bank + 1) begin : gen_resp_queue
       assign cache_resp_ready[bank] = (resp_count[bank] < 2);
@@ -198,7 +207,8 @@ module frontend_ooo #(
   // Existing request/cache credits bound prefetch while dispatch is stalled.
   // Rename and ROB acceptance still control the actual decoded-uop pop.
   assign fetch_fire = !redirect_valid && fq_space_fetch &&
-                      fetch_ready0 && (!use2 || fetch_ready1);
+                      (WORD_BANKING && pc_q[2] ? fetch_ready1 && (!use2 || fetch_ready0) :
+                                                fetch_ready0 && (!use2 || fetch_ready1));
   // Present speculative decode inputs through redirect; flush dominates every
   // local state update and ROB/rename readiness rejects architectural dispatch.
   assign resp_accept0 = resp0_valid && (rq_count != 0) && fq_space_resp &&
@@ -226,14 +236,15 @@ module frontend_ooo #(
   // ---- I-Cache 0 / 1 -----------------------------------------------------
   icache_pipe #(
     .INDEX_BITS (`CPU_ICACHE_INDEX_BITS),
-    .MASK_RESPONSE_ON_FLUSH (0)
+    .MASK_RESPONSE_ON_FLUSH (0),
+    .BANKED_WORD (WORD_BANKING)
   ) u_icache0 (
     .clk               (clk),
     .reset             (reset),
     .flush             (redirect_valid),
     .discard           (1'b0),
-    .fetch_valid       (fetch_fire),
-    .fetch_pc          (pc_q),
+    .fetch_valid       (fetch_fire && (!WORD_BANKING || !pc_q[2] || use2)),
+    .fetch_pc          (WORD_BANKING && pc_q[2] ? pc1 : pc_q),
     .fetch_ready       (fetch_ready0),
     .fetch_resp_valid  (cache_resp_valid[0]),
     .fetch_resp_pc     (cache_resp_pc[0]),
@@ -247,14 +258,15 @@ module frontend_ooo #(
 
   icache_pipe #(
     .INDEX_BITS (`CPU_ICACHE_INDEX_BITS),
-    .MASK_RESPONSE_ON_FLUSH (0)
+    .MASK_RESPONSE_ON_FLUSH (0),
+    .BANKED_WORD (WORD_BANKING)
   ) u_icache1 (
     .clk               (clk),
     .reset             (reset),
     .flush             (redirect_valid),
     .discard           (1'b0),
-    .fetch_valid       (fetch_fire && use2),
-    .fetch_pc          (pc1),
+    .fetch_valid       (fetch_fire && ((WORD_BANKING && pc_q[2]) || use2)),
+    .fetch_pc          (WORD_BANKING && pc_q[2] ? pc_q : pc1),
     .fetch_ready       (fetch_ready1),
     .fetch_resp_valid  (cache_resp_valid[1]),
     .fetch_resp_pc     (cache_resp_pc[1]),
@@ -414,6 +426,7 @@ module frontend_ooo #(
     end else begin
       if (fetch_fire) begin
         rq_use2[rq_tail]            <= use2;
+        rq_first_bank[rq_tail]      <= WORD_BANKING && pc_q[2];
         rq_p0t[rq_tail]             <= p0_taken;
         rq_p0tg[rq_tail*32 +: 32]   <= p0_target;
         rq_p1t[rq_tail]             <= p1_taken;

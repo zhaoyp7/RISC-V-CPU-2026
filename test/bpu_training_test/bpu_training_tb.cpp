@@ -1,5 +1,10 @@
 // Observe training latency and prediction snapshots through frontend ports only.
+#ifdef TB_WORD_BANKING
+#include "Vfrontend_banked_top.h"
+using Vfrontend_ooo=Vfrontend_banked_top;
+#else
 #include "Vfrontend_ooo.h"
+#endif
 #include "verilated.h"
 #include <cstdint>
 #include <cstdio>
@@ -27,6 +32,9 @@ struct Harness {
         for(int ch=0;ch<2;++ch) {
             bool valid=ch?d.refill_valid1:d.refill_valid;
             uint32_t addr=ch?d.refill_addr1:d.refill_addr;
+#ifdef TB_WORD_BANKING
+            if(valid)check(((addr>>2)&1u)==unsigned(ch),"physical instruction bank parity");
+#endif
             auto& m=mem[ch];
             if(m.pending && (!valid || addr!=m.addr)) {
                 check(d.redirect_valid || !valid,"refill address stable");m.pending=false;
