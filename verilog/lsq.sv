@@ -143,9 +143,15 @@ module lsq #(
   wire drain_tree_valid [0:2*QLEAVES-1] /* verilator split_var */;
   wire [31:0] drain_tree_seq [0:2*QLEAVES-1] /* verilator split_var */;
   wire [LW-1:0] drain_tree_id [0:2*QLEAVES-1] /* verilator split_var */;
+  wire [31:0] drain_tree_addr [0:2*QLEAVES-1] /* verilator split_var */;
+  wire [31:0] drain_tree_wdata [0:2*QLEAVES-1] /* verilator split_var */;
+  wire [3:0] drain_tree_wstrb [0:2*QLEAVES-1] /* verilator split_var */;
   assign drain_tree_valid[0] = 1'b0;
   assign drain_tree_seq[0] = '0;
   assign drain_tree_id[0] = '0;
+  assign drain_tree_addr[0] = '0;
+  assign drain_tree_wdata[0] = '0;
+  assign drain_tree_wstrb[0] = '0;
   generate
     for (genvar g = 0; g < QLEAVES; g = g + 1) begin : gen_drain_leaf
       if (g < D) begin : gen_entry
@@ -153,10 +159,16 @@ module lsq #(
                                             committed[g] && !sent[g];
         assign drain_tree_seq[QLEAVES+g] = seq[g*32 +: 32];
         assign drain_tree_id[QLEAVES+g] = LW'(g);
+        assign drain_tree_addr[QLEAVES+g] = addr[g*32 +: 32];
+        assign drain_tree_wdata[QLEAVES+g] = wdata[g*32 +: 32];
+        assign drain_tree_wstrb[QLEAVES+g] = wstrb[g*4 +: 4];
       end else begin : gen_pad
         assign drain_tree_valid[QLEAVES+g] = 1'b0;
         assign drain_tree_seq[QLEAVES+g] = '0;
         assign drain_tree_id[QLEAVES+g] = '0;
+        assign drain_tree_addr[QLEAVES+g] = '0;
+        assign drain_tree_wdata[QLEAVES+g] = '0;
+        assign drain_tree_wstrb[QLEAVES+g] = '0;
       end
     end
     for (genvar g = 1; g < QLEAVES; g = g + 1) begin : gen_drain_merge
@@ -166,13 +178,16 @@ module lsq #(
       assign drain_tree_valid[g] = drain_tree_valid[2*g] || drain_tree_valid[2*g+1];
       assign drain_tree_seq[g] = take_right ? drain_tree_seq[2*g+1] : drain_tree_seq[2*g];
       assign drain_tree_id[g] = take_right ? drain_tree_id[2*g+1] : drain_tree_id[2*g];
+      assign drain_tree_addr[g] = take_right ? drain_tree_addr[2*g+1] : drain_tree_addr[2*g];
+      assign drain_tree_wdata[g] = take_right ? drain_tree_wdata[2*g+1] : drain_tree_wdata[2*g];
+      assign drain_tree_wstrb[g] = take_right ? drain_tree_wstrb[2*g+1] : drain_tree_wstrb[2*g];
     end
   endgenerate
   assign drain_valid = drain_tree_valid[1];
   assign drain_id = drain_valid ? drain_tree_id[1] : '0;
-  assign drain_addr = drain_valid ? addr[drain_tree_id[1]*32 +: 32] : '0;
-  assign drain_wdata = drain_valid ? wdata[drain_tree_id[1]*32 +: 32] : '0;
-  assign drain_wstrb = drain_valid ? wstrb[drain_tree_id[1]*4 +: 4] : '0;
+  assign drain_addr = drain_valid ? drain_tree_addr[1] : '0;
+  assign drain_wdata = drain_valid ? drain_tree_wdata[1] : '0;
+  assign drain_wstrb = drain_valid ? drain_tree_wstrb[1] : '0;
 
   // ---- query stage 1: independent comparisons and a coherent snapshot ------
   // 不只保存 slot id：store 可在下一拍释放并复用。候选的 seq/data/full
