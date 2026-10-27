@@ -473,7 +473,10 @@ module load_line_cache #(
   wire lookup_hit = r_cached &&
       ((line_valid[r_index] && line_tag[r_index] == r_tag) ||
        (match_valid && m_words[match_slot][r_word]));
-  wire bank_available = !refill_write && !store_pending;
+  // Each word offset owns a separate single-port SRAM. Only writes to the
+  // requested bank conflict with a hit read; other banks can run in parallel.
+  wire bank_available = !(refill_write && return_word == r_word) &&
+                        !(store_pending && store_addr_q[4:2] == r_word);
   wire can_allocate = free_valid && (!r_cached || !row_busy);
   assign req_ready = !reset && q_count < (QW+1)'(QDEPTH) &&
       (arriving_word || (lookup_hit ? bank_available : (match_valid || can_allocate)));

@@ -95,6 +95,25 @@ int main(int argc,char**argv){
   b.store(a,0xfedcba98u-i,15);while(!b.bs.empty())b.tick();
   b.load(a);b.drain();
  }
+ // Exhaust all bank pairs. A refill or queued store only owns its word bank;
+ // concurrent reads to every other bank must keep their payload and ordering.
+ for(unsigned writer=0;writer<8;writer++)for(unsigned reader=0;reader<8;reader++){
+  Bench banks;banks.stalls=false;banks.latency=12;banks.reset();
+  banks.load(0x1000);banks.drain();
+  banks.load(0x2020+writer*4);
+  while(banks.rd.empty()||banks.rd.front().due>banks.cycle)banks.tick();
+  bool accepted=banks.tick(true,0x1000+reader*4);
+  if(accepted!=(writer!=reader))banks.fail("refill bank conflict admission",reader,accepted,writer!=reader);
+  if(!accepted)banks.load(0x1000+reader*4);
+  banks.drain();
+  banks.store(0x1000+writer*4,0x12340000+writer,5);
+  accepted=banks.tick(true,0x1000+reader*4);
+  if(accepted!=(writer!=reader))banks.fail("store bank conflict admission",reader,accepted,writer!=reader);
+  if(!accepted)banks.load(0x1000+reader*4);
+  banks.drain();
+  banks.load(0x1000+writer*4);banks.drain();
+  b.checks+=banks.checks+2;
+ }
  // Randomized streams against a separate byte-mask memory reference.
  for(unsigned round=0;round<300;round++){
   for(unsigned n=0;n<40;n++)b.load(0x10000+(b.rng()%2048)*4);
