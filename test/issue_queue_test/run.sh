@@ -32,6 +32,7 @@ run_select() {
     lookahead=${6:-0}
     load_hint=${7:-0}
     control_hint=${8:-0}
+    retire_prefill=${9:-0}
     python3 "$root/tools/unit/build.py" \
         --top issue_queue_select_top \
         --tb "$here/issue_queue_select_tb.cpp" \
@@ -44,11 +45,12 @@ run_select() {
         --define "IQ_TEST_LOOKAHEAD=$lookahead" \
         --define "IQ_TEST_LOAD_HINT=$load_hint" \
         --define "IQ_TEST_CONTROL_HINT=$control_hint" \
+        --define "IQ_TEST_RETIRE_PREFILL=$retire_prefill" \
         --define CPU_LSQ_DEPTH=8 --define CPU_PRF_SIZE=64 --define CPU_ROB_DEPTH=32 \
         --cxx-define "TB_W=$w" --cxx-define "TB_R=$r" \
         --cxx-define "TB_D=$depth" --cxx-define "TB_IW=$iw" \
         --cxx-define "TB_ALU_ONLY=$alu_only" --cxx-define "TB_LOOKAHEAD=$lookahead" \
-        --cxx-define "TB_CONTROL_HINT=$control_hint"
+        --cxx-define "TB_CONTROL_HINT=$control_hint" --cxx-define "TB_RETIRE_PREFILL=$retire_prefill"
 }
 
 run_select 2 2 8 1
@@ -74,3 +76,9 @@ run_select 2 2 8 2 1 1 0 1
 run_select 2 2 16 2 1 1 0 1
 run_select 2 2 8 2 1 1 1 1
 run_select 2 2 16 2 1 1 1 1
+
+# Address-only stores can transfer their data wait into the LSQ.
+run_select 2 2 8 2 1 1 0 1 1
+run_select 2 2 16 2 1 1 0 1 1
+run_select 2 2 8 2 1 1 1 1 1
+run_select 2 2 16 2 1 1 1 1 1

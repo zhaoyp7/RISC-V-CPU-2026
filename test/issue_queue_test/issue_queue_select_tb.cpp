@@ -18,6 +18,9 @@ constexpr int W=TB_W, R=TB_R, D=TB_D, IW=TB_IW, DW=150;
 #ifndef TB_CONTROL_HINT
 #define TB_CONTROL_HINT 0
 #endif
+#ifndef TB_RETIRE_PREFILL
+#define TB_RETIRE_PREFILL 0
+#endif
 using Bits=std::array<uint32_t,(DW+31)/32>;
 template<class V> void put(V& v,int off,int width,uint32_t x) {
     for(int b=0;b<width;++b) {
@@ -160,7 +163,7 @@ struct Test {
             else if(e.valid) {e.r1|=hit(s,get(e.bits,128,6));e.r2|=hit(s,get(e.bits,135,6));}
         }
         for(int l=0;l<IW;++l)if(sel[l]>=0&&(s.ready>>l&1)) {
-            auto& e=entries[sel[l]];if(pre[l])e.addr_sent=true;else e.valid=false;
+            auto& e=entries[sel[l]];if(pre[l]&&!TB_RETIRE_PREFILL)e.addr_sent=true;else e.valid=false;
         }
         if(accept)for(int l=0;l<s.n;++l) {
             auto& e=entries[slots[l]];e={};e.valid=true;e.seq=s.base+l;e.bits=s.bits[l];

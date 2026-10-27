@@ -16,7 +16,9 @@
 module lsu #(
   parameter integer W         = `CPU_ISSUE_WIDTH,
   parameter integer LDQ_DEPTH = 8,
-  parameter integer QUERY_CUTTHROUGH = `CPU_DCACHE_ENABLE
+  parameter integer QUERY_CUTTHROUGH = `CPU_DCACHE_ENABLE,
+  parameter integer STORE_DATA_CAPTURE = 0,
+  parameter integer ORDERED_STORE_COMMIT = 0
 ) (
   input  logic clk,
   input  logic reset,
@@ -56,6 +58,8 @@ module lsu #(
   output logic [31:0]                  load_result_value,
   output logic                         load_result_exception,
   input  logic                         load_result_ready,
+
+  input logic [`CPU_CDB_BUS_W-1:0] store_cdb,
 
   // store complete (goes to complete bus)
   output logic                         store_complete_valid,
@@ -353,6 +357,7 @@ module lsu #(
   end
 
   logic load_issue, store_issue, store_addr_issue;
+  wire store_accept = store_issue || (STORE_DATA_CAPTURE && store_addr_issue);
   logic load_miss, load_local_result;
   assign load_issue       = r_active && query_ready;
   assign load_miss        = load_issue && !r_illegal && !ld_fwd && !dc_hit;
@@ -385,7 +390,7 @@ module lsu #(
   logic [3:0]  drain_wstrb;
   logic        drain_fire;
 
-  assign st_inv_valid = store_issue;
+  assign st_inv_valid = store_accept;
   assign st_inv_addr  = issue_addr;
 
   assign st_req_valid = drain_valid;
@@ -397,7 +402,7 @@ module lsu #(
   // ---- LSQ ----------------------------------------------------------------
   logic [7:0] lsq_count;
 
-  lsq #(.W(W)) u_lsq (
+  lsq #(.W(W), .STORE_DATA_CAPTURE(STORE_DATA_CAPTURE), .ORDERED_STORE_COMMIT(ORDERED_STORE_COMMIT)) u_lsq (
     .clk             (clk),
     .reset           (reset),
     .alloc_valid     (alloc_valid),
@@ -417,6 +422,9 @@ module lsu #(
     .prefill_valid   (prefill_valid),
     .prefill_id      (prefill_id),
     .prefill_addr    (prefill_addr),
+    .prefill_data_tag(issue_uop[`CPU_DISPATCH_SRC2_TAG_OFF+:PW]),
+    .prefill_wstrb(issue_illegal ? 4'b0 : issue_wstrb),
+    .store_cdb(store_cdb),
     .commit_valid    (commit_valid),
     .commit_is_store (commit_is_store),
     .commit_is_load  (commit_is_load),
@@ -654,7 +662,7 @@ module lsu #(
                              (rq_pop  ? 1'b1 : 1'b0);
 
       // ---- store complete -------------------------------------------------
-      if (store_issue) begin
+      if (store_accept) begin
         store_complete_valid_q <= !(squash_valid && (issue_seq > squash_seq));
         store_complete_tag_q   <= issue_dest;
         store_complete_exc_q   <= issue_illegal;
@@ -683,7 +691,7 @@ module lsu #(
     wire [25:0] r_word = r_addr[27:2];
     wire [CB-1:0] r_set = r_word[CB-1:0];
     wire [CT-1:0] r_tag = r_word[25:CB];
-    wire store_inv = store_issue && (issue_addr[31:28] == 0);
+    wire store_inv = store_accept && (issue_addr[31:28] == 0);
     // Store drain selection is late. Capture its cache-maintenance payload
     // before comparing cache tags or selecting the cache data write port.
     // The LSQ retains the store until its later response, so younger loads

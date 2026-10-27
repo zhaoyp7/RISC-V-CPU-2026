@@ -11,7 +11,9 @@
 // -----------------------------------------------------------------------------
 
 module backend_ooo #(
-  parameter integer W = `CPU_ISSUE_WIDTH
+  parameter integer W = `CPU_ISSUE_WIDTH,
+  parameter integer STORE_DATA_CAPTURE = 0,
+  parameter integer ORDERED_STORE_COMMIT = 0
 ) (
   input  logic clk,
   input  logic reset,
@@ -189,7 +191,7 @@ module backend_ooo #(
   logic [31:0] memory_issue_seq;
   logic memory_issue_addr_only;
 
-  issue_queue #(.W(W), .IW(2), .LANE1_ALU_ONLY(1), .LANE1_LOOKAHEAD(1), .LANE0_CONTROL_LOOKAHEAD(1)) u_iq (
+  issue_queue #(.W(W), .IW(2), .LANE1_ALU_ONLY(1), .LANE1_LOOKAHEAD(1), .LANE0_CONTROL_LOOKAHEAD(1), .RETIRE_STORE_PREFILL(STORE_DATA_CAPTURE)) u_iq (
     .clk            (clk),
     .reset          (reset),
     .in_valid       (skid_drain ? skid_vmask : '0),
@@ -606,7 +608,7 @@ module backend_ooo #(
   logic        lsu_alloc_ready;
   logic        lsu_busy;
 
-  lsu #(.W(W)) u_lsu (
+  lsu #(.W(W), .STORE_DATA_CAPTURE(STORE_DATA_CAPTURE), .ORDERED_STORE_COMMIT(ORDERED_STORE_COMMIT)) u_lsu (
     .clk                  (clk),
     .reset                (reset),
     .alloc_valid          (skid_valid ?
@@ -636,6 +638,7 @@ module backend_ooo #(
     .load_result_value    (lsu_load_value),
     .load_result_exception(lsu_load_exc),
     .load_result_ready    (cdb_src_ready[2]),
+    .store_cdb(cdb_out),
     .store_complete_valid (lsu_store_valid),
     .store_complete_tag   (lsu_store_tag),
     .store_complete_exception (lsu_store_exc),
@@ -662,7 +665,7 @@ module backend_ooo #(
   // address-only store 不产生 complete，不占用 complete FIFO。
   assign addr_only_issue = iq_out_valid[0] && iq_out_addr_only[0] && i_is_store;
   assign i_mem_ready = lsu_issue_ready &&
-                       (addr_only_issue || !noval_expected || cf_allow);
+                       ((addr_only_issue && !STORE_DATA_CAPTURE) || !noval_expected || cf_allow);
   // lane0：load/store 仍然直连 LSU；非访存进入 a0 缓冲，下一拍执行。
   assign issue_ready[0] = i_is_mem ? i_mem_ready :
                           (a0_accept && (!noval_expected || cf_allow));
@@ -954,7 +957,7 @@ module backend_ooo #(
   // 在 issue 当拍就压入，避免“上一拍 store complete”与“本拍新 issue”
   // 同时产生两个 complete 源。单发射保证每拍最多一个。
   assign noval_issue = iq_out_valid[0] && issue_ready[0] &&
-                       !(iq_out_addr_only[0] && i_is_store) &&
+                       (! (iq_out_addr_only[0] && i_is_store) || STORE_DATA_CAPTURE) &&
                        (i_is_store ||
                         (!i_is_load && !i_is_div &&
                          (i_illegal || !i_reg_we)));

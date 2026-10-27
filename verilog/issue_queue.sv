@@ -18,7 +18,8 @@ module issue_queue #(
   // 后端第二通道只支持普通写回ALU；通用IQ默认仍保持逐年龄选择。
   parameter integer LANE1_ALU_ONLY = 0,
   parameter integer LANE1_LOOKAHEAD = 0,
-  parameter integer LANE0_CONTROL_LOOKAHEAD = 0
+  parameter integer LANE0_CONTROL_LOOKAHEAD = 0,
+  parameter integer RETIRE_STORE_PREFILL = 0
 ) (
   input  logic clk,
   input  logic reset,
@@ -427,7 +428,7 @@ module issue_queue #(
       //    address-only store 只标记 addr_sent，不删除表项。
       for (lane = 0; lane < IW; lane = lane + 1) begin
         if (out_ready[lane] && out_valid[lane]) begin
-          if (sel_addr_only[lane])
+          if (sel_addr_only[lane] && !RETIRE_STORE_PREFILL)
             addr_sent[sel_idx[lane]] <= 1'b1;
           else
             valid[sel_idx[lane]] <= 1'b0;

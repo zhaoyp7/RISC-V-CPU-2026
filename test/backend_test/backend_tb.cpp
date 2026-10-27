@@ -6,7 +6,12 @@
 // backpressure, and W=2 dispatch absorption (IW stays 1 in P1).
 // -----------------------------------------------------------------------------
 
+#ifdef TB_STORE_CAPTURE
+#include "Vstore_capture_backend_top.h"
+using Vbackend_ooo=Vstore_capture_backend_top;
+#else
 #include "Vbackend_ooo.h"
+#endif
 #include "verilated.h"
 
 #include <cstdint>
@@ -847,6 +852,41 @@ int main(int argc, char** argv) {
         h.expect(producer_cycle>=0&&branch_cycle>producer_cycle&&branch_count==1,"one branch after producer");
         h.expect(kind==4?(links==1&&complete_count==0):(links==0&&complete_count==1),"control finishes exactly once");
     }
+
+
+#ifdef TB_STORE_CAPTURE
+    // The address can finish before an older load supplies store data.
+    // Even an early synthetic commit must not write until that data arrives.
+    for(unsigned seed:{0x12345678u,0x89abcdefu,0u}) {
+        h.auto_respond=true;h.reset();h.auto_respond=false;
+        h.write_word(0x7600,seed,15);h.write_word(0x7700,0xfeedbeef,15);
+        Uop producer;producer.dest=40;producer.rob=1;producer.reg_we=1;
+        producer.is_load=1;producer.wb_sel=WB_MEM;producer.imm=0x7600;
+        h.expect(h.dispatch_one(producer),"captured store producer dispatch");
+        for(unsigned n=0;n<32&&h.ld_pending.empty();n++)h.tick();
+        Uop store;store.dest=41;store.rob=2;store.is_store=1;store.lsq=1;
+        store.src2=40;store.src2_ready=0;store.imm=0x7700;
+        h.expect(h.dispatch_one(store),"captured store address dispatch");
+        for(unsigned n=0;n<8;n++)h.tick();
+        unsigned completions=0;
+        while(!h.complete_q.empty()){h.expect(h.complete_q.front()==41,"early store completion tag");h.complete_q.pop_front();completions++;}
+        h.expect(completions==1&&h.cdb_q.empty(),"store completes once before source load returns");
+        h.expect(!dut.st_req_valid&&h.read_word(0x7700)==0xfeedbeef,"uncommitted pending data never writes");
+        h.commit_one(1,true,false);
+        for(unsigned n=0;n<4;n++)h.tick();
+        h.expect(!dut.st_req_valid&&h.read_word(0x7700)==0xfeedbeef,"early commit waits for source data");
+        h.auto_respond=true;unsigned writes=0,produced=0;
+        for(unsigned n=0;n<32;n++){
+            dut.clk=0;dut.eval();if(dut.st_req_valid)writes++;
+            h.tick();
+            while(!h.cdb_q.empty()){auto e=h.cdb_q.front();h.cdb_q.pop_front();h.expect(e.first==40&&e.second==seed,"pending store receives producer value");produced++;}
+            while(!h.complete_q.empty()){h.complete_q.pop_front();completions++;}
+        }
+        h.expect(writes==1&&produced==1&&completions==1,"one producer, completion and memory write");
+        h.expect(h.read_word(0x7700)==seed,"captured store writes its new source word");
+    }
+
+#endif
 
     printf("\nW=%d checked=%ld fails=%ld\n", W, h.checks, h.fails);
     bool pass = (h.fails == 0);
