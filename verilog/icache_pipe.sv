@@ -19,7 +19,10 @@
 // -----------------------------------------------------------------------------
 
 module icache_pipe #(
-  parameter integer INDEX_BITS = `CPU_ICACHE_INDEX_BITS
+  parameter integer INDEX_BITS = `CPU_ICACHE_INDEX_BITS,
+  // The integrated frontend can preview an old response during flush;
+  // its state is flushed and ROB admission rejects that speculative decode.
+  parameter integer MASK_RESPONSE_ON_FLUSH = 1
 ) (
   input  logic        clk,
   input  logic        reset,
@@ -191,7 +194,7 @@ module icache_pipe #(
   end
 
   // ---- 输出 ----------------------------------------------------------------
-  assign fetch_resp_valid = !flush &&
+  assign fetch_resp_valid = (!MASK_RESPONSE_ON_FLUSH || !flush) &&
                             (buf_valid || ((state == ST_NORMAL) && s2_valid && s2_hit));
   assign fetch_resp_pc    = buf_valid ? buf_pc : s2_pc;
   assign fetch_inst       = buf_valid ? buf_inst : s2_data;

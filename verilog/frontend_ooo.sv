@@ -170,17 +170,23 @@ module frontend_ooo #(
   logic [FW-1:0]                   fq_head, fq_tail;
   logic [FCW-1:0]                  fq_count;
 
-  logic pop_fire;
-  logic [FCW-1:0] pop_n, pop_credit;
+  logic pop_fire, decode_bypass;
+  wire select_response_payload = (fq_count == 0);
+  logic [FCW-1:0] pop_n, pop_credit, available_n;
+  logic [FCW-1:0] fifo_pop_n, bypass_pop_n;
+  assign decode_bypass = (fq_count == 0) && resp_accept;
+  assign available_n = decode_bypass ? (rq_use2[rq_head] ? FCW'(2) : FCW'(1)) : fq_count;
+  assign fifo_pop_n = (pop_fire && !decode_bypass) ? pop_n : '0;
+  assign bypass_pop_n = (pop_fire && decode_bypass) ? pop_n : '0;
 
   integer i_pop;
   always_comb begin
     pop_n = '0;
     for (i_pop = 0; i_pop < W; i_pop = i_pop + 1)
-      if (i_pop < fq_count && decode_capacity[i_pop]) pop_n = pop_n + 1'b1;
+      if (i_pop < available_n && decode_capacity[i_pop]) pop_n = pop_n + 1'b1;
   end
   assign pop_fire = (pop_n != 0) && rename_ready;
-  assign pop_credit = pop_fire ? pop_n : '0;
+  assign pop_credit = fifo_pop_n;
 
   // 空间保守计算：response 最多 2 条、fetch 最多 2 条。
   logic fq_space_fetch, fq_space_resp;
@@ -193,8 +199,9 @@ module frontend_ooo #(
   // Rename and ROB acceptance still control the actual decoded-uop pop.
   assign fetch_fire = !redirect_valid && fq_space_fetch &&
                       fetch_ready0 && (!use2 || fetch_ready1);
+  // Present speculative decode inputs through redirect; flush dominates every
+  // local state update and ROB/rename readiness rejects architectural dispatch.
   assign resp_accept0 = resp0_valid && (rq_count != 0) && fq_space_resp &&
-                        !redirect_valid &&
                         (!rq_use2[rq_head] || resp1_valid);
   // 只有当前请求使用第二条时才消费 cache1 的响应；否则它会属于后面的请求。
   assign resp_accept1 = resp_accept0 && rq_use2[rq_head];
@@ -218,7 +225,8 @@ module frontend_ooo #(
 
   // ---- I-Cache 0 / 1 -----------------------------------------------------
   icache_pipe #(
-    .INDEX_BITS (`CPU_ICACHE_INDEX_BITS)
+    .INDEX_BITS (`CPU_ICACHE_INDEX_BITS),
+    .MASK_RESPONSE_ON_FLUSH (0)
   ) u_icache0 (
     .clk               (clk),
     .reset             (reset),
@@ -238,7 +246,8 @@ module frontend_ooo #(
   );
 
   icache_pipe #(
-    .INDEX_BITS (`CPU_ICACHE_INDEX_BITS)
+    .INDEX_BITS (`CPU_ICACHE_INDEX_BITS),
+    .MASK_RESPONSE_ON_FLUSH (0)
   ) u_icache1 (
     .clk               (clk),
     .reset             (reset),
@@ -328,6 +337,50 @@ module frontend_ooo #(
     .illegal      (dec1_illegal)
   );
 
+  logic [`CPU_DECODE_W-1:0] response_uop0, response_uop1;
+  always_comb begin
+    response_uop0 = '0;
+    response_uop1 = '0;
+    response_uop0[`CPU_DISPATCH_PC_OFF +: 32] = resp0_pc;
+    response_uop0[`CPU_DISPATCH_INST_OFF +: 32] = resp0_inst;
+    response_uop0[`CPU_DISPATCH_IMM_OFF +: 32] = dec_imm;
+    response_uop0[`CPU_DISPATCH_RD_OFF +: 5] = dec_rd;
+    response_uop0[`CPU_DISPATCH_REG_WE_OFF] = dec_reg_we;
+    response_uop0[`CPU_DISPATCH_ALU_OP_OFF +: 5] = dec_alu_op;
+    response_uop0[`CPU_DISPATCH_A_SEL_OFF +: 2] = dec_a_sel;
+    response_uop0[`CPU_DISPATCH_B_SEL_OFF] = dec_b_sel;
+    response_uop0[`CPU_DISPATCH_WB_SEL_OFF +: 2] = dec_wb_sel;
+    response_uop0[`CPU_DISPATCH_IS_BRANCH_OFF] = dec_is_branch;
+    response_uop0[`CPU_DISPATCH_IS_JAL_OFF] = dec_is_jal;
+    response_uop0[`CPU_DISPATCH_IS_JALR_OFF] = dec_is_jalr;
+    response_uop0[`CPU_DISPATCH_IS_LOAD_OFF] = dec_is_load;
+    response_uop0[`CPU_DISPATCH_IS_STORE_OFF] = dec_is_store;
+    response_uop0[`CPU_DISPATCH_ILLEGAL_OFF] = dec_illegal;
+    response_uop0[`CPU_DISPATCH_MEM_SIZE_OFF +: 2] = dec_mem_size;
+    response_uop0[`CPU_DISPATCH_MEM_UNSIGNED_OFF] = dec_mem_unsigned;
+    response_uop0[`CPU_DECODE_RS1_OFF +: 5] = dec_rs1;
+    response_uop0[`CPU_DECODE_RS2_OFF +: 5] = dec_rs2;
+    response_uop1[`CPU_DISPATCH_PC_OFF +: 32] = resp1_pc;
+    response_uop1[`CPU_DISPATCH_INST_OFF +: 32] = resp1_inst;
+    response_uop1[`CPU_DISPATCH_IMM_OFF +: 32] = dec1_imm;
+    response_uop1[`CPU_DISPATCH_RD_OFF +: 5] = dec1_rd;
+    response_uop1[`CPU_DISPATCH_REG_WE_OFF] = dec1_reg_we;
+    response_uop1[`CPU_DISPATCH_ALU_OP_OFF +: 5] = dec1_alu_op;
+    response_uop1[`CPU_DISPATCH_A_SEL_OFF +: 2] = dec1_a_sel;
+    response_uop1[`CPU_DISPATCH_B_SEL_OFF] = dec1_b_sel;
+    response_uop1[`CPU_DISPATCH_WB_SEL_OFF +: 2] = dec1_wb_sel;
+    response_uop1[`CPU_DISPATCH_IS_BRANCH_OFF] = dec1_is_branch;
+    response_uop1[`CPU_DISPATCH_IS_JAL_OFF] = dec1_is_jal;
+    response_uop1[`CPU_DISPATCH_IS_JALR_OFF] = dec1_is_jalr;
+    response_uop1[`CPU_DISPATCH_IS_LOAD_OFF] = dec1_is_load;
+    response_uop1[`CPU_DISPATCH_IS_STORE_OFF] = dec1_is_store;
+    response_uop1[`CPU_DISPATCH_ILLEGAL_OFF] = dec1_illegal;
+    response_uop1[`CPU_DISPATCH_MEM_SIZE_OFF +: 2] = dec1_mem_size;
+    response_uop1[`CPU_DISPATCH_MEM_UNSIGNED_OFF] = dec1_mem_unsigned;
+    response_uop1[`CPU_DECODE_RS1_OFF +: 5] = dec1_rs1;
+    response_uop1[`CPU_DECODE_RS2_OFF +: 5] = dec1_rs2;
+  end
+
   // ---- 输出：FIFO 头部最多 W 条 ------------------------------------------
   integer i_out;
   always_comb begin
@@ -336,13 +389,18 @@ module frontend_ooo #(
     dec_pred_taken  = '0;
     dec_pred_target = '0;
     for (i_out = 0; i_out < W; i_out = i_out + 1) begin
-      if (i_out < pop_n) begin
-        dec_valid[i_out] = fq_valid[(fq_head + i_out) % FDEPTH];
-        dec_uop[i_out*`CPU_DECODE_W +: `CPU_DECODE_W] =
-            fq_uop[((fq_head + i_out) % FDEPTH)*`CPU_DECODE_W +: `CPU_DECODE_W];
-        dec_pred_taken[i_out]  = fq_pred_taken[(fq_head + i_out) % FDEPTH];
-        dec_pred_target[i_out*32 +: 32] =
-            fq_pred_target[((fq_head + i_out) % FDEPTH)*32 +: 32];
+      // Payload selection depends on registered FIFO occupancy; redirect and
+      // admission qualify only valid and state updates.
+      if (select_response_payload) begin
+        dec_uop[i_out*`CPU_DECODE_W +: `CPU_DECODE_W] = i_out == 0 ? response_uop0 : response_uop1;
+        dec_pred_taken[i_out] = i_out == 0 ? rq_p0t[rq_head] : rq_p1t[rq_head];
+        dec_pred_target[i_out*32 +: 32] = i_out == 0 ? rq_p0tg[rq_head*32 +: 32] : rq_p1tg[rq_head*32 +: 32];
+        dec_valid[i_out] = i_out < pop_n;
+      end else begin
+        dec_uop[i_out*`CPU_DECODE_W +: `CPU_DECODE_W] = fq_uop[((fq_head + i_out) % FDEPTH)*`CPU_DECODE_W +: `CPU_DECODE_W];
+        dec_pred_taken[i_out] = fq_pred_taken[(fq_head + i_out) % FDEPTH];
+        dec_pred_target[i_out*32 +: 32] = fq_pred_target[((fq_head + i_out) % FDEPTH)*32 +: 32];
+        dec_valid[i_out] = (i_out < pop_n) && fq_valid[(fq_head + i_out) % FDEPTH];
       end
     end
   end
@@ -389,64 +447,23 @@ module frontend_ooo #(
         fq_head <= (fq_head + pop_n) % FDEPTH;
       end
 
-      // lane 0
+      // Write incoming payload at fixed FIFO tail slots, independent of
+      // late rename readiness. Consumed fall-through prefixes advance head
+      // and clear valid; unconsumed suffixes retain their original slots.
       if (resp_accept) begin
-        fq_valid[fq_tail] <= 1'b1;
-        fq_uop[fq_tail*`CPU_DECODE_W + `CPU_DISPATCH_PC_OFF +: 32]    <= resp0_pc;
-        fq_uop[fq_tail*`CPU_DECODE_W + `CPU_DISPATCH_INST_OFF +: 32]  <= resp0_inst;
-        fq_uop[fq_tail*`CPU_DECODE_W + `CPU_DISPATCH_IMM_OFF +: 32]   <= dec_imm;
-        fq_uop[fq_tail*`CPU_DECODE_W + `CPU_DISPATCH_RD_OFF +: 5]     <= dec_rd;
-        fq_uop[fq_tail*`CPU_DECODE_W + `CPU_DISPATCH_REG_WE_OFF]      <= dec_reg_we;
-        fq_uop[fq_tail*`CPU_DECODE_W + `CPU_DISPATCH_ALU_OP_OFF +: 5] <= dec_alu_op;
-        fq_uop[fq_tail*`CPU_DECODE_W + `CPU_DISPATCH_A_SEL_OFF +: 2]  <= dec_a_sel;
-        fq_uop[fq_tail*`CPU_DECODE_W + `CPU_DISPATCH_B_SEL_OFF]       <= dec_b_sel;
-        fq_uop[fq_tail*`CPU_DECODE_W + `CPU_DISPATCH_WB_SEL_OFF +: 2] <= dec_wb_sel;
-        fq_uop[fq_tail*`CPU_DECODE_W + `CPU_DISPATCH_IS_BRANCH_OFF]   <= dec_is_branch;
-        fq_uop[fq_tail*`CPU_DECODE_W + `CPU_DISPATCH_IS_JAL_OFF]      <= dec_is_jal;
-        fq_uop[fq_tail*`CPU_DECODE_W + `CPU_DISPATCH_IS_JALR_OFF]     <= dec_is_jalr;
-        fq_uop[fq_tail*`CPU_DECODE_W + `CPU_DISPATCH_IS_LOAD_OFF]     <= dec_is_load;
-        fq_uop[fq_tail*`CPU_DECODE_W + `CPU_DISPATCH_IS_STORE_OFF]    <= dec_is_store;
-        fq_uop[fq_tail*`CPU_DECODE_W + `CPU_DISPATCH_ILLEGAL_OFF]     <= dec_illegal;
-        fq_uop[fq_tail*`CPU_DECODE_W + `CPU_DISPATCH_MEM_SIZE_OFF +: 2] <= dec_mem_size;
-        fq_uop[fq_tail*`CPU_DECODE_W + `CPU_DISPATCH_MEM_UNSIGNED_OFF]  <= dec_mem_unsigned;
-        fq_uop[fq_tail*`CPU_DECODE_W + `CPU_DECODE_RS1_OFF +: 5]      <= dec_rs1;
-        fq_uop[fq_tail*`CPU_DECODE_W + `CPU_DECODE_RS2_OFF +: 5]      <= dec_rs2;
-        fq_pred_taken[fq_tail]  <= rq_p0t[rq_head];
+        fq_valid[fq_tail] <= (bypass_pop_n == 0);
+        fq_uop[fq_tail*`CPU_DECODE_W +: `CPU_DECODE_W] <= response_uop0;
+        fq_pred_taken[fq_tail] <= rq_p0t[rq_head];
         fq_pred_target[fq_tail*32 +: 32] <= rq_p0tg[rq_head*32 +: 32];
       end
-
-      // lane 1
       if (resp_accept && rq_use2[rq_head]) begin
-        fq_valid[(fq_tail + 1) % FDEPTH] <= 1'b1;
-        fq_uop[((fq_tail + 1) % FDEPTH)*`CPU_DECODE_W + `CPU_DISPATCH_PC_OFF +: 32]    <= resp1_pc;
-        fq_uop[((fq_tail + 1) % FDEPTH)*`CPU_DECODE_W + `CPU_DISPATCH_INST_OFF +: 32]  <= resp1_inst;
-        fq_uop[((fq_tail + 1) % FDEPTH)*`CPU_DECODE_W + `CPU_DISPATCH_IMM_OFF +: 32]   <= dec1_imm;
-        fq_uop[((fq_tail + 1) % FDEPTH)*`CPU_DECODE_W + `CPU_DISPATCH_RD_OFF +: 5]     <= dec1_rd;
-        fq_uop[((fq_tail + 1) % FDEPTH)*`CPU_DECODE_W + `CPU_DISPATCH_REG_WE_OFF]      <= dec1_reg_we;
-        fq_uop[((fq_tail + 1) % FDEPTH)*`CPU_DECODE_W + `CPU_DISPATCH_ALU_OP_OFF +: 5] <= dec1_alu_op;
-        fq_uop[((fq_tail + 1) % FDEPTH)*`CPU_DECODE_W + `CPU_DISPATCH_A_SEL_OFF +: 2]  <= dec1_a_sel;
-        fq_uop[((fq_tail + 1) % FDEPTH)*`CPU_DECODE_W + `CPU_DISPATCH_B_SEL_OFF]       <= dec1_b_sel;
-        fq_uop[((fq_tail + 1) % FDEPTH)*`CPU_DECODE_W + `CPU_DISPATCH_WB_SEL_OFF +: 2] <= dec1_wb_sel;
-        fq_uop[((fq_tail + 1) % FDEPTH)*`CPU_DECODE_W + `CPU_DISPATCH_IS_BRANCH_OFF]   <= dec1_is_branch;
-        fq_uop[((fq_tail + 1) % FDEPTH)*`CPU_DECODE_W + `CPU_DISPATCH_IS_JAL_OFF]      <= dec1_is_jal;
-        fq_uop[((fq_tail + 1) % FDEPTH)*`CPU_DECODE_W + `CPU_DISPATCH_IS_JALR_OFF]     <= dec1_is_jalr;
-        fq_uop[((fq_tail + 1) % FDEPTH)*`CPU_DECODE_W + `CPU_DISPATCH_IS_LOAD_OFF]     <= dec1_is_load;
-        fq_uop[((fq_tail + 1) % FDEPTH)*`CPU_DECODE_W + `CPU_DISPATCH_IS_STORE_OFF]    <= dec1_is_store;
-        fq_uop[((fq_tail + 1) % FDEPTH)*`CPU_DECODE_W + `CPU_DISPATCH_ILLEGAL_OFF]     <= dec1_illegal;
-        fq_uop[((fq_tail + 1) % FDEPTH)*`CPU_DECODE_W + `CPU_DISPATCH_MEM_SIZE_OFF +: 2] <= dec1_mem_size;
-        fq_uop[((fq_tail + 1) % FDEPTH)*`CPU_DECODE_W + `CPU_DISPATCH_MEM_UNSIGNED_OFF]  <= dec1_mem_unsigned;
-        fq_uop[((fq_tail + 1) % FDEPTH)*`CPU_DECODE_W + `CPU_DECODE_RS1_OFF +: 5]      <= dec1_rs1;
-        fq_uop[((fq_tail + 1) % FDEPTH)*`CPU_DECODE_W + `CPU_DECODE_RS2_OFF +: 5]      <= dec1_rs2;
-        fq_pred_taken[(fq_tail + 1) % FDEPTH]  <= rq_p1t[rq_head];
+        fq_valid[(fq_tail + 1) % FDEPTH] <= (bypass_pop_n < 2);
+        fq_uop[((fq_tail + 1) % FDEPTH)*`CPU_DECODE_W +: `CPU_DECODE_W] <= response_uop1;
+        fq_pred_taken[(fq_tail + 1) % FDEPTH] <= rq_p1t[rq_head];
         fq_pred_target[((fq_tail + 1) % FDEPTH)*32 +: 32] <= rq_p1tg[rq_head*32 +: 32];
       end
-
       fq_count <= fq_count + push_n - (pop_fire ? pop_n : '0);
-
-      if (resp_accept && rq_use2[rq_head])
-        fq_tail <= (fq_tail + 2) % FDEPTH;
-      else if (resp_accept)
-        fq_tail <= (fq_tail + 1) % FDEPTH;
+      if (resp_accept) fq_tail <= (fq_tail + push_n) % FDEPTH;
     end
   end
 

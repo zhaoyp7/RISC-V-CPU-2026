@@ -133,6 +133,36 @@ struct Harness {
             check(records[i].pc==0x100+4*i,"redirect drops partially consumed group suffix");
         d.decode_capacity=3;d.rename_ready=0;d.backend_ready=0;
     }
+    void randomized_flush_and_capacity(uint32_t seed) {
+        reset();uint32_t expected_pc=0;unsigned accepted=0, redirects=0;
+        auto random=[&](){seed^=seed<<13;seed^=seed>>17;seed^=seed<<5;return seed;};
+        for(unsigned cycle=0;cycle<30000;++cycle) {
+            uint32_t bits=random();bool flush=bits%47==0;
+            d.redirect_valid=flush;d.redirect_pc=((bits>>8)&127u)*4;
+            d.backend_ready=(bits>>16)&1;d.rename_ready=(bits>>17)&1;
+            unsigned slots=(bits>>18)%3;
+            d.decode_capacity=slots==0?0:slots==1?1:((1u<<TB_W)-1);
+            latency[0]=(bits>>22)&7;latency[1]=(bits>>25)&7;
+            unsigned before=records.size();tick();
+            if(flush){expected_pc=d.redirect_pc;++redirects;}
+            for(unsigned i=before;i<records.size();++i) {
+                check(records[i].pc==expected_pc,"random flush/capacity preserves exact PC stream");
+                check(!records[i].taken,"untrained prediction survives random flush/capacity");
+                expected_pc+=4;++accepted;
+            }
+        }
+        d.redirect_valid=0;d.rename_ready=1;d.backend_ready=1;
+        d.decode_capacity=(1u<<TB_W)-1;
+        for(unsigned cycle=0;cycle<128;++cycle) {
+            unsigned before=records.size();tick();
+            for(unsigned i=before;i<records.size();++i) {
+                check(records[i].pc==expected_pc,"randomized stream drains without loss or duplication");
+                expected_pc+=4;++accepted;
+            }
+        }
+        check(redirects>500 && accepted>3000,"randomized flush/capacity exercises sustained progress");
+        latency[0]=latency[1]=2;d.rename_ready=0;d.backend_ready=0;
+    }
     void response_skew(int slow_bank) {
         reset();latency[0]=slow_bank==0?9:0;latency[1]=slow_bank==1?9:0;
         update(0,0x40);update(0x4c,0x90);update(0x90,0xc0);settle();redirect(0);
@@ -208,6 +238,7 @@ int main(int argc,char** argv) {
     d.backend_ready=0;d.rename_ready=0;h.update(0,0x100);h.reset();h.until(1);
     if(!h.records.empty())h.check(h.records[0].pc==0 && !h.records[0].taken,"reset drops pending training");
     h.backend_stall_responses();h.partial_decode_capacity();h.response_skew(0);h.response_skew(1);
+    for(uint32_t seed:{0x23ad4581u,0x6f9c20b3u,0xa3158e47u})h.randomized_flush_and_capacity(seed);
     std::printf("BPU training / response queues W=%d checks=%u fails=%u\n",TB_W,h.checks,h.fails);
     return h.fails?1:0;
 }
