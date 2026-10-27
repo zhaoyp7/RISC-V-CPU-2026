@@ -1,4 +1,9 @@
+#ifdef TB_LINE_QUEUE_TWO
+#include "Vline_queue_top.h"
+using Vload_line_cache=Vline_queue_top;
+#else
 #include "Vload_line_cache.h"
+#endif
 #include "verilated.h"
 #include <cstdint>
 #include <cstdio>

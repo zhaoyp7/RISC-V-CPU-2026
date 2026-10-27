@@ -6,7 +6,12 @@
 // back-to-back transactions and IF/LD arbitration.
 // -----------------------------------------------------------------------------
 
+#ifdef TB_IF_LINE_BUFFER
+#include "Vif_line_mem_top.h"
+using Vmem_subsystem=Vif_line_mem_top;
+#else
 #include "Vmem_subsystem.h"
+#endif
 #include "verilated.h"
 
 #include <cstdint>
@@ -35,6 +40,7 @@ struct Slave {
     bool     bvalid = false;
     bool     b_fire = false;
 
+    uint32_t jitter=0x92d5a137;
     long checks = 0;
     long fails = 0;
 
@@ -72,7 +78,8 @@ struct Slave {
         if (dut->arvalid && dut->arready) {
             rd_pending = true;
             rd_addr = dut->araddr;
-            rd_delay = 2;
+            jitter^=jitter<<13;jitter^=jitter>>17;jitter^=jitter<<5;
+            rd_delay = 1+jitter%11;
         }
 
         dut->awready = (!wr_active && !aw_seen) ? 1 : 0;
@@ -366,6 +373,29 @@ int main(int argc, char** argv) {
     h.slave.write_word(0x5004, 0x87654321, 0xf);
     h.concurrent_if_ld(0x5000, 0x12345678, 0x5004, 0x87654321);
 
+    uint32_t rng=0x293ab579;
+    for(unsigned round=0;round<800;round++) {
+        rng^=rng<<13;rng^=rng>>17;rng^=rng<<5;
+        const uint32_t a0=0x6000+((rng>>2)%256)*4;
+        const uint32_t a1=round%3?0x6000+((rng>>12)%256)*4:a0+4;
+        const uint32_t ad=0x9000+((rng>>20)%256)*4;
+        const long c0=h.if_count,c1=h.if2_count,cd=h.ld_count;
+        const uint32_t w0=h.slave.word(a0),w1=h.slave.word(a1),wd=h.slave.word(ad);
+        dut.if_req_valid=1;dut.if_req_addr=a0;dut.if2_req_valid=1;dut.if2_req_addr=a1;
+        dut.ld_req_valid=1;dut.ld_req_addr=ad;
+        bool done0=false,done1=false,doneD=false,accepted=false;
+        for(int n=0;n<1024&&!(done0&&done1&&doneD);n++) {
+            h.tick();
+            if(h.last_ld_fire){h.slave.check(!accepted,"random data request accepted once");accepted=true;dut.ld_req_valid=0;}
+            if(h.if_count!=c0&&!done0){h.slave.check(h.if_rdata==w0,"random first instruction value");done0=true;dut.if_req_valid=0;}
+            if(h.if2_count!=c1&&!done1){h.slave.check(h.if2_rdata==w1,"random second instruction value");done1=true;dut.if2_req_valid=0;}
+            if(h.ld_count!=cd&&!doneD){h.slave.check(h.ld_rdata==wd,"random data value");doneD=true;}
+            h.slave.check(h.if_count<=c0+1&&h.if2_count<=c1+1&&h.ld_count<=cd+1,"responses delivered exactly once");
+        }
+        h.slave.check(done0&&done1&&doneD&&accepted,"three clients make progress under refill congestion");
+        dut.if_req_valid=0;dut.if2_req_valid=0;dut.ld_req_valid=0;h.tick();
+        if(h.slave.fails)break;
+    }
     printf("\nchecks=%ld fails=%ld if=%ld if2=%ld ld=%ld st=%ld\n",
            h.slave.checks, h.slave.fails, h.if_count, h.if2_count,
            h.ld_count, h.st_count);

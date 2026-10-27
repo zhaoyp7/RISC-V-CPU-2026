@@ -18,6 +18,145 @@
 // -----------------------------------------------------------------------------
 
 module mem_subsystem #(
+  parameter integer QDEPTH = 8,
+  parameter integer IF_LINE_BUFFER = 0
+) (
+  input  logic        clk,
+  input  logic        reset,
+
+  // I-Cache refill client
+  input  logic        if_req_valid,
+  input  logic [31:0] if_req_addr,
+  output logic        if_resp_valid,
+  output logic [31:0] if_resp_rdata,
+
+  // Second I-Cache refill client (dual-fetch)
+  input  logic        if2_req_valid,
+  input  logic [31:0] if2_req_addr,
+  output logic        if2_resp_valid,
+  output logic [31:0] if2_resp_rdata,
+
+  // Pipelined load client (LSU)
+  input  logic        ld_req_valid,
+  input  logic [31:0] ld_req_addr,
+  output logic        ld_req_ready,
+  output logic        ld_resp_valid,
+  output logic [31:0] ld_resp_rdata,
+
+  // Pipelined store client (LSU)
+  input  logic        st_req_valid,
+  input  logic [31:0] st_req_addr,
+  input  logic [31:0] st_req_wdata,
+  input  logic [3:0]  st_req_wstrb,
+  output logic        st_req_ready,
+  output logic        st_resp_valid,
+
+  // Legacy P1 data client (single outstanding; unit test)
+  input  logic        data_req_valid,
+  input  logic        data_req_we,
+  input  logic [31:0] data_req_addr,
+  input  logic [31:0] data_req_wdata,
+  input  logic [3:0]  data_req_wstrb,
+  output logic        data_resp_valid,
+  output logic [31:0] data_resp_rdata,
+
+  // AXI4-Lite
+  output logic [31:0] araddr,
+  output logic        arvalid,
+  input  logic        arready,
+  input  logic [31:0] rdata,
+  input  logic [1:0]  rresp,
+  input  logic        rvalid,
+  output logic        rready,
+  output logic [31:0] awaddr,
+  output logic        awvalid,
+  input  logic        awready,
+  output logic [31:0] wdata,
+  output logic [3:0]  wstrb,
+  output logic        wvalid,
+  input  logic        wready,
+  input  logic [1:0]  bresp,
+  input  logic        bvalid,
+  output logic        bready
+);
+ generate if(!IF_LINE_BUFFER)begin : gen_direct
+  mem_subsystem_raw #(.QDEPTH(QDEPTH)) u_raw(.*);
+ end else begin : gen_instruction_line
+  logic [1:0] client_wait;
+  logic [1:0] owner;
+  logic owner_head,owner_tail;
+  logic [1:0] owner_count;
+  wire select_second = !if_req_valid || client_wait[0];
+  wire selected_valid = select_second ? (if2_req_valid&&!client_wait[1]) : (if_req_valid&&!client_wait[0]);
+  wire [31:0] selected_addr = select_second ? if2_req_addr : if_req_addr;
+  wire cache_ready,cache_response;
+  (* keep *) wire unused_store_ready,unused_if0_valid,unused_if1_valid;
+  (* keep *) wire [31:0] unused_if0_data,unused_if1_data;
+  wire [31:0] cache_data;
+  wire cache_accept=selected_valid&&cache_ready&&owner_count<2;
+  wire cache_pop=cache_response&&owner_count!=0;
+  wire line_mem_valid,line_mem_ready,line_mem_response;
+  wire [31:0] line_mem_addr,line_mem_data;
+  assign if_resp_valid=cache_pop&&!owner[owner_head];
+  assign if2_resp_valid=cache_pop&&owner[owner_head];
+  assign if_resp_rdata=cache_data;
+  assign if2_resp_rdata=cache_data;
+  load_line_cache #(.INDEX_BITS(2), .QDEPTH(2)) u_instruction_lines(
+   .clk(clk),.reset(reset),.req_valid(selected_valid&&owner_count<2),.req_addr(selected_addr),.req_ready(cache_ready),
+   .resp_valid(cache_response),.resp_data(cache_data),.mem_valid(line_mem_valid),.mem_addr(line_mem_addr),.mem_ready(line_mem_ready),
+   .mem_resp_valid(line_mem_response),.mem_resp_data(line_mem_data),
+   .store_fire(1'b0),.store_addr(32'b0),.store_data(32'b0),.store_mask(4'b0),.store_ready(unused_store_ready),.store_resp_valid(1'b0));
+  always_ff @(posedge clk)begin
+   if(reset)begin client_wait<=0;owner_head<=0;owner_tail<=0;owner_count<=0;end
+   else begin
+    if(cache_pop)begin client_wait[owner[owner_head]]<=0;owner_head<=!owner_head;end
+    if(cache_accept)begin client_wait[select_second]<=1;owner[owner_tail]<=select_second;owner_tail<=!owner_tail;end
+    owner_count<=owner_count+2'(cache_accept)-2'(cache_pop);
+   end
+  end
+  // The raw pipelined read port carries both instruction prefetch and data
+  // misses. One ownership bit per accepted beat preserves their responses.
+  logic [15:0] read_owner;
+  logic [3:0] read_head,read_tail;
+  logic [4:0] read_count;
+  wire raw_ready,raw_response;
+  wire [31:0] raw_data;
+  wire read_space=read_count<16;
+  wire choose_instruction=line_mem_valid;
+  wire shared_valid=read_space&&(line_mem_valid||ld_req_valid);
+  wire [31:0] shared_addr=choose_instruction?line_mem_addr:ld_req_addr;
+  wire shared_accept=shared_valid&&raw_ready;
+  assign line_mem_ready=read_space&&raw_ready;
+  assign ld_req_ready=read_space&&!line_mem_valid&&raw_ready;
+  assign line_mem_response=raw_response&&read_count!=0&&read_owner[read_head];
+  assign line_mem_data=raw_data;
+  assign ld_resp_valid=raw_response&&read_count!=0&&!read_owner[read_head];
+  assign ld_resp_rdata=raw_data;
+  always_ff @(posedge clk)begin
+   if(reset)begin read_head<=0;read_tail<=0;read_count<=0;end
+   else begin
+    if(shared_accept)begin read_owner[read_tail]<=choose_instruction;read_tail<=read_tail+1'b1;end
+    if(raw_response)read_head<=read_head+1'b1;
+    read_count<=read_count+5'(shared_accept)-5'(raw_response);
+   end
+  end
+`ifndef SYNTHESIS
+  always_ff @(posedge clk)if(!reset)begin
+   if(raw_response&&read_count==0)$fatal(1,"instruction buffer response without owner");
+   if(cache_response&&owner_count==0)$fatal(1,"instruction buffer response without client");
+   if(owner_count!=u_instruction_lines.q_count)$fatal(1,"instruction queue and client ownership counts differ");
+   if(cache_accept&&client_wait[select_second])$fatal(1,"instruction request accepted twice");
+  end
+`endif
+  mem_subsystem_raw #(.QDEPTH(QDEPTH)) u_raw(
+   .if_req_valid(1'b0),.if_req_addr(32'b0),.if_resp_valid(unused_if0_valid),.if_resp_rdata(unused_if0_data),
+   .if2_req_valid(1'b0),.if2_req_addr(32'b0),.if2_resp_valid(unused_if1_valid),.if2_resp_rdata(unused_if1_data),
+   .ld_req_valid(shared_valid),.ld_req_addr(shared_addr),.ld_req_ready(raw_ready),
+   .ld_resp_valid(raw_response),.ld_resp_rdata(raw_data),.*);
+ end endgenerate
+endmodule
+
+module mem_subsystem_raw #(
   parameter integer QDEPTH = 8
 ) (
   input  logic        clk,
@@ -624,6 +763,7 @@ module load_line_cache #(
     if(q_count>(QW+1)'(QDEPTH) || flight_count>8 || store_count>8)$fatal(1,"line cache credit overflow");
     if(store_fire && !store_ready)$fatal(1,"line cache store accepted without credit");
   end
-  initial if(QDEPTH!=8)$fatal(1,"line cache ordered load window must be eight");
+  initial if(QDEPTH<2 || (QDEPTH & (QDEPTH-1))!=0)
+    $fatal(1,"line cache ordered load window must be a power of two >= 2");
 `endif
 endmodule

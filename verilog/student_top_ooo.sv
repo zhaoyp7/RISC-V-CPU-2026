@@ -156,7 +156,7 @@ module student_top (
     .st_resp_valid  (st_resp_valid)
   );
 
-  mem_subsystem u_mem (
+  mem_subsystem #(.IF_LINE_BUFFER(`CPU_LINE_CACHE_ENABLE)) u_mem (
     .clk             (clock),
     .reset           (reset),
     .if_req_valid    (if_refill_valid),
