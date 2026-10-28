@@ -27,6 +27,7 @@ module cdb #(
   output logic [W+1:0]                   src_ready,
 
   output logic [W+1:0] hint_ready_mask,
+  output logic [3:0] arbitration_phase,
   output logic [R*`CPU_CDB_W-1:0]        cdb_out
 );
 
@@ -35,6 +36,7 @@ module cdb #(
   localparam integer CW = `CPU_CDB_W;
 
   logic [3:0]     last;
+  assign arbitration_phase=last;
   logic [N-1:0]   chosen;
   integer         r, k, idx;
   logic           found;
@@ -117,7 +119,18 @@ endmodule
       assumed_grants=granted;
     end
   endfunction
+  generate if(N==4 && R==2 && PRIORITY_ALU0 && OPTIONAL==2)begin:gen_four_source_hint
+    // Exhaustive equivalent of both optional-source cases. Keep raw and
+    // qualified instances shallow while retaining the generic implementation.
+    wire v0=compute_valid[0],v1=compute_valid[1],v3=compute_valid[2];
+    assign hint_mask[0]=v0;
+    assign hint_mask[1]=v1 && (last[1] || (last[0] ? !v3 : !v0));
+    assign hint_mask[2]=1'b0;
+    assign hint_mask[3]=v3 && ((last[1:0]==2'd1) ||
+        (!v0 && ((last[1:0]==2'd2) || !v1)));
+  end else begin:gen_generic_compute_hint
   assign hint_mask=assumed_grants(1'b0)&assumed_grants(1'b1)&~(N'(1)<<OPTIONAL);
+  end endgenerate
 endmodule
 
 // Readiness for a buffered consumer is independent of current load validity.

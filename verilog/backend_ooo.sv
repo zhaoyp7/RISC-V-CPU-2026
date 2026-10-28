@@ -15,6 +15,7 @@ module backend_ooo #(
   parameter integer STORE_DATA_CAPTURE = 0,
   parameter integer ORDERED_STORE_COMMIT = 0,
   parameter integer DISPATCH_ALU_BYPASS = 0,
+  parameter integer RAW_MEMORY_HINT = 0,
   parameter integer EXECUTION_LOOKAHEAD = 0,
   parameter integer MEMORY_BASE_LOOKAHEAD = 0,
   parameter integer DISPATCH_CONTROL_BYPASS = 0
@@ -269,6 +270,7 @@ module backend_ooo #(
     .wake_tag       (cdb_wake_tag),
     .lookahead_valid(iq_lookahead_valid),
     .execute_lookahead_valid(execute_hint_valid),.execute_lookahead_tag(a0_dest),
+    .memory_lookahead_valid(memory_hint_valid),.memory_lookahead_tag(memory_hint_tag),
     .execute1_lookahead_valid(execute1_hint_valid),.execute1_lookahead_tag(p_dest),
     .lookahead_tag  (iq_lookahead_tag),
     .lookahead_load_valid(iq_aux_lookahead_valid),
@@ -477,11 +479,11 @@ module backend_ooo #(
   // dispatch/skid/IQ 入队的同拍 wake 匹配仍保留，防止漏掉唯一一次广播。
   // The early base tag is guaranteed to write PRF at this edge. Memory
   // executes before the edge, so forward that registered producer value.
-  wire early_memory_base = MEMORY_BASE_LOOKAHEAD && iq_lookahead_valid &&
+  wire early_memory_base = MEMORY_BASE_LOOKAHEAD && memory_hint_valid &&
       memory_issue_uop[`CPU_DISPATCH_SRC1_TAG_OFF+:PW]!=0 &&
-      memory_issue_uop[`CPU_DISPATCH_SRC1_TAG_OFF+:PW]==iq_lookahead_tag;
-  wire [31:0] early_memory_value = cdb_hint_ready[0] ? alu_value_q :
-      (cdb_hint_ready[1] ? alu1_value_q : div_value_q);
+      memory_issue_uop[`CPU_DISPATCH_SRC1_TAG_OFF+:PW]==memory_hint_tag;
+  wire [31:0] early_memory_value = memory_hint_mask[0] ? alu_value_q :
+      (memory_hint_mask[1] ? alu1_value_q : div_value_q);
   assign issue_src1 = early_memory_base ? early_memory_value : prf_rdata[0 +: 32];
   assign issue_src2 = prf_rdata[32 +: 32];
   assign p_src1 = EXECUTION_LOOKAHEAD && alu_valid_q && p_src1_tag!=0 && p_src1_tag==alu_tag_q ? alu_value_q :
@@ -825,6 +827,23 @@ module backend_ooo #(
       a0_needs_alu_result && !a0_is_div && !a0_is_branch_any && (!alu_valid_q || cdb_hint_ready[0]);
   wire execute1_hint_valid=EXECUTION_LOOKAHEAD && R>=2 && a1_valid_q &&
       p_needs_alu_result && (!alu1_valid_q || cdb_hint_ready[1]);
+  wire[3:0]cdb_phase;
+  wire[N-1:0]raw_memory_hint_mask;
+  wire[N-1:0]memory_hint_mask=RAW_MEMORY_HINT ? raw_memory_hint_mask : cdb_hint_ready;
+  wire memory_hint_valid=|memory_hint_mask;
+  wire[PW-1:0]memory_hint_tag=memory_hint_mask[0]?alu_tag_q:(memory_hint_mask[1]?alu1_tag_q:div_tag_q);
+  generate if(R>=2)begin:gen_raw_memory_guarantee
+  (* keep_hierarchy="yes" *)cdb_compute_hint #(.N(4),.R(R),.PRIORITY_ALU0(1),.OPTIONAL(2)) u_raw_memory_hint(
+    .last(cdb_phase),.compute_valid(compute_pending),.hint_mask(raw_memory_hint_mask));
+  end else begin:gen_no_raw_memory_guarantee
+    assign raw_memory_hint_mask='0;
+  end endgenerate
+`ifndef SYNTHESIS
+  always_ff@(posedge clk)if(!reset && RAW_MEMORY_HINT)
+    for(integer source=0;source<N;source++)
+      if(raw_memory_hint_mask[source] && cdb_src_valid[source] && !cdb_src_ready[source])
+        $fatal(1,"raw compute grant failed after cancellation");
+`endif
   assign iq_lookahead_valid=|cdb_hint_ready;
   assign iq_lookahead_tag=cdb_hint_ready[0]?alu_tag_q:(cdb_hint_ready[1]?alu1_tag_q:div_tag_q);
   wire [N-1:0] extra_hint_mask=cdb_hint_ready & ~(cdb_hint_ready[0]?N'(1):(cdb_hint_ready[1]?N'(2):N'(8)));
@@ -875,6 +894,7 @@ module backend_ooo #(
     .src_exception (cdb_src_exc),
     .src_ready     (cdb_src_ready),
     .hint_ready_mask(cdb_hint_ready),
+    .arbitration_phase(cdb_phase),
     .cdb_out       (cdb_out)
   );
 

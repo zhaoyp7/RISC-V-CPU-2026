@@ -44,6 +44,8 @@ module issue_queue #(
   input  logic [`CPU_PRF_IDX_W-1:0]           lookahead_tag,
   input logic execute1_lookahead_valid,
   input logic [`CPU_PRF_IDX_W-1:0] execute1_lookahead_tag,
+  input logic memory_lookahead_valid,
+  input logic [`CPU_PRF_IDX_W-1:0]memory_lookahead_tag,
   input logic execute_lookahead_valid,
   input logic [`CPU_PRF_IDX_W-1:0] execute_lookahead_tag,
   input  logic                               lookahead_load_valid,
@@ -207,7 +209,7 @@ module issue_queue #(
   wire [D-1:0] memory_base_ready;
   for(genvar m=0;m<D;m=m+1)begin : gen_memory_base_ready
     assign memory_base_ready[m]=src1_ready[m] ||
-      (LANE0_MEMORY_LOOKAHEAD && lookahead_valid && src1_tag[m*PW+:PW]==lookahead_tag);
+      (LANE0_MEMORY_LOOKAHEAD && memory_lookahead_valid && src1_tag[m*PW+:PW]==memory_lookahead_tag);
   end
   logic [D-1:0] cand_issue;
   logic [D-1:0] cand_prefill;

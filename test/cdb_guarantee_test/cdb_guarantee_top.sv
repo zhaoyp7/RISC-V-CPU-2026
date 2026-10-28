@@ -11,5 +11,5 @@ module cdb_guarantee_top #(parameter integer W=2,R=`CPU_CDB_NUM) (
   output logic [W+1:0] hint_ready_mask,
   output logic [R*`CPU_CDB_W-1:0]        cdb_out
 );
- cdb #(.W(W),.R(R),.PRIORITY_ALU0(`GUARANTEE_TEST_PRIORITY),.HINT_OPTIONAL_SOURCE(2)) dut(.*);
+ cdb #(.W(W),.R(R),.PRIORITY_ALU0(`GUARANTEE_TEST_PRIORITY),.HINT_OPTIONAL_SOURCE(2)) dut(.arbitration_phase(), .*);
 endmodule

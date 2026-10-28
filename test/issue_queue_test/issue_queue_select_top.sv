@@ -65,6 +65,8 @@ module issue_queue_select_top (
 `define IQ_TEST_MEMORY_HINT 0
 `endif
   logic unused_registered_alu_ready;
+  wire memory_lookahead_valid=lookahead_valid;
+  wire [`CPU_PRF_IDX_W-1:0]memory_lookahead_tag=lookahead_tag;
   wire execute_lookahead_valid=1'b0,execute1_lookahead_valid=1'b0;
   wire [`CPU_PRF_IDX_W-1:0]execute_lookahead_tag='0,execute1_lookahead_tag='0;
   issue_queue #(.IW(`IQ_TEST_IW), .LANE1_ALU_ONLY(`IQ_TEST_ALU_ONLY),
