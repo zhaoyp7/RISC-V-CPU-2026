@@ -1,11 +1,61 @@
 # 性能记录
 
-## 当前候选正式opt：417.62MHz /22,315.19µm²（2026-10-26）
+## 当前保留检查点：aa6fdda（2026-10-28）
+
+标签 `ipc-compact-refill-dispatch-20261028`，性能分支 `feat/ipc-frontend-recovery-20261027`。
+高性能配置：W2 / ROB32 / PRF64 / IQ8 / LSQ16 / CDB2，16KiB 数据缓存；
+默认配置仍为 ROB16 / PRF48、数据缓存关闭，下面的 PPA 不代表默认配置。
+
+| 同模式实测（diagnose） | W2 IPC | 频率 MHz | 面积 µm² | IPC×频率 |
+| --- | ---: | ---: | ---: | ---: |
+| 当前保留 aa6fdda | 1.043669 | 398.599 | 35,175.783 | 416.005 |
+| 上一保留 d1faa42 | 1.032043 | 397.361 | 35,487.037 | 410.094 |
+| 固定基线 29e0fc8 | 0.659404 | 385.833 | 23,449.324 | 254.420 |
+| 当前 main 5a1d8d6 | 0.522151 | 384.673 | 20,443.919 | 200.857 |
+
+相对上一保留版：IPC **+1.127%**、频率 **+0.311%**、面积 **−0.877%**、吞吐 **+1.441%**。
+高性能 W2/W1 与默认 W2 三套配置各 19/19；完整单测 `ipc-afternoon-v56-unit.log` 为 ALL PASS。
+六项 perf 的普通版/统计版输入、答案和周期相同；24 个综合输入、工具、标准库、SRAM、约束与实际容量已核验。
+综合后实际 CDB 网表的计算源、可选 load 与轮转状态穷举检查通过。
+W1 IPC 为 0.820447，默认 W2 IPC 为 0.624733。
+当前 main 为 `5a1d8d6`，opt 候选标签 `cache32-zero-opt-20261026` 仍指向 `29e0fc8`；本轮没有 opt、合 main 或推送。
+验证归档：[validation.json](../build/three_hour_20261027/ipc_compact_refill_dispatch_v56/validation.json)。
+
+## 2026-10-27～28 保留检查点补录
+
+仅列已经实测完整 IPC 与 diagnose PPA 的保留检查点；全部为上述高性能配置。
+各提交的生产 RTL（配置文件单独生成）已逐项与对应冻结测量输入核对。提交链接指向本地测量报告，`build/` 生成物不随 Git 提交。
+
+| 提交 / 改动 | W2 IPC | MHz | 面积 µm² | IPC×频率 |
+| --- | ---: | ---: | ---: | ---: |
+| [76b5bd6](../build/three_hour_20261027/frontend_prefetch_v2/synth/diagnose/report.json) 后端停顿时预取 | 0.800195 | 380.811 | 34,634.493 | 304.723 |
+| [c4a6d8e](../build/three_hour_20261027/frontend_response_bypass_v3/synth/diagnose/report.json) 前端响应队列直通 | 0.816384 | 380.811 | 34,614.474 | 310.888 |
+| [54deae2](../build/three_hour_20261027/frontend_decode_speculative_valid_v6/synth/diagnose/report.json) 空译码队列直通 | 0.838939 | 380.811 | 34,800.705 | 319.477 |
+| [90817b4](../build/three_hour_20261027/lsq_store_payload_v7/synth/diagnose/report.json) LSQ store payload 选择 | 0.838939 | 404.104 | 34,831.162 | 339.019 |
+| [5b7e67d](../build/three_hour_20261027/ipc_load_wakeup_v12/synth/diagnose/report.json) 查询提前接收与安全唤醒 | 0.866317 | 404.583 | 34,927.798 | 350.497 |
+| [9834700](../build/three_hour_20261027/ipc_bank_parallel_v13/synth/diagnose/report.json) 数据缓存不同字 bank 并行 | 0.877392 | 403.308 | 34,927.857 | 353.859 |
+| [6ec4ad4](../build/three_hour_20261027/ipc_instruction_banks_only_v20/synth/diagnose/report.json) 指令缓存按地址奇偶分 bank | 0.898595 | 403.308 | 34,944.178 | 362.411 |
+| [079ea96](../build/three_hour_20261027/ipc_memory_payload_v21/synth/diagnose/report.json) 隔离访存 payload 与控制唤醒 | 0.927753 | 403.308 | 35,011.859 | 374.171 |
+| [3e74535](../build/three_hour_20261027/ipc_if_line_synth_v25/synth/diagnose/report.json) 共享指令补行缓冲 | 0.967901 | 400.313 | 35,228.009 | 387.463 |
+| [cc904d2](../build/three_hour_20261027/ipc_store_commit_fifo_v28/synth/diagnose/report.json) store 数据捕获与提交环形队列 | 0.994178 | 397.516 | 35,445.659 | 395.201 |
+| [7d0bce5](../build/three_hour_20261027/ipc_icache_early_hit_v39/synth/diagnose/report.json) I-cache 命中提前返回 | 1.020347 | 397.516 | 35,450.704 | 405.604 |
+| [d1faa42](../build/three_hour_20261027/ipc_isolated_cdb_hint_v46/synth/diagnose/report.json) 隔离 CDB 提示与 ALU 快速派发 | 1.032043 | 397.361 | 35,487.037 | 410.094 |
+| [aa6fdda](../build/three_hour_20261027/ipc_compact_refill_dispatch_v56/synth/diagnose/report.json) 精简 AXI 队列与快速派发组合 | 1.043669 | 398.599 | 35,175.783 | 416.005 |
+
+079ea96 使用同源完整回归与改动模块专项检查的组合覆盖，详见[验证范围](../build/three_hour_20261027/ipc_memory_payload_v21/validation.json)。
+表中各行使用各自实测值，不将后续频率回填到旧版；正在验证的局部历史预测器尚未纳入表格。
+未采用的已测对照保留在试验标签与归档中，例如 `ipc-refill-window-trial-20261028`、`ipc-compact-credits8-trial-20261028`。
+
+---
+
+## 历史 opt 对照：417.62MHz /22,315.19µm²（2026-10-26）
+
+以下为历史 opt 数据，其中 f4a0555 的 456.12MHz 不属于当前 main 5a1d8d6。
 
 生产04eee15，测量时HEAD76e4f73；W2/ROB32/PRF64/IQ8/CDB2/LSQ16/D$32B。
-当前main f4a0555为W2/ROB16/PRF48/IQ8/CDB2/LSQ16、无D$，复用其已核验opt归档。
+本节测量时的main f4a0555为W2/ROB16/PRF48/IQ8/CDB2/LSQ16、无D$，复用其已核验opt归档。
 
-| 指标（W2、opt对opt） | 当前32B候选 | 当前main | 相对main |
+| 指标（W2、opt对opt） | 当时32B候选 | 当时main | 相对当时main |
 | --- | ---: | ---: | ---: |
 | IPC | 0.659404 | 0.522108 | +26.296% |
 | 面积 µm² | 22,315.189 | 19,808.712 | +12.653% |
@@ -22,7 +72,7 @@
 默认配置、main及官方工具文件均未改变；未合main、未推送。完整归档build/synth/cache32_zero_opt_checkpoint/。
 详见[32B候选opt对照](experiments/cache32-opt.md)。以下为diagnose阶段记录。
 
-## 当前候选：32B缓存＋x0组内旁路修复（2026-10-26）
+## 历史检查点：32B缓存＋x0组内旁路修复（2026-10-26）
 
 04eee15，ROB32/PRF64/IQ8/CDB2/LSQ16，D$4set×2way×4B；默认缓存关闭。
 W2/W1 IPC0.659404/0.584500，diagnose23,449.324µm²/385.83MHz。
