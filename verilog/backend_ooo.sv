@@ -15,6 +15,7 @@ module backend_ooo #(
   parameter integer STORE_DATA_CAPTURE = 0,
   parameter integer ORDERED_STORE_COMMIT = 0,
   parameter integer DISPATCH_ALU_BYPASS = 0,
+  parameter integer MEMORY_BASE_LOOKAHEAD = 0,
   parameter integer DISPATCH_CONTROL_BYPASS = 0
 ) (
   input  logic clk,
@@ -97,7 +98,7 @@ module backend_ooo #(
     dispatch_bypass_uop=skid_uop[bypass_lane*DW+:DW];
     dispatch_bypass_seq=skid_seq+32'(bypass_lane);
     dispatch_bypass_mask='0;
-    if(DISPATCH_ALU_BYPASS && skid_valid && !iq_registered_alu_ready && !a1_valid_q && direct_alu(dispatch_bypass_uop) && (&dispatch_sources_ready) &&
+    if(DISPATCH_ALU_BYPASS && skid_valid && !iq_registered_alu_ready && (!a1_valid_q || !alu1_valid_q) && direct_alu(dispatch_bypass_uop) && (&dispatch_sources_ready) &&
        iq_free >= (n_disp-1) && lsu_alloc_ready)
       dispatch_bypass_mask[bypass_lane]=1'b1;
   end
@@ -256,7 +257,7 @@ module backend_ooo #(
   logic [31:0] memory_issue_seq;
   logic memory_issue_addr_only;
 
-  issue_queue #(.W(W), .IW(2), .LANE1_ALU_ONLY(1), .LANE1_LOOKAHEAD(1), .LANE0_CONTROL_LOOKAHEAD(1), .RETIRE_STORE_PREFILL(STORE_DATA_CAPTURE)) u_iq (
+  issue_queue #(.W(W), .IW(2), .LANE1_ALU_ONLY(1), .LANE1_LOOKAHEAD(1), .LANE0_CONTROL_LOOKAHEAD(1), .LANE0_SPECIAL_PRIORITY(1), .LANE0_ALU_LOOKAHEAD(1), .REUSE_ISSUED_SLOTS(0), .LANE0_MEMORY_LOOKAHEAD(MEMORY_BASE_LOOKAHEAD), .RETIRE_STORE_PREFILL(STORE_DATA_CAPTURE)) u_iq (
     .clk            (clk),
     .reset          (reset),
     .in_valid       (skid_drain ? (skid_vmask & ~all_dispatch_bypass_mask) : '0),
@@ -471,7 +472,14 @@ module backend_ooo #(
   // lane0/访存只按寄存ready选择；ALU1的保守提示保证接收沿写PRF，
   // a1缓冲下一拍才读PRF。六个读口均不需要当前拍CDB数据旁路。
   // dispatch/skid/IQ 入队的同拍 wake 匹配仍保留，防止漏掉唯一一次广播。
-  assign issue_src1 = prf_rdata[0 +: 32];
+  // The early base tag is guaranteed to write PRF at this edge. Memory
+  // executes before the edge, so forward that registered producer value.
+  wire early_memory_base = MEMORY_BASE_LOOKAHEAD && iq_lookahead_valid &&
+      memory_issue_uop[`CPU_DISPATCH_SRC1_TAG_OFF+:PW]!=0 &&
+      memory_issue_uop[`CPU_DISPATCH_SRC1_TAG_OFF+:PW]==iq_lookahead_tag;
+  wire [31:0] early_memory_value = cdb_hint_ready[0] ? alu_value_q :
+      (cdb_hint_ready[1] ? alu1_value_q : div_value_q);
+  assign issue_src1 = early_memory_base ? early_memory_value : prf_rdata[0 +: 32];
   assign issue_src2 = prf_rdata[32 +: 32];
   assign p_src1 = prf_rdata[2*32 +: 32];
   assign p_src2 = prf_rdata[3*32 +: 32];
@@ -748,7 +756,7 @@ module backend_ooo #(
 `ifndef SYNTHESIS
   always_ff @(posedge clk)if(!reset&&dispatch_bypass_fire)begin
     if(iq_out_valid[1]&&issue_ready[1])$fatal(1,"two owners of lane1 input buffer");
-    if(!direct_alu(dispatch_bypass_uop)||iq_registered_alu_ready||a1_valid_q)$fatal(1,"unsafe direct ALU admission");
+    if(!direct_alu(dispatch_bypass_uop)||iq_registered_alu_ready||!a1_accept)$fatal(1,"unsafe direct ALU admission");
   end
 `endif
 
@@ -767,6 +775,17 @@ module backend_ooo #(
 
   assign div_start = div_issue;
 
+`ifndef SYNTHESIS
+  always_ff@(posedge clk)if(!reset && iq_out_valid[0] && issue_ready[0] && i_is_mem && early_memory_base)begin
+    automatic logic matched;
+    matched=0;
+    for(integer w=0;w<R;w=w+1)
+      if(cdb_out[w*CW+`CPU_CDB_VALID_OFF] &&
+         cdb_out[w*CW+`CPU_CDB_TAG_OFF+:PW]==memory_issue_uop[`CPU_DISPATCH_SRC1_TAG_OFF+:PW] &&
+         cdb_out[w*CW+`CPU_CDB_VALUE_OFF+:32]==issue_src1) matched=1;
+    if(!matched)$fatal(1,"early memory base lacks matching real writeback");
+  end
+`endif
   // ---------------------------------------------------------------------------
   // CDB
   // ---------------------------------------------------------------------------

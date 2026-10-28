@@ -21,6 +21,18 @@ constexpr int W=TB_W, R=TB_R, D=TB_D, IW=TB_IW, DW=150;
 #ifndef TB_RETIRE_PREFILL
 #define TB_RETIRE_PREFILL 0
 #endif
+#ifndef TB_SPECIAL_PRIORITY
+#define TB_SPECIAL_PRIORITY 0
+#endif
+#ifndef TB_REUSE_ISSUED
+#define TB_REUSE_ISSUED 0
+#endif
+#ifndef TB_ALU0_HINT
+#define TB_ALU0_HINT 0
+#endif
+#ifndef TB_MEMORY_HINT
+#define TB_MEMORY_HINT 0
+#endif
 using Bits=std::array<uint32_t,(DW+31)/32>;
 template<class V> void put(V& v,int off,int width,uint32_t x) {
     for(int b=0;b<width;++b) {
@@ -109,28 +121,50 @@ struct Test {
             auto& e=entries[i];count+=e.valid;
             killed[i]=e.valid&&s.squash&&e.seq>s.cut;
             free_after+=!e.valid||killed[i];
-            if(e.valid&&!killed[i])order.push_back(i);
+            if(e.valid)order.push_back(i);
         }
         std::sort(order.begin(),order.end(),[&](int a,int b){
             return entries[a].seq!=entries[b].seq ? entries[a].seq<entries[b].seq : a<b;
         });
         std::array<int,IW> sel;sel.fill(-1);
         std::array<bool,IW> pre{};
+        // Independent policy: stable-sort the general port's candidates by
+        // instruction class, then age. Cancel each selected transaction only
+        // after choosing both ports; cancellation never changes payload muxes.
+        if(TB_SPECIAL_PRIORITY&&TB_ALU_ONLY&&IW==2)
+            std::stable_partition(order.begin(),order.end(),[&](int i) {
+                const auto& e=entries[i];
+                bool memory=get(e.bits,116,1)||get(e.bits,117,1);
+                bool r1=e.r1||(TB_MEMORY_HINT&&memory&&s.hint&&get(e.bits,128,6)==s.hint_tag);
+                bool full=r1&&e.r2;
+                if((TB_CONTROL_HINT&&(get(e.bits,113,1)||get(e.bits,115,1)))||
+                   (TB_ALU0_HINT&&lane1_ok(e.bits)))
+                    full=(e.r1||(s.hint&&get(e.bits,128,6)==s.hint_tag))&&
+                         (e.r2||(s.hint&&get(e.bits,135,6)==s.hint_tag));
+                bool pf=r1&&!e.r2&&get(e.bits,117,1)&&!e.addr_sent;
+                return !lane1_ok(e.bits)&&(full||pf);
+            });
         for(int l=0;l<IW;++l)for(int i:order) {
-            auto& e=entries[i];bool full=e.r1&&e.r2;
+            auto& e=entries[i];
+            bool memory=get(e.bits,116,1)||get(e.bits,117,1);
+            bool r1=e.r1||(TB_MEMORY_HINT&&memory&&s.hint&&get(e.bits,128,6)==s.hint_tag);
+            bool full=r1&&e.r2;
             if((TB_LOOKAHEAD&&TB_ALU_ONLY&&l==1) ||
-               (TB_CONTROL_HINT&&l==0&&(get(e.bits,113,1)||get(e.bits,115,1))))
+               (l==0&&((TB_CONTROL_HINT&&(get(e.bits,113,1)||get(e.bits,115,1)))||
+                       (TB_ALU0_HINT&&lane1_ok(e.bits)))))
                 full=(e.r1||(s.hint&&get(e.bits,128,6)==s.hint_tag))&&
                      (e.r2||(s.hint&&get(e.bits,135,6)==s.hint_tag));
-            bool pf=e.r1&&!e.r2&&get(e.bits,117,1)&&!e.addr_sent;
+            bool pf=r1&&!e.r2&&get(e.bits,117,1)&&!e.addr_sent;
             bool supported=!(TB_ALU_ONLY&&l==1)||lane1_ok(e.bits);
             if(!used[i]&&supported&&(full||(l==0&&pf))) {sel[l]=i;used[i]=true;pre[l]=!full;break;}
         }
+        for(int l=0;l<IW;++l)if(sel[l]>=0&&killed[sel[l]]){sel[l]=-1;pre[l]=false;}
         int mem=-1;
         for(int i=0;i<D;i++) {
             const auto& e=entries[i];
             bool store=get(e.bits,117,1),load=get(e.bits,116,1);
-            if(e.valid&&(load||store)&&e.r1&&(e.r2||(store&&!e.addr_sent))&&
+            bool r1=e.r1||(TB_MEMORY_HINT&&s.hint&&get(e.bits,128,6)==s.hint_tag);
+            if(e.valid&&(load||store)&&r1&&(e.r2||(store&&!e.addr_sent))&&
                (mem<0||e.seq<entries[mem].seq||(e.seq==entries[mem].seq&&i<mem)))mem=i;
         }
         bool mpf=mem>=0&&get(entries[mem].bits,117,1)&&!entries[mem].r2&&!entries[mem].addr_sent;
@@ -142,6 +176,12 @@ struct Test {
             check(same,"memory payload matches independent registered-ready winner");
         }
         check(d.count==count,"occupied count");check(d.free_count==D-count,"free count");
+        std::array<bool,D> released{};
+        if(TB_REUSE_ISSUED)for(int l=0;l<IW;++l)
+            if(sel[l]>=0&&(s.ready>>l&1)&&(!pre[l]||TB_RETIRE_PREFILL)) {
+                released[sel[l]]=true;
+                if(entries[sel[l]].valid&&!killed[sel[l]])++free_after;
+            }
         bool accept=free_after>=s.n;
         check(bool(d.in_ready)==accept,"dispatch capacity after squash");
         for(int l=0;l<IW;++l) {
@@ -156,7 +196,7 @@ struct Test {
         }
         std::array<int,W> slots{};std::array<bool,D> allocated{};
         for(int l=0;l<W;++l)for(int i=0;i<D;++i)
-            if((!entries[i].valid||killed[i])&&!allocated[i]) {slots[l]=i;allocated[i]=true;break;}
+            if((!entries[i].valid||killed[i]||released[i])&&!allocated[i]) {slots[l]=i;allocated[i]=true;break;}
         for(int i=0;i<D;++i) {
             auto& e=entries[i];
             if(killed[i]) {e.valid=false;e.addr_sent=false;e.r1=false;e.r2=false;}

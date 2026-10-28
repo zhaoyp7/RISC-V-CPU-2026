@@ -52,10 +52,28 @@ module issue_queue_select_top (
 `ifndef IQ_TEST_RETIRE_PREFILL
 `define IQ_TEST_RETIRE_PREFILL 0
 `endif
+`ifndef IQ_TEST_SPECIAL_PRIORITY
+`define IQ_TEST_SPECIAL_PRIORITY 0
+`endif
+`ifndef IQ_TEST_REUSE_ISSUED
+`define IQ_TEST_REUSE_ISSUED 0
+`endif
+`ifndef IQ_TEST_ALU0_HINT
+`define IQ_TEST_ALU0_HINT 0
+`endif
+`ifndef IQ_TEST_MEMORY_HINT
+`define IQ_TEST_MEMORY_HINT 0
+`endif
   logic unused_registered_alu_ready;
   issue_queue #(.IW(`IQ_TEST_IW), .LANE1_ALU_ONLY(`IQ_TEST_ALU_ONLY),
                 .LANE1_LOOKAHEAD(`IQ_TEST_LOOKAHEAD),
                 .LANE0_CONTROL_LOOKAHEAD(`IQ_TEST_CONTROL_HINT),
+                .LANE0_SPECIAL_PRIORITY(`IQ_TEST_SPECIAL_PRIORITY),
+                .REUSE_ISSUED_SLOTS(`IQ_TEST_REUSE_ISSUED),
+                .LANE0_ALU_LOOKAHEAD(`IQ_TEST_ALU0_HINT),
+`ifdef IQ_TEST_MEMORY_HINT
+                .LANE0_MEMORY_LOOKAHEAD(`IQ_TEST_MEMORY_HINT),
+`endif
                 .RETIRE_STORE_PREFILL(`IQ_TEST_RETIRE_PREFILL)) dut (
     .lookahead_valid(`IQ_TEST_LOAD_HINT ? 1'b0 : lookahead_valid),
     .lookahead_tag(lookahead_tag),

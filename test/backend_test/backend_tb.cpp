@@ -978,6 +978,53 @@ int main(int argc, char** argv) {
     h.expect(!h.br_seen&&h.complete_q.empty()&&h.cdb_q.empty(),"control cancelled on squash edge");
     for(int n=0;n<12;++n){h.tick();h.expect(!h.br_seen&&h.complete_q.empty()&&h.cdb_q.empty(),"cancelled control stays discarded");}
 #endif
+#ifdef TB_MEMORY_HINT
+    // An unwritten base has a distinct old PRF value (zero). Check load
+    // addresses, stores with ready data, and same-edge base/data capture.
+    for(int kind=0;kind<3;kind++){
+        h.auto_respond=true;h.reset();
+        const uint32_t base=0x7800+kind*0x20, address=base+4, seed=0x91827364+kind;
+        h.write_word(address,seed,15);
+        Uop p;p.dest=40;p.rob=1;p.reg_we=1;p.b_sel=B_IMM;p.imm=base;
+        h.expect(h.dispatch_one(p),"memory base producer dispatch");
+        Uop q;q.dest=41;q.rob=2;q.lsq=1;q.src1=40;q.src1_ready=0;q.imm=4;q.mem_size=2;
+        if(kind==0){q.is_load=1;q.reg_we=1;q.wb_sel=WB_MEM;}
+        else {q.is_store=1;if(kind==2){q.src2=40;q.src2_ready=0;}}
+        h.expect(h.dispatch_one(q),"dependent memory dispatch before base writeback");
+        unsigned bases=0,loads=0,completions=0;
+        for(int n=0;n<32;n++){
+            h.tick();
+            while(!h.cdb_q.empty()){
+                auto x=h.cdb_q.front();h.cdb_q.pop_front();
+                if(x.first==40){++bases;h.expect(x.second==base,"base producer value");}
+                else {++loads;h.expect(kind==0&&x.first==41&&x.second==seed,"early load reads computed address");}
+            }
+            while(!h.complete_q.empty()){auto x=h.complete_q.front();h.complete_q.pop_front();++completions;h.expect(kind!=0&&x==41,"early store completes once");}
+        }
+        h.expect(bases==1&&loads==unsigned(kind==0)&&completions==unsigned(kind!=0),"early memory exact completion ownership");
+        h.expect(dut.early_base_events==1,"memory really issues before registered base-ready");
+        if(kind!=0){
+            h.expect(h.read_word(address)==seed,"early store cannot write before commit");
+            h.commit_one(1,true,false);for(int n=0;n<24;n++)h.tick();
+            h.expect(h.read_word(address)==(kind==2?base:0),"early store address and captured data");
+        }
+    }
+    // Cancel at several stages of the dependent load's lifetime. Responses
+    // may still return, but the cancelled physical destination cannot write.
+    for(int delay=0;delay<4;delay++){
+        h.auto_respond=false;h.reset();h.write_word(0x7904,0x10203040,15);
+        Uop p;p.dest=40;p.rob=1;p.reg_we=1;p.b_sel=B_IMM;p.imm=0x7900;
+        h.expect(h.dispatch_one(p),"cancelled early base producer");
+        Uop q;q.dest=41;q.rob=20;q.lsq=1;q.src1=40;q.src1_ready=0;q.imm=4;q.mem_size=2;q.is_load=1;q.reg_we=1;q.wb_sel=WB_MEM;
+        h.expect(h.dispatch_one(q),"cancelled early load dispatch");
+        for(int n=0;n<delay;n++)h.tick();
+        h.squash_one(1);h.auto_respond=true;
+        for(int n=0;n<32;n++)h.tick();
+        unsigned producers=0;
+        while(!h.cdb_q.empty()){auto x=h.cdb_q.front();h.cdb_q.pop_front();++producers;h.expect(x.first==40&&x.second==0x7900,"cancelled load never writes reused destination");}
+        h.expect(producers==1&&h.complete_q.empty(),"cancellation keeps only older base producer");
+    }
+#endif
     printf("\nW=%d checked=%ld fails=%ld\n", W, h.checks, h.fails);
     bool pass = (h.fails == 0);
     printf(pass ? "PASS\n" : "FAIL\n");

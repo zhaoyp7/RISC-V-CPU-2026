@@ -19,6 +19,10 @@ module issue_queue #(
   parameter integer LANE1_ALU_ONLY = 0,
   parameter integer LANE1_LOOKAHEAD = 0,
   parameter integer LANE0_CONTROL_LOOKAHEAD = 0,
+  parameter integer LANE0_SPECIAL_PRIORITY = 0,
+  parameter integer LANE0_ALU_LOOKAHEAD = 0,
+  parameter integer REUSE_ISSUED_SLOTS = 0,
+  parameter integer LANE0_MEMORY_LOOKAHEAD = 0,
   parameter integer RETIRE_STORE_PREFILL = 0
 ) (
   input  logic clk,
@@ -105,6 +109,18 @@ module issue_queue #(
   logic [D-1:0] squash_mask;
   logic [7:0] n_squash;
   logic [7:0] free_after;
+  logic [D-1:0] released;
+  logic [7:0] n_released;
+  always_comb begin
+    released='0; n_released='0;
+    if(REUSE_ISSUED_SLOTS) begin
+      for(integer q=0;q<IW;q=q+1)
+        if(out_valid[q] && out_ready[q] && (!out_addr_only[q] || RETIRE_STORE_PREFILL))
+          released[sel_idx[q]]=1'b1;
+      for(integer q=0;q<D;q=q+1)
+        if(released[q] && !squash_mask[q]) n_released=n_released+1'b1;
+    end
+  end
 
   always_comb begin
     n_in = '0;
@@ -132,7 +148,7 @@ module issue_queue #(
     end
   end
 
-  assign free_after = free_count + n_squash;
+  assign free_after = free_count + n_squash + n_released;
 
   assign in_ready = (free_after >= n_in);
 
@@ -148,7 +164,7 @@ module issue_queue #(
       slot_found = 1'b0;
       for (i = 0; i < D; i = i + 1) begin
         if (!slot_found && !alloc_used[i] &&
-            (!valid[i] || squash_mask[i])) begin
+            (!valid[i] || squash_mask[i] || released[i])) begin
           alloc_slot[lane] = i[7:0];
           alloc_used[i] = 1'b1;
           slot_found = 1'b1;
@@ -184,6 +200,11 @@ module issue_queue #(
   // lane 0 除了普通发射，还可以对 store 做 address-only 发射：地址源 ready
   // 但数据源尚未 ready 时，先把地址填入 LSQ，store 本体仍留在 IQ 等数据。
   // 这样后面的 load 不会被一个地址未知的 store 长期阻塞。
+  wire [D-1:0] memory_base_ready;
+  for(genvar m=0;m<D;m=m+1)begin : gen_memory_base_ready
+    assign memory_base_ready[m]=src1_ready[m] ||
+      (LANE0_MEMORY_LOOKAHEAD && lookahead_valid && src1_tag[m*PW+:PW]==lookahead_tag);
+  end
   logic [D-1:0] cand_issue;
   logic [D-1:0] cand_prefill;
   logic [IW-1:0] sel_valid;
@@ -200,16 +221,20 @@ module issue_queue #(
     for (i = 0; i < D; i = i + 1) begin
       cand_issue[i] = valid[i] &&
           ((src1_ready[i] && src2_ready[i]) ||
-           (LANE0_CONTROL_LOOKAHEAD &&
+           (LANE0_MEMORY_LOOKAHEAD &&
+            (uop[i*DW+`CPU_DISPATCH_IS_LOAD_OFF] || uop[i*DW+`CPU_DISPATCH_IS_STORE_OFF]) &&
+            memory_base_ready[i] && src2_ready[i]) ||
+           (((LANE0_CONTROL_LOOKAHEAD &&
             (uop[i*DW + `CPU_DISPATCH_IS_BRANCH_OFF] ||
-             uop[i*DW + `CPU_DISPATCH_IS_JALR_OFF]) &&
+             uop[i*DW + `CPU_DISPATCH_IS_JALR_OFF])) ||
+             (LANE0_ALU_LOOKAHEAD && lane1_eligible[i])) &&
             (src1_ready[i] || (lookahead_valid && src1_tag[i*PW +: PW] == lookahead_tag) ||
              (lookahead_load_valid && src1_tag[i*PW +: PW] == lookahead_load_tag)) &&
             (src2_ready[i] || (lookahead_valid && src2_tag[i*PW +: PW] == lookahead_tag) ||
              (lookahead_load_valid && src2_tag[i*PW +: PW] == lookahead_load_tag))));
       cand_prefill[i] = valid[i] && !addr_sent[i] &&
                         uop[i*DW + `CPU_DISPATCH_IS_STORE_OFF] &&
-                        src1_ready[i] && !src2_ready[i];
+                        memory_base_ready[i] && !src2_ready[i];
     end
   end
 
@@ -249,6 +274,10 @@ module issue_queue #(
 
       wire [D-1:0] full_first, full_second, pick0;
       wire [D-1:0] cand_any = cand_issue | cand_prefill;
+      // Reserve the general port for work that cannot use the ALU-only port.
+      wire [D-1:0] special_candidates = cand_any & ~lane1_eligible;
+      wire [D-1:0] port0_candidates = (LANE0_SPECIAL_PRIORITY && LANE1_ALU_ONLY && IW==2 && |special_candidates)
+          ? special_candidates : cand_any;
       for (genvar g = 0; g < D; g = g + 1) begin : gen_rank
         // 树节点只记录是否存在、是否至少两个更老的完整候选。
         // 不使用串行加法统计数量，也不再在选择树每层比较32位seq。
@@ -270,12 +299,12 @@ module issue_queue #(
         end
         assign full_first[g] = cand_issue[g] && !any_older[1];
         assign full_second[g] = cand_issue[g] && any_older[1] && !multi_older[1];
-        assign pick0[g] = cand_any[g] && !(|(older[g] & cand_any));
+        assign pick0[g] = port0_candidates[g] && !(|(older[g] & port0_candidates));
       end
       wire [D-1:0] memory_candidates, memory_pick;
       for(genvar g=0;g<D;g=g+1)begin : gen_memory_pick
         wire is_memory = uop[g*DW+`CPU_DISPATCH_IS_LOAD_OFF] || uop[g*DW+`CPU_DISPATCH_IS_STORE_OFF];
-        assign memory_candidates[g] = valid[g] && is_memory && src1_ready[g] &&
+        assign memory_candidates[g] = valid[g] && is_memory && memory_base_ready[g] &&
           (src2_ready[g] || (uop[g*DW+`CPU_DISPATCH_IS_STORE_OFF] && !addr_sent[g]));
         assign memory_pick[g] = memory_candidates[g] && !(|(older[g] & memory_candidates));
       end
