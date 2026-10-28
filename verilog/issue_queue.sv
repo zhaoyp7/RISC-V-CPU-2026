@@ -305,7 +305,15 @@ module issue_queue #(
         end
         assign full_first[g] = cand_issue[g] && !any_older[1];
         assign full_second[g] = cand_issue[g] && any_older[1] && !multi_older[1];
-        assign pick0[g] = port0_candidates[g] && !(|(older[g] & port0_candidates));
+        if(LANE0_SPECIAL_PRIORITY && LANE1_ALU_ONLY && IW==2)begin:gen_class_first
+          // Rank each class in parallel. The global class-presence select
+          // comes after ranking, instead of entering every age comparison.
+          wire special_first=special_candidates[g] && !(|(older[g]&special_candidates));
+          wire any_first=cand_any[g] && !(|(older[g]&cand_any));
+          assign pick0[g]=special_first || (!(|special_candidates) && any_first);
+        end else begin:gen_original_priority
+          assign pick0[g]=port0_candidates[g] && !(|(older[g]&port0_candidates));
+        end
       end
       wire [D-1:0] memory_candidates, memory_pick;
       for(genvar g=0;g<D;g=g+1)begin : gen_memory_pick
