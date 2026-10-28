@@ -30,9 +30,24 @@ module store_capture_backend_top #(parameter integer W=`CPU_ISSUE_WIDTH) (
   output logic [3:0]  st_req_wstrb,
   input  logic        st_req_ready,
   input  logic        st_resp_valid,
-  output logic [31:0] early_base_events
+  output logic [31:0] early_base_events,
+  output logic[31:0]future0_events,future1_events
 );
- backend_ooo #(.W(W), .MEMORY_BASE_LOOKAHEAD(1), .STORE_DATA_CAPTURE(1), .ORDERED_STORE_COMMIT(1),.DISPATCH_ALU_BYPASS(1),.DISPATCH_CONTROL_BYPASS(1)) dut(.*);
+`ifndef EXECUTION_HINT_TEST
+`define EXECUTION_HINT_TEST 0
+`endif
+ backend_ooo #(.W(W), .EXECUTION_LOOKAHEAD(`EXECUTION_HINT_TEST), .MEMORY_BASE_LOOKAHEAD(1), .STORE_DATA_CAPTURE(1), .ORDERED_STORE_COMMIT(1),.DISPATCH_ALU_BYPASS(1),.DISPATCH_CONTROL_BYPASS(1)) dut(.*);
+ always_ff@(posedge clk)begin
+  if(reset)begin future0_events<=0;future1_events<=0;end
+  else if(dut.iq_out_valid[1]&&dut.issue_ready[1])begin
+   if(dut.execute_hint_valid &&
+      ((!dut.u_iq.src1_ready[dut.u_iq.sel_idx[1]]&&dut.j_src1_tag==dut.a0_dest)||
+       (!dut.u_iq.src2_ready[dut.u_iq.sel_idx[1]]&&dut.j_src2_tag==dut.a0_dest)))future0_events<=future0_events+1;
+   if(dut.execute1_hint_valid &&
+      ((!dut.u_iq.src1_ready[dut.u_iq.sel_idx[1]]&&dut.j_src1_tag==dut.p_dest)||
+       (!dut.u_iq.src2_ready[dut.u_iq.sel_idx[1]]&&dut.j_src2_tag==dut.p_dest)))future1_events<=future1_events+1;
+  end
+ end
  always_ff@(posedge clk)begin
   if(reset)early_base_events<=0;
   else if(dut.iq_out_valid[0] && dut.issue_ready[0] && dut.i_is_mem && dut.early_memory_base &&

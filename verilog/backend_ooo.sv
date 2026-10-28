@@ -15,6 +15,7 @@ module backend_ooo #(
   parameter integer STORE_DATA_CAPTURE = 0,
   parameter integer ORDERED_STORE_COMMIT = 0,
   parameter integer DISPATCH_ALU_BYPASS = 0,
+  parameter integer EXECUTION_LOOKAHEAD = 0,
   parameter integer MEMORY_BASE_LOOKAHEAD = 0,
   parameter integer DISPATCH_CONTROL_BYPASS = 0
 ) (
@@ -267,6 +268,8 @@ module backend_ooo #(
     .wake_valid     (cdb_wake_valid),
     .wake_tag       (cdb_wake_tag),
     .lookahead_valid(iq_lookahead_valid),
+    .execute_lookahead_valid(execute_hint_valid),.execute_lookahead_tag(a0_dest),
+    .execute1_lookahead_valid(execute1_hint_valid),.execute1_lookahead_tag(p_dest),
     .lookahead_tag  (iq_lookahead_tag),
     .lookahead_load_valid(iq_aux_lookahead_valid),
     .lookahead_load_tag(iq_aux_lookahead_tag),
@@ -481,8 +484,10 @@ module backend_ooo #(
       (cdb_hint_ready[1] ? alu1_value_q : div_value_q);
   assign issue_src1 = early_memory_base ? early_memory_value : prf_rdata[0 +: 32];
   assign issue_src2 = prf_rdata[32 +: 32];
-  assign p_src1 = prf_rdata[2*32 +: 32];
-  assign p_src2 = prf_rdata[3*32 +: 32];
+  assign p_src1 = EXECUTION_LOOKAHEAD && alu_valid_q && p_src1_tag!=0 && p_src1_tag==alu_tag_q ? alu_value_q :
+      ((EXECUTION_LOOKAHEAD && alu1_valid_q && p_src1_tag!=0 && p_src1_tag==alu1_tag_q) ? alu1_value_q : prf_rdata[2*32 +: 32]);
+  assign p_src2 = EXECUTION_LOOKAHEAD && alu_valid_q && p_src2_tag!=0 && p_src2_tag==alu_tag_q ? alu_value_q :
+      ((EXECUTION_LOOKAHEAD && alu1_valid_q && p_src2_tag!=0 && p_src2_tag==alu1_tag_q) ? alu1_value_q : prf_rdata[3*32 +: 32]);
   assign a0_src1 = prf_rdata[4*32 +: 32];
   assign a0_src2 = prf_rdata[5*32 +: 32];
 
@@ -812,6 +817,14 @@ module backend_ooo #(
     $fatal(1,"load lookahead without guaranteed CDB writeback");
 `endif
 
+  // The current registered ALU0 owner will deposit its result at this edge.
+  // A lane1 consumer enters its buffer now and reads that result next cycle.
+  // Nothing depending on the new IQ winner, ALU data, LSU validity or CDB ready
+  // enters this early scheduling cone. Cancellation remains late in IQ valid.
+  wire execute_hint_valid=EXECUTION_LOOKAHEAD && R>=2 && a0_valid_q &&
+      a0_needs_alu_result && !a0_is_div && !a0_is_branch_any && (!alu_valid_q || cdb_hint_ready[0]);
+  wire execute1_hint_valid=EXECUTION_LOOKAHEAD && R>=2 && a1_valid_q &&
+      p_needs_alu_result && (!alu1_valid_q || cdb_hint_ready[1]);
   assign iq_lookahead_valid=|cdb_hint_ready;
   assign iq_lookahead_tag=cdb_hint_ready[0]?alu_tag_q:(cdb_hint_ready[1]?alu1_tag_q:div_tag_q);
   wire [N-1:0] extra_hint_mask=cdb_hint_ready & ~(cdb_hint_ready[0]?N'(1):(cdb_hint_ready[1]?N'(2):N'(8)));

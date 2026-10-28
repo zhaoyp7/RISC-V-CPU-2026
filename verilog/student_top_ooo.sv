@@ -131,7 +131,7 @@ module student_top (
     .refill_rdata1     (if_refill_rdata1)
   );
 
-  backend_ooo #(.MEMORY_BASE_LOOKAHEAD(1), .STORE_DATA_CAPTURE(1), .ORDERED_STORE_COMMIT(1),.DISPATCH_ALU_BYPASS(1),.DISPATCH_CONTROL_BYPASS(1)) u_backend (
+  backend_ooo #(.EXECUTION_LOOKAHEAD(1), .MEMORY_BASE_LOOKAHEAD(1), .STORE_DATA_CAPTURE(1), .ORDERED_STORE_COMMIT(1),.DISPATCH_ALU_BYPASS(1),.DISPATCH_CONTROL_BYPASS(1)) u_backend (
     .clk            (clock),
     .reset          (reset),
     .dispatch       (dispatch),

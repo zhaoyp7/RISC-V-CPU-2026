@@ -808,8 +808,13 @@ int main(int argc, char** argv) {
         }
         h.expect(producer_cycle>=0&&consumer_cycle==producer_cycle+2,
                  "load-hinted consumer returns two edges after producer");
+#ifdef TB_EXECUTION_HINT
+        h.expect(follower_cycle==consumer_cycle+1,
+                 "executing producer removes one dependent scheduling edge");
+#else
         h.expect(follower_cycle==consumer_cycle+2,
                  "uncontended compute follower returns two edges after consumer");
+#endif
     }
 
     // A held load writes a previously zero PRF slot. A dependent branch
@@ -1024,6 +1029,49 @@ int main(int argc, char** argv) {
         while(!h.cdb_q.empty()){auto x=h.cdb_q.front();h.cdb_q.pop_front();++producers;h.expect(x.first==40&&x.second==0x7900,"cancelled load never writes reused destination");}
         h.expect(producers==1&&h.complete_q.empty(),"cancellation keeps only older base producer");
     }
+#endif
+#ifdef TB_EXECUTION_HINT
+    // A pending load keeps the whole dependence chain in IQ. Once it
+    // returns, ALU0 and ALU1 both schedule their next consumer before WB.
+    unsigned negative_sra_cases=0;
+    for(unsigned trial=0;trial<512;trial++){
+      h.auto_respond=true;h.reset();h.auto_respond=false;
+      uint32_t seed=trial*0x91827365u+0x80000000u;h.write_word(0x7600,seed,15);
+      Uop load;load.reg_we=1;load.dest=40;load.rob=1;load.is_load=1;load.wb_sel=WB_MEM;load.imm=0x7600;
+      h.expect(h.dispatch_one(load),"future source load accepted");
+      for(unsigned n=0;n<24&&h.ld_pending.empty();n++)h.tick();
+      uint32_t expected[5]={seed,0,0,0,0};
+      for(unsigned k=0;k<4;k++){
+       Uop q;q.reg_we=1;q.dest=41+k;q.rob=2+k;q.src1=40+k;q.src1_ready=0;q.b_sel=B_IMM;q.imm=(trial^(k*71))+1;
+       static const unsigned operations[]={0,5,2,6,7,3,4,8,9,1};
+       q.alu=operations[(trial+k)%10];uint32_t a=expected[k],b=q.imm;
+       switch(q.alu){
+        case 0:expected[k+1]=a+b;break;
+        case 1:q.b_sel=B_REG;q.src2=q.src1;q.src2_ready=0;expected[k+1]=a-a;break;
+        case 2:expected[k+1]=a<<(b&31);break;
+        case 3:expected[k+1]=int32_t(a)<int32_t(b);break;
+        case 4:expected[k+1]=a<b;break;
+        case 5:expected[k+1]=a^b;break;
+        case 6:expected[k+1]=a>>(b&31);break;
+        case 7:expected[k+1]=uint32_t(int32_t(a)>>(b&31));negative_sra_cases+=int32_t(a)<0;break;
+        case 8:expected[k+1]=a|b;break;
+        case 9:expected[k+1]=a&b;break;
+       }
+       h.expect(h.dispatch_one(q),"future dependent chain owner accepted");
+      }
+      for(unsigned n=0;n<6;n++)h.tick();h.auto_respond=true;unsigned seen[5]={};
+      for(unsigned n=0;n<64;n++){
+       h.tick();while(!h.cdb_q.empty()){
+        auto e=h.cdb_q.front();h.cdb_q.pop_front();bool tag_ok=e.first>=40&&e.first<=44;
+        h.expect(tag_ok,"future chain exact destination owner");
+        if(tag_ok){unsigned k=e.first-40;h.expect(seen[k]++==0&&e.second==expected[k],"future chain exact value, no duplicate");}
+       }
+      }
+      for(unsigned k=0;k<5;k++)h.expect(seen[k]==1,"each future chain instruction completes");
+      h.expect(dut.future0_events>0&&dut.future1_events>0,"both executing producers actually schedule early consumers");
+    }
+    h.expect(negative_sra_cases>0,"forwarded arithmetic covers negative signed shifts");
+    std::printf("FORWARD_ARITHMETIC W=%d chains=512 negative_sra=%u\n",W,negative_sra_cases);
 #endif
     printf("\nW=%d checked=%ld fails=%ld\n", W, h.checks, h.fails);
     bool pass = (h.fails == 0);
