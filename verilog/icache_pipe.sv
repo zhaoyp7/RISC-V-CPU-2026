@@ -23,7 +23,8 @@ module icache_pipe #(
   // The integrated frontend can preview an old response during flush;
   // its state is flushed and ROB admission rejects that speculative decode.
   parameter integer MASK_RESPONSE_ON_FLUSH = 1,
-  parameter integer BANKED_WORD = 0
+  parameter integer BANKED_WORD = 0,
+  parameter integer S1_HIT_BYPASS = 0
 ) (
   input  logic        clk,
   input  logic        reset,
@@ -195,11 +196,15 @@ module icache_pipe #(
     end
   end
 
+  wire s1_early_valid=S1_HIT_BYPASS && state==ST_NORMAL && !buf_valid && !s2_valid &&
+    !pending_valid && s1_valid && valid[s1_index] && tag_rdata==s1_tag;
+  wire s1_early_consume=s1_early_valid && fetch_resp_ready;
+
   // ---- 输出 ----------------------------------------------------------------
   assign fetch_resp_valid = (!MASK_RESPONSE_ON_FLUSH || !flush) &&
-                            (buf_valid || ((state == ST_NORMAL) && s2_valid && s2_hit));
-  assign fetch_resp_pc    = buf_valid ? buf_pc : s2_pc;
-  assign fetch_inst       = buf_valid ? buf_inst : s2_data;
+                            (buf_valid || ((state == ST_NORMAL) && s2_valid && s2_hit) || s1_early_valid);
+  assign fetch_resp_pc    = buf_valid ? buf_pc : ((S1_HIT_BYPASS && !s2_valid) ? s1_pc : s2_pc);
+  assign fetch_inst       = buf_valid ? buf_inst : ((S1_HIT_BYPASS && !s2_valid) ? data_rdata : s2_data);
 
   assign refill_valid = (state == ST_REFILL) || (state == ST_DRAIN);
   assign refill_addr  = BANKED_WORD ? {refill_pc[31:2],2'b00} : {refill_tag, refill_index, 2'b00};
@@ -261,7 +266,7 @@ module icache_pipe #(
             s1_valid      <= 1'b0;
           end else if (s2_accept && s1_valid) begin
             // s1 -> s2；同时把 s1 的 SRAM 读结果打一拍
-            s2_valid      <= 1'b1;
+            s2_valid      <= !s1_early_consume;
             s2_pc         <= s1_pc;
             s2_tag        <= s1_tag;
             s2_tag_ram    <= tag_rdata;

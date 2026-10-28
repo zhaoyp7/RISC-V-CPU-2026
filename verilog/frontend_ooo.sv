@@ -237,7 +237,8 @@ module frontend_ooo #(
   icache_pipe #(
     .INDEX_BITS (`CPU_ICACHE_INDEX_BITS),
     .MASK_RESPONSE_ON_FLUSH (0),
-    .BANKED_WORD (WORD_BANKING)
+    .BANKED_WORD (WORD_BANKING),
+    .S1_HIT_BYPASS (WORD_BANKING)
   ) u_icache0 (
     .clk               (clk),
     .reset             (reset),
@@ -259,7 +260,8 @@ module frontend_ooo #(
   icache_pipe #(
     .INDEX_BITS (`CPU_ICACHE_INDEX_BITS),
     .MASK_RESPONSE_ON_FLUSH (0),
-    .BANKED_WORD (WORD_BANKING)
+    .BANKED_WORD (WORD_BANKING),
+    .S1_HIT_BYPASS (WORD_BANKING)
   ) u_icache1 (
     .clk               (clk),
     .reset             (reset),

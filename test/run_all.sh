@@ -71,6 +71,7 @@ run "icache index=4" env ICACHE_INDEX_BITS=4 \
 run "icache index=10" env ICACHE_INDEX_BITS=10 \
     sh test/icache_pipe_test/run.sh $quick --cycles 5000 --seed "$seed"
 run "word-banked I-cache / physical routing and refill parity" sh test/icache_bank_test/run.sh
+run "I-cache early hit / one-cycle latency and backpressure" sh test/icache_hit_bypass_test/run.sh
 run "rename W=1" env RENAME_W=1 sh test/rename_test/run.sh $quick --seed "$seed"
 run "rename W=2" env RENAME_W=2 sh test/rename_test/run.sh $quick --seed "$seed"
 run "rename constant x0 sources W1/W2" sh test/rename_zero_test/run.sh
