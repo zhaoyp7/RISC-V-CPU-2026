@@ -15,6 +15,7 @@
 module frontend_ooo #(
   parameter integer W      = `CPU_ISSUE_WIDTH,
   parameter integer FDEPTH = 8,
+  parameter integer LOCAL_HISTORY_BITS=0,
   parameter integer WORD_BANKING = 0
 ) (
   input  logic        clk,
@@ -91,7 +92,7 @@ module frontend_ooo #(
     end
   end
 
-  bpu u_bpu (
+  bpu #(.LOCAL_HISTORY_BITS(LOCAL_HISTORY_BITS)) u_bpu (
     .clk             (clk),
     .reset           (reset),
     .fetch_pc        (pc_q),

@@ -3,6 +3,7 @@ package core_admission_controls; logic free_ready, rob_ready; endpackage
 module frontend_ooo #(
   parameter integer W      = `CPU_ISSUE_WIDTH,
   parameter integer FDEPTH = 8,
+  parameter integer LOCAL_HISTORY_BITS=0,
   parameter integer WORD_BANKING = 0
 ) (
   input  logic        clk,

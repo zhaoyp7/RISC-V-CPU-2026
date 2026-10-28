@@ -143,7 +143,7 @@ module core_ooo #(
   assign br_tag    = br_update[`CPU_BR_TAG_OFF +: PW];
 
   // ---- frontend -----------------------------------------------------------
-  frontend_ooo #(.W(W), .WORD_BANKING(1)) u_front (
+  frontend_ooo #(.W(W), .WORD_BANKING(1),.LOCAL_HISTORY_BITS(3)) u_front (
     .clk               (clk),
     .reset             (reset),
     .backend_ready     (backend_ready && rob_in_ready),
