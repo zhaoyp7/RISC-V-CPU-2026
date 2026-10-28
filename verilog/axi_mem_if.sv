@@ -18,7 +18,8 @@
 // -----------------------------------------------------------------------------
 
 module axi_mem_if #(
-  parameter integer QDEPTH = 8
+  parameter integer QDEPTH = 8,
+  parameter integer WRITE_DEPTH = QDEPTH
 ) (
   input  logic        clk,
   input  logic        reset,
@@ -73,6 +74,9 @@ module axi_mem_if #(
   localparam integer PTRW = (QDEPTH > 1) ? $clog2(QDEPTH) : 1;
   localparam integer CNTW = $clog2(QDEPTH + 1);
 
+  localparam integer WPTRW=(WRITE_DEPTH>1)?$clog2(WRITE_DEPTH):1;
+  localparam integer WCNTW=$clog2(WRITE_DEPTH+1);
+
   // ---- 读请求 FIFO --------------------------------------------------------
   logic [31:0]      rdq_addr [0:QDEPTH-1];
   logic [PTRW-1:0]  rdq_head, rdq_tail;
@@ -92,12 +96,12 @@ module axi_mem_if #(
   assign rready        = 1'b1;
 
   // ---- 写请求 FIFO --------------------------------------------------------
-  logic [31:0]      wrq_addr  [0:QDEPTH-1];
-  logic [31:0]      wrq_wdata [0:QDEPTH-1];
-  logic [3:0]       wrq_wstrb [0:QDEPTH-1];
-  logic [PTRW-1:0]  wrq_head, wrq_tail;
-  logic [CNTW-1:0]  wrq_queued;      // 已接收但 AW/W 尚未完成
-  logic [CNTW-1:0]  wr_outstanding;  // AW/W 已完成、B 未返回
+  logic [31:0]      wrq_addr  [0:WRITE_DEPTH-1];
+  logic [31:0]      wrq_wdata [0:WRITE_DEPTH-1];
+  logic [3:0]       wrq_wstrb [0:WRITE_DEPTH-1];
+  logic [WPTRW-1:0]  wrq_head, wrq_tail;
+  logic [WCNTW-1:0]  wrq_queued;      // 已接收但 AW/W 尚未完成
+  logic [WCNTW-1:0]  wr_outstanding;  // AW/W 已完成、B 未返回
   logic             aw_done, w_done;
 
   logic aw_fire, w_fire, b_fire;
@@ -106,7 +110,7 @@ module axi_mem_if #(
   assign w_fire  = wvalid && wready;
   assign b_fire  = bvalid && bready;
 
-  assign wr_ready = ((wrq_queued + wr_outstanding) < QDEPTH);
+  assign wr_ready = ((wrq_queued + wr_outstanding) < WRITE_DEPTH);
   assign awvalid  = (wrq_queued != 0) && !aw_done;
   assign wvalid   = (wrq_queued != 0) && !w_done;
   assign awaddr   = wrq_addr[wrq_head];
@@ -152,7 +156,7 @@ module axi_mem_if #(
         wrq_addr[wrq_tail]  <= wr_addr;
         wrq_wdata[wrq_tail] <= wr_wdata;
         wrq_wstrb[wrq_tail] <= wr_wstrb;
-        wrq_tail            <= (wrq_tail == QDEPTH - 1) ? '0 : wrq_tail + 1'b1;
+        wrq_tail            <= (wrq_tail == WRITE_DEPTH - 1) ? '0 : wrq_tail + 1'b1;
       end
 
       if (aw_fire) aw_done <= 1'b1;
@@ -161,7 +165,7 @@ module axi_mem_if #(
       wr_dispatch = (wrq_queued != 0) &&
                     (aw_done || aw_fire) && (w_done || w_fire);
       if (wr_dispatch) begin
-        wrq_head <= (wrq_head == QDEPTH - 1) ? '0 : wrq_head + 1'b1;
+        wrq_head <= (wrq_head == WRITE_DEPTH - 1) ? '0 : wrq_head + 1'b1;
         aw_done  <= 1'b0;
         w_done   <= 1'b0;
       end

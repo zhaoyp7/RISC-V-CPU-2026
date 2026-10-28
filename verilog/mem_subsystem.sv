@@ -19,6 +19,7 @@
 
 module mem_subsystem #(
   parameter integer QDEPTH = 8,
+  parameter integer WRITE_DEPTH = QDEPTH,
   parameter integer IF_LINE_BUFFER = 0
 ) (
   input  logic        clk,
@@ -80,7 +81,7 @@ module mem_subsystem #(
   output logic        bready
 );
  generate if(!IF_LINE_BUFFER)begin : gen_direct
-  mem_subsystem_raw #(.QDEPTH(QDEPTH)) u_raw(.*);
+  mem_subsystem_raw #(.QDEPTH(QDEPTH),.WRITE_DEPTH(WRITE_DEPTH)) u_raw(.*);
  end else begin : gen_instruction_line
   logic [1:0] client_wait;
   logic [1:0] owner;
@@ -148,7 +149,7 @@ module mem_subsystem #(
    if(cache_accept&&client_wait[select_second])$fatal(1,"instruction request accepted twice");
   end
 `endif
-  mem_subsystem_raw #(.QDEPTH(QDEPTH)) u_raw(
+  mem_subsystem_raw #(.QDEPTH(QDEPTH),.WRITE_DEPTH(WRITE_DEPTH)) u_raw(
    .if_req_valid(1'b0),.if_req_addr(32'b0),.if_resp_valid(unused_if0_valid),.if_resp_rdata(unused_if0_data),
    .if2_req_valid(1'b0),.if2_req_addr(32'b0),.if2_resp_valid(unused_if1_valid),.if2_resp_rdata(unused_if1_data),
    .ld_req_valid(shared_valid),.ld_req_addr(shared_addr),.ld_req_ready(raw_ready),
@@ -157,7 +158,8 @@ module mem_subsystem #(
 endmodule
 
 module mem_subsystem_raw #(
-  parameter integer QDEPTH = 8
+  parameter integer QDEPTH = 8,
+  parameter integer WRITE_DEPTH = QDEPTH
 ) (
   input  logic        clk,
   input  logic        reset,
@@ -236,7 +238,7 @@ module mem_subsystem_raw #(
   logic [3:0]  axi_wr_wstrb;
   logic        axi_wr_resp_valid;
 
-  axi_mem_if #(.QDEPTH(QDEPTH)) u_axi (
+  axi_mem_if #(.QDEPTH(QDEPTH),.WRITE_DEPTH(WRITE_DEPTH)) u_axi (
     .clk            (clk),
     .reset          (reset),
     .rd_valid       (axi_rd_valid),
@@ -495,7 +497,8 @@ endmodule
 // Stores are write-through outside this module; hits update byte lanes here.
 module load_line_cache #(
   parameter integer INDEX_BITS = 7,
-  parameter integer QDEPTH = 8
+  parameter integer QDEPTH = 8,
+  parameter integer FLIGHT_DEPTH = 8
 ) (
   input wire clk, reset,
   input wire req_valid,
@@ -517,6 +520,7 @@ module load_line_cache #(
   localparam integer LINES = 1 << INDEX_BITS;
   localparam integer TAG_BITS = 23 - INDEX_BITS;
   localparam integer QW = $clog2(QDEPTH);
+  localparam integer FW = $clog2(FLIGHT_DEPTH);
   logic [LINES-1:0] line_valid;
   logic [TAG_BITS-1:0] line_tag [0:LINES-1];
   logic [QDEPTH-1:0] q_valid, q_done, q_mshr;
@@ -549,9 +553,9 @@ module load_line_cache #(
 
   // Downstream responses are ordered, so each accepted word carries a compact
   // {MSHR,word} record until its response. The external memory remains shared.
-  logic [3:0] flight [0:7];
-  logic [2:0] flight_head, flight_tail;
-  logic [3:0] flight_count;
+  logic [3:0] flight [0:FLIGHT_DEPTH-1];
+  logic [FW-1:0] flight_head, flight_tail;
+  logic [FW:0] flight_count;
   wire return_valid = mem_resp_valid && flight_count != 0;
   wire return_slot = flight[flight_head][3];
   wire [2:0] return_word = flight[flight_head][2:0];
@@ -566,7 +570,7 @@ module load_line_cache #(
   end
   wire [2:0] send_word = m_unc[send_slot] ? m_first[send_slot] :
                                               m_first[send_slot]+m_sent[send_slot][2:0];
-  assign mem_valid = !reset && send_valid && flight_count < 8;
+  assign mem_valid = !reset && send_valid && flight_count < FLIGHT_DEPTH;
   assign mem_addr = {m_addr[send_slot][31:5],send_word,2'b00};
   wire send_fire = mem_valid && mem_ready;
 
@@ -760,9 +764,10 @@ module load_line_cache #(
   always_ff @(posedge clk)if(!reset)begin
     if(mem_resp_valid && flight_count==0)$fatal(1,"line cache response without owner");
     if(store_resp_valid && store_count==0)$fatal(1,"line cache store completion without owner");
-    if(q_count>(QW+1)'(QDEPTH) || flight_count>8 || store_count>8)$fatal(1,"line cache credit overflow");
+    if(q_count>(QW+1)'(QDEPTH) || flight_count>FLIGHT_DEPTH || store_count>8)$fatal(1,"line cache credit overflow");
     if(store_fire && !store_ready)$fatal(1,"line cache store accepted without credit");
   end
+  initial if(FLIGHT_DEPTH<2 || (FLIGHT_DEPTH & (FLIGHT_DEPTH-1))!=0)$fatal(1,"flight depth must be power of two");
   initial if(QDEPTH<2 || (QDEPTH & (QDEPTH-1))!=0)
     $fatal(1,"line cache ordered load window must be a power of two >= 2");
 `endif

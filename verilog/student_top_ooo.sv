@@ -90,7 +90,7 @@ module student_top (
     logic cache_store_ready;
     assign ms_st_valid = st_req_valid && cache_store_ready;
     assign st_req_ready = ms_st_ready && cache_store_ready;
-    load_line_cache #(.INDEX_BITS(`CPU_LINE_CACHE_INDEX_BITS)) u_cache (
+    load_line_cache #(.INDEX_BITS(`CPU_LINE_CACHE_INDEX_BITS),.FLIGHT_DEPTH(16)) u_cache (
       .clk(clock), .reset(reset),
       .req_valid(ld_req_valid), .req_addr(ld_req_addr), .req_ready(ld_req_ready),
       .resp_valid(ld_resp_valid), .resp_data(ld_resp_rdata),
@@ -156,7 +156,7 @@ module student_top (
     .st_resp_valid  (st_resp_valid)
   );
 
-  mem_subsystem #(.IF_LINE_BUFFER(`CPU_LINE_CACHE_ENABLE)) u_mem (
+  mem_subsystem #(.IF_LINE_BUFFER(`CPU_LINE_CACHE_ENABLE),.QDEPTH(16),.WRITE_DEPTH(`CPU_LINE_CACHE_ENABLE?8:16)) u_mem (
     .clk             (clock),
     .reset           (reset),
     .if_req_valid    (if_refill_valid),

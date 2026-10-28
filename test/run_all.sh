@@ -90,6 +90,7 @@ run "LSU 64B read cache / ordering and invalidation" sh test/lsu_cache_test/run.
 run "mem_subsystem v2" sh test/mem_subsystem_test/run.sh
 run "shared instruction line buffer / response ownership" sh test/if_line_buffer_test/run.sh
 run "nonblocking line cache / order and write races" sh test/line_cache_test/run.sh
+run "expanded refill flight / read16 write8 ownership" sh test/refill_flight_test/run.sh
 run "backend W=1/W=2" sh test/backend_test/run.sh
 run "core_ooo lint/check" sh test/core_skeleton_test/run.sh
 

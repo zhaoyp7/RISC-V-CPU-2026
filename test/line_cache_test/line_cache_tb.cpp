@@ -1,4 +1,7 @@
-#ifdef TB_LINE_QUEUE_TWO
+#ifdef TB_LINE_FLIGHT_SIXTEEN
+#include "Vline_flight16_top.h"
+using Vload_line_cache=Vline_flight16_top;
+#elif defined(TB_LINE_QUEUE_TWO)
 #include "Vline_queue_top.h"
 using Vload_line_cache=Vline_queue_top;
 #else
@@ -78,6 +81,15 @@ struct Bench {
 };
 int main(int argc,char**argv){
  Verilated::commandArgs(argc,argv);Bench b;b.reset();
+#ifdef TB_LINE_FLIGHT_SIXTEEN
+ // Two distant cold lines must use the entire expanded external-read window.
+ {Bench window;window.stalls=false;window.latency=50;window.reset();
+  window.load(0x100000);window.load(0x200020);
+  for(int n=0;n<24;n++)window.tick();
+  if(window.rd.size()!=16)window.fail("expanded read window not fully exercised",0,uint32_t(window.rd.size()),16);
+  window.drain();b.checks+=window.checks+1;
+ }
+#endif
  // Cold fills, all offsets, hot-hit stream, and two independent outstanding lines.
  for(unsigned k=0;k<4;k++)for(unsigned i=0;i<64;i++)b.load(0x1000+i*4);
  b.drain();

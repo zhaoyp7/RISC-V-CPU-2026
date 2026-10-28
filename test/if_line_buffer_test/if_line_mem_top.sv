@@ -1,3 +1,9 @@
+`ifndef IF_LINE_RAW_QUEUE
+`define IF_LINE_RAW_QUEUE 8
+`endif
+`ifndef IF_LINE_WRITE_QUEUE
+`define IF_LINE_WRITE_QUEUE `IF_LINE_RAW_QUEUE
+`endif
 // Test-only wrapper for instruction refill coalescing and ownership.
 module if_line_mem_top (
   input  logic        clk,
@@ -58,5 +64,5 @@ module if_line_mem_top (
   input  logic        bvalid,
   output logic        bready
 );
- mem_subsystem #(.IF_LINE_BUFFER(1)) dut(.*);
+ mem_subsystem #(.IF_LINE_BUFFER(1),.QDEPTH(`IF_LINE_RAW_QUEUE),.WRITE_DEPTH(`IF_LINE_WRITE_QUEUE)) dut(.*);
 endmodule
