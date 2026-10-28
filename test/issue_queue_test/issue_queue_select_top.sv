@@ -52,12 +52,14 @@ module issue_queue_select_top (
 `ifndef IQ_TEST_RETIRE_PREFILL
 `define IQ_TEST_RETIRE_PREFILL 0
 `endif
+  logic unused_registered_alu_ready;
   issue_queue #(.IW(`IQ_TEST_IW), .LANE1_ALU_ONLY(`IQ_TEST_ALU_ONLY),
                 .LANE1_LOOKAHEAD(`IQ_TEST_LOOKAHEAD),
                 .LANE0_CONTROL_LOOKAHEAD(`IQ_TEST_CONTROL_HINT),
                 .RETIRE_STORE_PREFILL(`IQ_TEST_RETIRE_PREFILL)) dut (
     .lookahead_valid(`IQ_TEST_LOAD_HINT ? 1'b0 : lookahead_valid),
     .lookahead_tag(lookahead_tag),
+    .registered_alu_ready(unused_registered_alu_ready),
     .lookahead_load_valid(`IQ_TEST_LOAD_HINT ? lookahead_valid : 1'b0),
     .lookahead_load_tag(lookahead_tag), .*);
 endmodule

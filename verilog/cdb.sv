@@ -14,7 +14,8 @@
 module cdb #(
   parameter integer W = `CPU_ISSUE_WIDTH,
   parameter integer R = `CPU_CDB_NUM,
-  parameter integer PRIORITY_ALU0 = 0
+  parameter integer PRIORITY_ALU0 = 0,
+  parameter integer HINT_OPTIONAL_SOURCE = -1
 ) (
   input  logic clk,
   input  logic reset,
@@ -25,6 +26,7 @@ module cdb #(
   input  logic [W+1:0]                   src_exception,
   output logic [W+1:0]                   src_ready,
 
+  output logic [W+1:0] hint_ready_mask,
   output logic [R*`CPU_CDB_W-1:0]        cdb_out
 );
 
@@ -69,6 +71,17 @@ module cdb #(
     if(PRIORITY_ALU0 && R>=2)src_ready[0]=src_valid[0];
   end
 
+
+  generate if(HINT_OPTIONAL_SOURCE>=0 && HINT_OPTIONAL_SOURCE<N && R>=2)begin : gen_guaranteed_hint
+    wire [N-2:0] registered_compute_valid;
+    for(genvar c=0;c<N-1;c=c+1)begin : gen_compute_input
+      assign registered_compute_valid[c]=src_valid[c+(c>=HINT_OPTIONAL_SOURCE)];
+    end
+    (* keep_hierarchy = "yes" *) cdb_compute_hint #(.N(N),.R(R),.PRIORITY_ALU0(PRIORITY_ALU0),.OPTIONAL(HINT_OPTIONAL_SOURCE)) u_hint(
+      .last(last),.compute_valid(registered_compute_valid),.hint_mask(hint_ready_mask));
+  end else begin : gen_no_guaranteed_hint
+    assign hint_ready_mask='0;
+  end endgenerate
   always_ff @(posedge clk) begin
     if (reset)
       last <= 4'b0;
@@ -76,4 +89,33 @@ module cdb #(
       last <= (last == N-1) ? 4'b0 : last + 4'b1;
   end
 
+endmodule
+
+// Only registered compute status and registered arbitration phase enter this
+// cone. Keeping it separate prevents sharing with late optional-source logic.
+(* keep_hierarchy = "yes" *) module cdb_compute_hint #(
+  parameter integer N=4,R=2,PRIORITY_ALU0=1,OPTIONAL=2
+)(input logic[3:0]last,input logic[N-2:0]compute_valid,output logic[N-1:0]hint_mask);
+  function automatic [N-1:0] assumed_grants(input logic optional_present);
+    logic[N-1:0]offered,granted;
+    logic got;
+    integer lane,offset,index,source;
+    begin
+      for(source=0;source<N;source=source+1)begin
+        if(source==OPTIONAL)offered[source]=optional_present;
+        else offered[source]=compute_valid[source-(source>OPTIONAL)];
+      end
+      granted='0;
+      for(lane=0;lane<R;lane=lane+1)begin
+        got=0;
+        if(PRIORITY_ALU0 && lane==0 && offered[0])begin got=1;granted[0]=1;end
+        for(offset=0;offset<N;offset=offset+1)begin
+          index=(last+lane+offset+1)%N;
+          if(!got && offered[index] && !granted[index])begin got=1;granted[index]=1;end
+        end
+      end
+      assumed_grants=granted;
+    end
+  endfunction
+  assign hint_mask=assumed_grants(1'b0)&assumed_grants(1'b1)&~(N'(1)<<OPTIONAL);
 endmodule

@@ -120,6 +120,7 @@ struct Harness {
     Vbackend_ooo* dut = nullptr;
     uint8_t mem[1 << 16] = {};
     bool auto_respond = true;
+    uint64_t cycle_count=0;
     long checks = 0;
     long fails = 0;
     bool br_seen = false;
@@ -152,6 +153,7 @@ struct Harness {
     }
 
     void tick() {
+        cycle_count++;
         dut->clk = 0;
         dut->eval();
 
@@ -888,6 +890,32 @@ int main(int argc, char** argv) {
 
 #endif
 
+
+#ifdef TB_DISPATCH_BYPASS
+    for(int occupied=0;occupied<2;occupied++){
+        h.auto_respond=true;h.reset();
+        if(occupied){
+            h.auto_respond=false;h.write_word(0x7600,100,15);
+            Uop p;p.dest=40;p.rob=1;p.reg_we=1;p.is_load=1;p.wb_sel=WB_MEM;p.imm=0x7600;
+            h.expect(h.dispatch_one(p),"direct ALU older load accepted");
+            for(int n=0;n<32&&h.ld_pending.empty();n++)h.tick();
+            for(int n=0;n<3;n++){Uop q;q.dest=10+n;q.rob=2+n;q.reg_we=1;q.src1=40;q.src1_ready=0;q.b_sel=B_IMM;q.imm=n;h.expect(h.dispatch_one(q),"blocked IQ owner accepted");}
+            for(int n=0;n<4;n++)h.tick();
+        }
+        Uop a;a.dest=50;a.rob=20;a.reg_we=1;a.b_sel=B_IMM;a.imm=123;
+        uint64_t start=h.cycle_count;h.expect(h.dispatch_one(a),"ready ALU accepted for direct execution");
+        uint32_t tag=0,value=0;bool done=h.wait_cdb(tag,value,24);
+        h.expect(done&&tag==50&&value==123,"direct ALU returns correct value exactly once");
+        h.expect(h.cycle_count-start==4,"direct ALU saves IQ allocation and selection cycle");
+        std::printf("DIRECT_ALU W=%d occupied=%d latency=%llu\n",W,occupied,(unsigned long long)(h.cycle_count-start));
+        if(occupied){
+            a.dest=51;a.rob=21;a.imm=124;h.expect(h.dispatch_one(a),"ready ALU accepted before squash");
+            h.squash_one(1);h.auto_respond=true;unsigned source=0;
+            for(int n=0;n<40;n++){h.tick();while(!h.cdb_q.empty()){auto e=h.cdb_q.front();h.cdb_q.pop_front();h.expect(e.first==40&&e.second==100,"squash drops queued and direct younger owners");source++;}}
+            h.expect(source==1,"older load survives direct ALU squash");
+        }
+    }
+#endif
     printf("\nW=%d checked=%ld fails=%ld\n", W, h.checks, h.fails);
     bool pass = (h.fails == 0);
     printf(pass ? "PASS\n" : "FAIL\n");

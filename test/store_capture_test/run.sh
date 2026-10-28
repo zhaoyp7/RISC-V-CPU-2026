@@ -29,5 +29,5 @@ for w in 1 2; do
             "$root/verilog/lsq.sv" "$root/verilog/lsu.sv" "$root/verilog/backend_ooo.sv" \
             "$here/store_capture_backend_top.sv" \
   --define "CPU_ISSUE_WIDTH=$w" --define CPU_LSQ_DEPTH=8 --define CPU_PRF_SIZE=64 \
-  --define CPU_ROB_DEPTH=32 --cxx-define "TB_W=$w" --cxx-define TB_STORE_CAPTURE=1
+  --define CPU_ROB_DEPTH=32 --cxx-define "TB_W=$w" --cxx-define TB_STORE_CAPTURE=1 --cxx-define TB_DISPATCH_BYPASS=1
 done

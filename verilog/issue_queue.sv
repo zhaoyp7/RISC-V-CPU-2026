@@ -63,6 +63,7 @@ module issue_queue #(
   output logic memory_addr_only,
 
   // status
+  output logic registered_alu_ready,
   output logic [7:0]                         count,
   output logic [7:0]                         free_count
 );
@@ -87,6 +88,7 @@ module issue_queue #(
   logic [PW-1:0]      in_src2_tag [0:W-1];
   logic               in_src1_rdy [0:W-1];
   logic               in_src2_rdy [0:W-1];
+  assign registered_alu_ready=|(valid & src1_ready & src2_ready & lane1_eligible);
   integer             i, lane;
 
   always_comb begin
