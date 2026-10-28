@@ -1,3 +1,9 @@
+`ifndef IF_LINE_READ_ADDRESS_SLOTS
+`define IF_LINE_READ_ADDRESS_SLOTS `IF_LINE_RAW_QUEUE
+`endif
+`ifndef IF_LINE_WRITE_ADDRESS_SLOTS
+`define IF_LINE_WRITE_ADDRESS_SLOTS `IF_LINE_WRITE_QUEUE
+`endif
 `ifndef IF_LINE_RAW_QUEUE
 `define IF_LINE_RAW_QUEUE 8
 `endif
@@ -64,5 +70,5 @@ module if_line_mem_top (
   input  logic        bvalid,
   output logic        bready
 );
- mem_subsystem #(.IF_LINE_BUFFER(1),.QDEPTH(`IF_LINE_RAW_QUEUE),.WRITE_DEPTH(`IF_LINE_WRITE_QUEUE)) dut(.*);
+ mem_subsystem #(.IF_LINE_BUFFER(1),.QDEPTH(`IF_LINE_RAW_QUEUE),.WRITE_DEPTH(`IF_LINE_WRITE_QUEUE),.READ_QUEUE_DEPTH(`IF_LINE_READ_ADDRESS_SLOTS),.WRITE_QUEUE_DEPTH(`IF_LINE_WRITE_ADDRESS_SLOTS)) dut(.*);
 endmodule

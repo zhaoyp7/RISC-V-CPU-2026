@@ -20,6 +20,8 @@
 module mem_subsystem #(
   parameter integer QDEPTH = 8,
   parameter integer WRITE_DEPTH = QDEPTH,
+  parameter integer READ_QUEUE_DEPTH = QDEPTH,
+  parameter integer WRITE_QUEUE_DEPTH = WRITE_DEPTH,
   parameter integer IF_LINE_BUFFER = 0
 ) (
   input  logic        clk,
@@ -81,7 +83,7 @@ module mem_subsystem #(
   output logic        bready
 );
  generate if(!IF_LINE_BUFFER)begin : gen_direct
-  mem_subsystem_raw #(.QDEPTH(QDEPTH),.WRITE_DEPTH(WRITE_DEPTH)) u_raw(.*);
+  mem_subsystem_raw #(.QDEPTH(QDEPTH),.WRITE_DEPTH(WRITE_DEPTH),.READ_QUEUE_DEPTH(READ_QUEUE_DEPTH),.WRITE_QUEUE_DEPTH(WRITE_QUEUE_DEPTH)) u_raw(.*);
  end else begin : gen_instruction_line
   logic [1:0] client_wait;
   logic [1:0] owner;
@@ -149,7 +151,7 @@ module mem_subsystem #(
    if(cache_accept&&client_wait[select_second])$fatal(1,"instruction request accepted twice");
   end
 `endif
-  mem_subsystem_raw #(.QDEPTH(QDEPTH),.WRITE_DEPTH(WRITE_DEPTH)) u_raw(
+  mem_subsystem_raw #(.QDEPTH(QDEPTH),.WRITE_DEPTH(WRITE_DEPTH),.READ_QUEUE_DEPTH(READ_QUEUE_DEPTH),.WRITE_QUEUE_DEPTH(WRITE_QUEUE_DEPTH)) u_raw(
    .if_req_valid(1'b0),.if_req_addr(32'b0),.if_resp_valid(unused_if0_valid),.if_resp_rdata(unused_if0_data),
    .if2_req_valid(1'b0),.if2_req_addr(32'b0),.if2_resp_valid(unused_if1_valid),.if2_resp_rdata(unused_if1_data),
    .ld_req_valid(shared_valid),.ld_req_addr(shared_addr),.ld_req_ready(raw_ready),
@@ -159,7 +161,9 @@ endmodule
 
 module mem_subsystem_raw #(
   parameter integer QDEPTH = 8,
-  parameter integer WRITE_DEPTH = QDEPTH
+  parameter integer WRITE_DEPTH = QDEPTH,
+  parameter integer READ_QUEUE_DEPTH = QDEPTH,
+  parameter integer WRITE_QUEUE_DEPTH = WRITE_DEPTH
 ) (
   input  logic        clk,
   input  logic        reset,
@@ -238,7 +242,7 @@ module mem_subsystem_raw #(
   logic [3:0]  axi_wr_wstrb;
   logic        axi_wr_resp_valid;
 
-  axi_mem_if #(.QDEPTH(QDEPTH),.WRITE_DEPTH(WRITE_DEPTH)) u_axi (
+  axi_mem_if #(.QDEPTH(QDEPTH),.WRITE_DEPTH(WRITE_DEPTH),.READ_QUEUE_DEPTH(READ_QUEUE_DEPTH),.WRITE_QUEUE_DEPTH(WRITE_QUEUE_DEPTH)) u_axi (
     .clk            (clk),
     .reset          (reset),
     .rd_valid       (axi_rd_valid),

@@ -916,6 +916,68 @@ int main(int argc, char** argv) {
         }
     }
 #endif
+
+#ifdef TB_DISPATCH_COMPUTE_HINT
+    for(int both=0;both<2;both++){
+        h.auto_respond=true;h.reset();
+        Uop producer;producer.dest=40;producer.rob=1;producer.reg_we=1;producer.b_sel=B_IMM;producer.imm=100;
+        h.expect(h.dispatch_one(producer),"dispatch hint producer accepted");h.tick();
+        Uop consumer;consumer.dest=41;consumer.rob=2;consumer.reg_we=1;consumer.src1=40;consumer.src1_ready=0;
+        if(both){consumer.src2=40;consumer.src2_ready=0;consumer.b_sel=B_REG;}else{consumer.b_sel=B_IMM;consumer.imm=3;}
+        h.expect(h.dispatch_one(consumer),"dispatch hint consumer accepted before source writeback");
+        int first=-1,last=-1;unsigned a=0,b=0;
+        for(int n=0;n<24;n++){h.tick();while(!h.cdb_q.empty()){auto e=h.cdb_q.front();h.cdb_q.pop_front();
+            if(e.first==40){h.expect(a++==0&&e.second==100,"dispatch hint source writes once");first=n;}
+            else {h.expect(e.first==41&&b++==0&&e.second==uint32_t(both?200:103),"dispatch hint uses written operand values");last=n;}
+        }}
+        h.expect(a==1&&b==1&&last-first==2,"dispatch hint removes one compute dependency cycle");
+        std::printf("DISPATCH_HINT W=%d both=%d delta=%d\n",W,both,last-first);
+    }
+#endif
+#ifdef TB_CONTROL_BYPASS
+    for(int kind=0;kind<9;++kind){
+        h.auto_respond=true;h.reset();Uop q;q.dest=50;q.rob=20;q.pc=0x400+kind*4;q.imm=0x20;
+        bool link=kind==6||kind==7;bool taken=kind<6?(kind==0||kind==3||kind==5):true;
+        if(kind<6){unsigned f[]={0,1,4,5,6,7};q.is_branch=1;q.inst=0x63|(f[kind]<<12);}
+        else if(kind==6){q.is_jal=1;q.reg_we=1;q.wb_sel=WB_PC4;}
+        else {q.is_jalr=1;q.reg_we=link;q.wb_sel=WB_PC4;q.imm=0x21;}
+        uint64_t start=h.cycle_count;h.expect(h.dispatch_one(q),"control direct admission");
+        for(int n=0;n<16&&!h.br_seen;++n)h.tick();
+        h.expect(h.br_seen&&h.br_tag_seen==50&&h.br_taken_seen==unsigned(taken),"control direct resolution");
+        h.expect(h.br_target_seen==(kind>=7?0x20:q.pc+0x20),"control direct target/alignment");
+        h.expect(h.cycle_count-start==3,"control direct saves IQ stage");
+        unsigned events=0,completions=0;
+        for(int n=0;n<12;++n){
+          while(!h.cdb_q.empty()){auto x=h.cdb_q.front();h.cdb_q.pop_front();++events;h.expect(link&&x.first==50&&x.second==q.pc+4,"control link writeback");}
+          while(!h.complete_q.empty()){auto x=h.complete_q.front();h.complete_q.pop_front();++completions;h.expect(!link&&x==50,"control no-value completion");}
+          h.br_seen=false;h.tick();h.expect(!h.br_seen,"control must resolve once");
+        }
+        h.expect(events==unsigned(link)&&completions==unsigned(!link),"control exact completion ownership");
+        std::printf("DIRECT_CONTROL W=%d kind=%d latency=3\n",W,kind);
+    }
+    // Highest-lane control bypass must leave the older packet prefix in IQ.
+    if(W==2)for(int prefix_control=0;prefix_control<2;++prefix_control){
+      h.reset();Uop a,q;a.dest=40;a.rob=1;a.pc=0x600;a.imm=7;a.b_sel=B_IMM;a.reg_we=1;
+      if(prefix_control){a.reg_we=0;a.is_branch=1;a.inst=0x63;a.imm=0x20;}
+      q.dest=50;q.rob=2;q.pc=0x604;q.imm=0x20;q.is_branch=1;q.inst=0x63;
+      Uop packet[2]={a,q};h.expect(h.dispatch_group(packet),"mixed control packet accepted");
+      unsigned branches=0,completes=0,writes=0;bool older_branch=false,younger_branch=false;
+      for(int n=0;n<24;++n){
+        h.tick();if(h.br_seen){++branches;h.expect((h.br_tag_seen==40&&prefix_control)||h.br_tag_seen==50,"mixed branch identity");older_branch|=h.br_tag_seen==40;younger_branch|=h.br_tag_seen==50;h.expect(h.br_taken_seen&&h.br_target_seen==(h.br_tag_seen==40?0x620:0x624),"mixed branch result");h.br_seen=false;}
+        while(!h.cdb_q.empty()){auto x=h.cdb_q.front();h.cdb_q.pop_front();++writes;h.expect(!prefix_control&&x.first==40&&x.second==7,"mixed ALU older prefix");}
+        while(!h.complete_q.empty()){auto x=h.complete_q.front();h.complete_q.pop_front();++completes;h.expect(x==50||(prefix_control&&x==40),"mixed branch completion identity");}
+      }
+      h.expect(branches==unsigned(1+prefix_control)&&younger_branch&&older_branch==bool(prefix_control),"both mixed packet owners resolve once");
+      h.expect(completes==unsigned(1+prefix_control)&&writes==unsigned(!prefix_control),"mixed packet completion conservation");
+    }
+    // Squash after the direct owner entered the execution buffer.
+    h.reset();Uop older;older.dest=40;older.rob=1;older.reg_we=1;older.b_sel=B_IMM;older.imm=9;
+    h.expect(h.dispatch_one(older),"control squash older owner");uint32_t ot=0,ov=0;h.expect(h.wait_cdb(ot,ov),"control squash older completes");
+    Uop younger;younger.dest=50;younger.rob=20;younger.pc=0x500;younger.imm=0x20;younger.is_branch=1;younger.inst=0x63;
+    h.expect(h.dispatch_one(younger),"control squash younger accepted");h.tick();h.squash_one(1);
+    h.expect(!h.br_seen&&h.complete_q.empty()&&h.cdb_q.empty(),"control cancelled on squash edge");
+    for(int n=0;n<12;++n){h.tick();h.expect(!h.br_seen&&h.complete_q.empty()&&h.cdb_q.empty(),"cancelled control stays discarded");}
+#endif
     printf("\nW=%d checked=%ld fails=%ld\n", W, h.checks, h.fails);
     bool pass = (h.fails == 0);
     printf(pass ? "PASS\n" : "FAIL\n");

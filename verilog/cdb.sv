@@ -119,3 +119,16 @@ endmodule
   endfunction
   assign hint_mask=assumed_grants(1'b0)&assumed_grants(1'b1)&~(N'(1)<<OPTIONAL);
 endmodule
+
+// Readiness for a buffered consumer is independent of current load validity.
+(* keep_hierarchy = "yes" *) module cdb_source_ready_hint #(
+ parameter integer PW=`CPU_PRF_IDX_W
+)(input logic[2*PW-1:0]source_tag,input logic[1:0]source_ready,
+ input logic[3:0]compute_mask,input logic[3*PW-1:0]compute_tags,output logic[1:0]ready);
+ for(genvar n=0;n<2;n=n+1)begin : gen_operand
+  assign ready[n]=source_ready[n] ||
+   (compute_mask[0]&&source_tag[n*PW+:PW]==compute_tags[0+:PW]) ||
+   (compute_mask[1]&&source_tag[n*PW+:PW]==compute_tags[PW+:PW]) ||
+   (compute_mask[3]&&source_tag[n*PW+:PW]==compute_tags[2*PW+:PW]);
+ end
+endmodule

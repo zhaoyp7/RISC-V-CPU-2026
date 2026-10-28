@@ -131,7 +131,7 @@ module student_top (
     .refill_rdata1     (if_refill_rdata1)
   );
 
-  backend_ooo #(.STORE_DATA_CAPTURE(1), .ORDERED_STORE_COMMIT(1),.DISPATCH_ALU_BYPASS(1)) u_backend (
+  backend_ooo #(.STORE_DATA_CAPTURE(1), .ORDERED_STORE_COMMIT(1),.DISPATCH_ALU_BYPASS(1),.DISPATCH_CONTROL_BYPASS(1)) u_backend (
     .clk            (clock),
     .reset          (reset),
     .dispatch       (dispatch),
@@ -156,7 +156,7 @@ module student_top (
     .st_resp_valid  (st_resp_valid)
   );
 
-  mem_subsystem #(.IF_LINE_BUFFER(`CPU_LINE_CACHE_ENABLE),.QDEPTH(16),.WRITE_DEPTH(`CPU_LINE_CACHE_ENABLE?8:16)) u_mem (
+  mem_subsystem #(.IF_LINE_BUFFER(`CPU_LINE_CACHE_ENABLE),.QDEPTH(16),.WRITE_DEPTH(`CPU_LINE_CACHE_ENABLE?8:16),.READ_QUEUE_DEPTH(`CPU_LINE_CACHE_ENABLE?2:16),.WRITE_QUEUE_DEPTH(`CPU_LINE_CACHE_ENABLE?2:16)) u_mem (
     .clk             (clock),
     .reset           (reset),
     .if_req_valid    (if_refill_valid),

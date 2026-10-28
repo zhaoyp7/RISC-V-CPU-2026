@@ -31,5 +31,5 @@ module store_capture_backend_top #(parameter integer W=`CPU_ISSUE_WIDTH) (
   input  logic        st_req_ready,
   input  logic        st_resp_valid
 );
- backend_ooo #(.W(W), .STORE_DATA_CAPTURE(1), .ORDERED_STORE_COMMIT(1),.DISPATCH_ALU_BYPASS(1)) dut(.*);
+ backend_ooo #(.W(W), .STORE_DATA_CAPTURE(1), .ORDERED_STORE_COMMIT(1),.DISPATCH_ALU_BYPASS(1),.DISPATCH_CONTROL_BYPASS(1)) dut(.*);
 endmodule

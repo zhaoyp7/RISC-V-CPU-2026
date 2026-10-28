@@ -14,7 +14,8 @@ module backend_ooo #(
   parameter integer W = `CPU_ISSUE_WIDTH,
   parameter integer STORE_DATA_CAPTURE = 0,
   parameter integer ORDERED_STORE_COMMIT = 0,
-  parameter integer DISPATCH_ALU_BYPASS = 0
+  parameter integer DISPATCH_ALU_BYPASS = 0,
+  parameter integer DISPATCH_CONTROL_BYPASS = 0
 ) (
   input  logic clk,
   input  logic reset,
@@ -84,7 +85,7 @@ module backend_ooo #(
     logic [4:0] op;
     begin
       op=u[`CPU_DISPATCH_ALU_OP_OFF+:5];
-      direct_alu=u[`CPU_DISPATCH_REG_WE_OFF] && u[`CPU_DISPATCH_SRC1_READY_OFF] && u[`CPU_DISPATCH_SRC2_READY_OFF] &&
+      direct_alu=u[`CPU_DISPATCH_REG_WE_OFF] &&
        !u[`CPU_DISPATCH_IS_LOAD_OFF] && !u[`CPU_DISPATCH_IS_STORE_OFF] && !u[`CPU_DISPATCH_IS_BRANCH_OFF] &&
        !u[`CPU_DISPATCH_IS_JAL_OFF] && !u[`CPU_DISPATCH_IS_JALR_OFF] && !u[`CPU_DISPATCH_ILLEGAL_OFF] &&
        op!=`ALU_DIV && op!=`ALU_DIVU && op!=`ALU_REM && op!=`ALU_REMU;
@@ -96,11 +97,44 @@ module backend_ooo #(
     dispatch_bypass_uop=skid_uop[bypass_lane*DW+:DW];
     dispatch_bypass_seq=skid_seq+32'(bypass_lane);
     dispatch_bypass_mask='0;
-    if(DISPATCH_ALU_BYPASS && skid_valid && !iq_registered_alu_ready && !a1_valid_q && direct_alu(dispatch_bypass_uop) &&
+    if(DISPATCH_ALU_BYPASS && skid_valid && !iq_registered_alu_ready && !a1_valid_q && direct_alu(dispatch_bypass_uop) && (&dispatch_sources_ready) &&
        iq_free >= (n_disp-1) && lsu_alloc_ready)
       dispatch_bypass_mask[bypass_lane]=1'b1;
   end
   assign dispatch_bypass_fire=skid_drain && (|dispatch_bypass_mask);
+  logic [W-1:0] control_bypass_mask;
+  wire control_bypass_selected=|control_bypass_mask;
+  wire control_bypass_fire=skid_drain && control_bypass_selected;
+  wire [W-1:0] all_dispatch_bypass_mask=dispatch_bypass_mask|control_bypass_mask;
+  always_comb begin
+    control_bypass_mask='0;
+    if(DISPATCH_CONTROL_BYPASS && skid_valid && iq_count==0 && !a0_valid_q && cf_count<CF_DEPTH &&
+       dispatch_bypass_uop[`CPU_DISPATCH_SRC1_READY_OFF] && dispatch_bypass_uop[`CPU_DISPATCH_SRC2_READY_OFF] &&
+       !dispatch_bypass_uop[`CPU_DISPATCH_ILLEGAL_OFF] &&
+       (dispatch_bypass_uop[`CPU_DISPATCH_IS_BRANCH_OFF] || dispatch_bypass_uop[`CPU_DISPATCH_IS_JAL_OFF] ||
+        dispatch_bypass_uop[`CPU_DISPATCH_IS_JALR_OFF]) && iq_free >= (n_disp-1) && lsu_alloc_ready)
+      control_bypass_mask[bypass_lane]=1'b1;
+  end
+
+  wire[1:0]dispatch_sources_ready;
+  (* keep_hierarchy = "yes" *) cdb_source_ready_hint #(.PW(PW)) u_dispatch_hint(
+   .source_tag({dispatch_bypass_uop[`CPU_DISPATCH_SRC2_TAG_OFF+:PW],dispatch_bypass_uop[`CPU_DISPATCH_SRC1_TAG_OFF+:PW]}),
+   .source_ready({dispatch_bypass_uop[`CPU_DISPATCH_SRC2_READY_OFF],dispatch_bypass_uop[`CPU_DISPATCH_SRC1_READY_OFF]}),
+   .compute_mask(cdb_hint_ready),.compute_tags({div_tag_q,alu1_tag_q,alu_tag_q}),.ready(dispatch_sources_ready));
+`ifndef SYNTHESIS
+  always_ff @(posedge clk)if(!reset&&dispatch_bypass_fire)begin
+   for(integer operand=0;operand<2;operand=operand+1)begin
+    if(!dispatch_bypass_uop[operand==0?`CPU_DISPATCH_SRC1_READY_OFF:`CPU_DISPATCH_SRC2_READY_OFF])begin
+     automatic logic granted;
+     granted=0;
+     for(integer n=0;n<R;n=n+1)
+      if(cdb_out[n*CW+`CPU_CDB_VALID_OFF] && cdb_out[n*CW+`CPU_CDB_TAG_OFF+:PW]==dispatch_bypass_uop[(operand==0?`CPU_DISPATCH_SRC1_TAG_OFF:`CPU_DISPATCH_SRC2_TAG_OFF)+:PW])granted=1;
+     if(!granted)$fatal(1,"dispatch operand hint lacks actual writeback");
+    end
+   end
+  end
+`endif
+
 
   logic                 tail_valid;
   logic [W-1:0]         tail_vmask;
@@ -225,8 +259,8 @@ module backend_ooo #(
   issue_queue #(.W(W), .IW(2), .LANE1_ALU_ONLY(1), .LANE1_LOOKAHEAD(1), .LANE0_CONTROL_LOOKAHEAD(1), .RETIRE_STORE_PREFILL(STORE_DATA_CAPTURE)) u_iq (
     .clk            (clk),
     .reset          (reset),
-    .in_valid       (skid_drain ? (skid_vmask & ~dispatch_bypass_mask) : '0),
-    .in_alloc_mask  (skid_valid ? (skid_vmask & ~dispatch_bypass_mask) : '0),
+    .in_valid       (skid_drain ? (skid_vmask & ~all_dispatch_bypass_mask) : '0),
+    .in_alloc_mask  (skid_valid ? (skid_vmask & ~all_dispatch_bypass_mask) : '0),
     .in_uop         (skid_uop),
     .in_ready       (iq_in_ready),
     .wake_valid     (cdb_wake_valid),
@@ -700,8 +734,10 @@ module backend_ooo #(
                        ((addr_only_issue && !STORE_DATA_CAPTURE) || !noval_expected || cf_allow);
   // lane0：load/store 仍然直连 LSU；非访存进入 a0 缓冲，下一拍执行。
   assign issue_ready[0] = i_is_mem ? i_mem_ready :
-                          (a0_accept && (!noval_expected || cf_allow));
-  assign a0_push = iq_out_valid[0] && issue_ready[0] && !i_is_mem;
+                          (a0_accept && (!noval_expected || cf_allow) && !control_bypass_selected);
+  assign a0_push = (iq_out_valid[0] && issue_ready[0] && !i_is_mem) || control_bypass_fire;
+  wire [DW-1:0] a0_input_uop=control_bypass_selected?dispatch_bypass_uop:issue_uop[DW-1:0];
+  wire [31:0] a0_input_seq=control_bypass_selected?dispatch_bypass_seq:issue_seq[31:0];
   // lane 1 只接收普通写回 ALU；资源独立且不产生有副作用的完成。
   // IQ 选中后先进入 a1 缓冲，下一拍再做 PRF 读/ALU；缓冲能吸收时即可
   // 从 IQ 弹出，保持 lane1 每拍一条的吞吐。
@@ -716,6 +752,14 @@ module backend_ooo #(
   end
 `endif
 
+`ifndef SYNTHESIS
+  always_ff @(posedge clk)if(!reset&&control_bypass_fire)begin
+    if(iq_count!=0 || a0_valid_q || noval_issue || dispatch_bypass_fire)
+      $fatal(1,"control bypass has conflicting owner");
+    if(!(&{dispatch_bypass_uop[`CPU_DISPATCH_SRC1_READY_OFF],dispatch_bypass_uop[`CPU_DISPATCH_SRC2_READY_OFF]}))
+      $fatal(1,"control bypass operand unready");
+  end
+`endif
   logic alu_issue, div_issue, alu1_issue;
   assign alu_issue  = a0_issue && !a0_is_div;
   assign div_issue  = a0_issue && a0_is_div;
@@ -914,10 +958,10 @@ module backend_ooo #(
       // lane0 非访存缓冲：丢弃/执行后释放；新选中覆盖旧内容。
       if (a0_discard || a0_issue)
         a0_valid_q <= 1'b0;
-      if (a0_push && !(sq_valid && (issue_seq[31:0] > squash_seq))) begin
+      if (a0_push && !(sq_valid && (a0_input_seq > squash_seq))) begin
         a0_valid_q <= 1'b1;
-        a0_uop_q   <= issue_uop[DW-1:0];
-        a0_seq_q   <= issue_seq[31:0];
+        a0_uop_q   <= a0_input_uop;
+        a0_seq_q   <= a0_input_seq;
       end
 
       // lane1 发射缓冲：丢弃/执行后释放；新选中覆盖旧内容。
@@ -1010,12 +1054,13 @@ module backend_ooo #(
                        (i_is_store ||
                         (!i_is_load && !i_is_div &&
                          (i_illegal || !i_reg_we)));
-  assign cf_push = noval_issue;
+  wire control_noval=control_bypass_fire && !dispatch_bypass_uop[`CPU_DISPATCH_REG_WE_OFF];
+  assign cf_push = noval_issue || control_noval;
   assign cf_pop  = (cf_count != 0);
 
-  assign cf_tag_in = i_dest;
-  assign cf_exc_in = i_illegal;
-  assign cf_seq_in = issue_seq[31:0];
+  assign cf_tag_in = control_bypass_selected?dispatch_bypass_uop[`CPU_DISPATCH_DEST_TAG_OFF+:PW]:i_dest;
+  assign cf_exc_in = control_bypass_selected?1'b0:i_illegal;
+  assign cf_seq_in = control_bypass_selected?dispatch_bypass_seq:issue_seq[31:0];
 
   always_comb begin
     complete = '0;
@@ -1241,3 +1286,4 @@ module backend_ooo #(
 `endif
 
 endmodule
+

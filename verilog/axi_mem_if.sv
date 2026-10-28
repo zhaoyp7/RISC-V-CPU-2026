@@ -5,7 +5,8 @@
 //   - 读：请求按序进入地址 FIFO，AR 可连续发出；R 通道按 AR 顺序返回，
 //     因此 read response 也是按序的；
 //   - 写：请求进入数据 FIFO，AW/W 连续发出；B 响应按序返回；
-//   - 同一时刻保留最多 QDEPTH 笔在途读和 QDEPTH 笔在途写。
+//   - 同一时刻保留最多 QDEPTH 笔在途读和 WRITE_DEPTH 笔在途写。
+//     待发送地址队列可独立缩小；AR/AW/W 发出后仍占用在途额度直到 R/B 返回。
 //
 // 上游握手：
 //   rd_valid/rd_addr/rd_ready   读请求（ready 时接受，一条响应后回 rd_resp_valid）
@@ -14,12 +15,14 @@
 //   wr_resp_valid                写响应（按请求顺序，单拍）
 //
 // 约束：AR 的 valid 不依赖 ready；请求一旦进入 FIFO 就不会丢失。R/B 通道
-// 始终 ready（内部有 QDEPTH 上限，上游只在有空位时才会继续接收）。
+// 始终 ready；逻辑在途额度和物理待发送队列均有空位才接收上游请求。
 // -----------------------------------------------------------------------------
 
 module axi_mem_if #(
   parameter integer QDEPTH = 8,
-  parameter integer WRITE_DEPTH = QDEPTH
+  parameter integer WRITE_DEPTH = QDEPTH,
+  parameter integer READ_QUEUE_DEPTH = QDEPTH,
+  parameter integer WRITE_QUEUE_DEPTH = WRITE_DEPTH
 ) (
   input  logic        clk,
   input  logic        reset,
@@ -71,23 +74,25 @@ module axi_mem_if #(
   output logic        bready
 );
 
-  localparam integer PTRW = (QDEPTH > 1) ? $clog2(QDEPTH) : 1;
+  localparam integer PTRW = (READ_QUEUE_DEPTH > 1) ? $clog2(READ_QUEUE_DEPTH) : 1;
+  localparam integer RQCW = $clog2(READ_QUEUE_DEPTH + 1);
   localparam integer CNTW = $clog2(QDEPTH + 1);
 
-  localparam integer WPTRW=(WRITE_DEPTH>1)?$clog2(WRITE_DEPTH):1;
+  localparam integer WPTRW=(WRITE_QUEUE_DEPTH>1)?$clog2(WRITE_QUEUE_DEPTH):1;
   localparam integer WCNTW=$clog2(WRITE_DEPTH+1);
+  localparam integer WQCW=$clog2(WRITE_QUEUE_DEPTH+1);
 
   // ---- 读请求 FIFO --------------------------------------------------------
-  logic [31:0]      rdq_addr [0:QDEPTH-1];
+  logic [31:0]      rdq_addr [0:READ_QUEUE_DEPTH-1];
   logic [PTRW-1:0]  rdq_head, rdq_tail;
-  logic [CNTW-1:0]  rdq_queued;      // 已接收但 AR 尚未发出
+  logic [RQCW-1:0]  rdq_queued;      // 已接收但 AR 尚未发出
   logic [CNTW-1:0]  rd_outstanding;  // AR 已发出、R 未返回
 
   logic rd_fire, r_fire;
   assign rd_fire = arvalid && arready;
   assign r_fire  = rvalid && rready;
 
-  assign rd_ready = ((rdq_queued + rd_outstanding) < QDEPTH);
+  assign rd_ready = rdq_queued < READ_QUEUE_DEPTH && ((rdq_queued + rd_outstanding) < QDEPTH);
   assign arvalid  = (rdq_queued != 0);
   assign araddr   = rdq_addr[rdq_head];
 
@@ -96,11 +101,11 @@ module axi_mem_if #(
   assign rready        = 1'b1;
 
   // ---- 写请求 FIFO --------------------------------------------------------
-  logic [31:0]      wrq_addr  [0:WRITE_DEPTH-1];
-  logic [31:0]      wrq_wdata [0:WRITE_DEPTH-1];
-  logic [3:0]       wrq_wstrb [0:WRITE_DEPTH-1];
+  logic [31:0]      wrq_addr  [0:WRITE_QUEUE_DEPTH-1];
+  logic [31:0]      wrq_wdata [0:WRITE_QUEUE_DEPTH-1];
+  logic [3:0]       wrq_wstrb [0:WRITE_QUEUE_DEPTH-1];
   logic [WPTRW-1:0]  wrq_head, wrq_tail;
-  logic [WCNTW-1:0]  wrq_queued;      // 已接收但 AW/W 尚未完成
+  logic [WQCW-1:0]  wrq_queued;      // 已接收但 AW/W 尚未完成
   logic [WCNTW-1:0]  wr_outstanding;  // AW/W 已完成、B 未返回
   logic             aw_done, w_done;
 
@@ -110,7 +115,7 @@ module axi_mem_if #(
   assign w_fire  = wvalid && wready;
   assign b_fire  = bvalid && bready;
 
-  assign wr_ready = ((wrq_queued + wr_outstanding) < WRITE_DEPTH);
+  assign wr_ready = wrq_queued < WRITE_QUEUE_DEPTH && ((wrq_queued + wr_outstanding) < WRITE_DEPTH);
   assign awvalid  = (wrq_queued != 0) && !aw_done;
   assign wvalid   = (wrq_queued != 0) && !w_done;
   assign awaddr   = wrq_addr[wrq_head];
@@ -140,10 +145,10 @@ module axi_mem_if #(
       rd_acc = rd_valid && rd_ready;
       if (rd_acc) begin
         rdq_addr[rdq_tail] <= rd_addr;
-        rdq_tail           <= (rdq_tail == QDEPTH - 1) ? '0 : rdq_tail + 1'b1;
+        rdq_tail           <= (rdq_tail == READ_QUEUE_DEPTH - 1) ? '0 : rdq_tail + 1'b1;
       end
       if (rd_fire)
-        rdq_head <= (rdq_head == QDEPTH - 1) ? '0 : rdq_head + 1'b1;
+        rdq_head <= (rdq_head == READ_QUEUE_DEPTH - 1) ? '0 : rdq_head + 1'b1;
 
       rdq_queued     <= rdq_queued + (rd_acc ? 1'b1 : 1'b0) -
                                     (rd_fire ? 1'b1 : 1'b0);
@@ -156,7 +161,7 @@ module axi_mem_if #(
         wrq_addr[wrq_tail]  <= wr_addr;
         wrq_wdata[wrq_tail] <= wr_wdata;
         wrq_wstrb[wrq_tail] <= wr_wstrb;
-        wrq_tail            <= (wrq_tail == WRITE_DEPTH - 1) ? '0 : wrq_tail + 1'b1;
+        wrq_tail            <= (wrq_tail == WRITE_QUEUE_DEPTH - 1) ? '0 : wrq_tail + 1'b1;
       end
 
       if (aw_fire) aw_done <= 1'b1;
@@ -165,7 +170,7 @@ module axi_mem_if #(
       wr_dispatch = (wrq_queued != 0) &&
                     (aw_done || aw_fire) && (w_done || w_fire);
       if (wr_dispatch) begin
-        wrq_head <= (wrq_head == WRITE_DEPTH - 1) ? '0 : wrq_head + 1'b1;
+        wrq_head <= (wrq_head == WRITE_QUEUE_DEPTH - 1) ? '0 : wrq_head + 1'b1;
         aw_done  <= 1'b0;
         w_done   <= 1'b0;
       end
@@ -177,4 +182,11 @@ module axi_mem_if #(
     end
   end
 
+`ifndef SYNTHESIS
+  initial begin
+    if(QDEPTH<1 || WRITE_DEPTH<1 || READ_QUEUE_DEPTH<1 || READ_QUEUE_DEPTH>QDEPTH ||
+       WRITE_QUEUE_DEPTH<1 || WRITE_QUEUE_DEPTH>WRITE_DEPTH)
+      $fatal(1,"invalid AXI outstanding credit/address queue capacities");
+  end
+`endif
 endmodule

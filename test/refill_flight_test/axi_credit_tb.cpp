@@ -1,3 +1,9 @@
+#ifndef TB_READ_ADDRESS_SLOTS
+#define TB_READ_ADDRESS_SLOTS 16
+#endif
+#ifndef TB_WRITE_ADDRESS_SLOTS
+#define TB_WRITE_ADDRESS_SLOTS 8
+#endif
 #include "Vaxi_mem_if.h"
 #include "verilated.h"
 #include <deque>
@@ -22,6 +28,7 @@ struct Bench {
   if(d.arvalid){check(!reads.empty(),"AR without request");check(d.araddr==reads.front(),"AR address order/hold");if(d.arready){reads.pop_front();++sent_r;}}
   if(d.awvalid){check(!aw.empty(),"AW without request");check(d.awaddr==aw.front().addr,"AW address order/hold");if(d.awready){aw.pop_front();++sent_aw;}}
   if(d.wvalid){check(!w.empty(),"W without request");auto x=w.front();check(d.wdata==x.data&&d.wstrb==x.mask,"W payload order/hold");if(d.wready){w.pop_front();++sent_w;}}
+  check(d.rready&&d.bready,"response channels remain ready");
   check(bool(d.rd_resp_valid)==bool(d.rvalid),"read response lost");if(d.rvalid){check(d.rd_resp_rdata==d.rdata,"read response value");++returned_r;}
   check(bool(d.wr_resp_valid)==bool(d.bvalid),"write response lost");if(d.bvalid)++returned_w;
   check(accepted_r-returned_r<=16,"read credit overflow");check(accepted_w-returned_w<=8,"write credit overflow");
@@ -32,7 +39,7 @@ struct Bench {
   for(int round=0;round<8;++round){
    unsigned nr=accepted_r,nw=accepted_w;
    for(int i=0;i<24;++i)step(true,false,false);
-   check(accepted_r-nr==16,"read FIFO must accept exactly sixteen");check(accepted_w-nw==8,"write FIFO must accept exactly eight");
+   check(accepted_r-nr==TB_READ_ADDRESS_SLOTS,"read address FIFO capacity");check(accepted_w-nw==TB_WRITE_ADDRESS_SLOTS,"write address FIFO capacity");
    for(int i=0;i<40;++i)step(true,true,false,true);
    check(accepted_r-nr==16&&accepted_w-nw==8,"dispatched requests prematurely free credits");
    for(int i=0;i<2000;++i)step(true,true,true,true);
