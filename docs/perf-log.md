@@ -22,6 +22,34 @@ opt较同源diagnose：频率 **+9.401%**、面积 **-3.310%**、吞吐 **+9.401
 合并前main5a1d8d6保存在 `main-pre-tier3-merge-20261029`；`ipc-tier3-opt-20261029` 与旧opt标签cache32-zero-opt-20261026 /29e0fc8均保留。未推送。
 合并核查：[源码与正确性保留](../build/main_tier3_merge_20261029/source-check.json)、[新跑测试](../build/main_tier3_merge_20261029/checks.json)。以下历史对照中的main5a1d8d6均为合并前基线，不作为当前main的PPA。
 
+## 2026-10-29 两小时提频窗口（已完成）
+
+授权时段11:46:28至13:46:28，从main e16f5b1建立 `feat/freq-tier3-20261029`，默认配置保持不变。
+最终面积上限36k按opt判断；diagnose仅用于趋势筛选，略超36k不直接淘汰。保持IPC>1.0985，所有完整综合串行。按用户最新要求，opt须等新的明确指令；v115一次opt在初始展开阶段已取消，无opt报告，未重启。
+
+| 同模式diagnose | IPC | MHz | 面积 µm² |
+| --- | ---: | ---: | ---: |
+| v112寄存访存提示 | 1.105023 | 375.092 | 35,443.166 |
+| v113恢复计数平衡树 | 1.105023 | 393.846 | 35,377.760 |
+| v114寄存提示加恢复树 | 1.105023 | 368.478 | 35,388.841 |
+| v115恢复树加快照使能 | 1.105023 | 394.605 | 35,380.763 |
+| v117控制旁路独立提示 | 1.105023 | 383.234 | 35,332.999 |
+| 本窗口起点a5835fe | 1.105023 | 384.240 | 35,412.183 |
+| main e16f5b1＋同高性能配置 | 1.105023 | 384.240 | 35,412.183 |
+
+main高性能配置与窗口起点同源；对应已完成opt为420.361MHz /34,240.214µm²。默认main另为IPC0.656725，没有默认配置的同源PPA。
+
+v115已保存为 `freq-recovery-snapshot-diagnose-20261029`（e836157），三套配置各19/19，完整 `run_all` ALL PASS。高性能配置可由 [复现配置](../tools/perf_stats/profiles/frequency-recovery-snapshot-20261029.json) 生成；[完整验证](../build/three_hour_20261027/freq_recovery_tree_snapshot_v115/validation.json)。该版仅有diagnose结果，原main的opt结果不移用于它。
+v112寄存访存提示：高W2整核全量通过19项；六项perf已测，统计对照已完成。其余独立专项见归档；尚无该版opt，不升级最终保留。核验：[冻结结果](../build/three_hour_20261027/freq_registered_memory_owner_v112/verification.json)。
+v113恢复计数平衡树：完成三项冒烟与六项perf；恢复计数独立参考500,000项通过。后续组合版v115已完成三套整核和完整单测。核验：[冻结结果](../build/three_hour_20261027/freq_balanced_recovery_count_v113/verification.json)。
+v114寄存提示加恢复树：高W2整核全量通过19项；六项perf已测，统计对照已完成。其余独立专项见归档；尚无该版opt，不升级最终保留。核验：[冻结结果](../build/three_hour_20261027/freq_owner_and_recovery_tree_v114/verification.json)。
+v115恢复树加快照使能：高W2整核全量通过19项；六项perf已测，统计对照已完成。其余独立专项见归档；尚无该版opt，不升级最终保留。核验：[冻结结果](../build/three_hour_20261027/freq_recovery_tree_snapshot_v115/verification.json)。
+v117控制旁路独立提示：高W2整核全量通过19项；六项perf已测，统计对照已完成。其余独立专项见归档；尚无该版opt，不升级最终保留。核验：[冻结结果](../build/three_hour_20261027/freq_uncancelled_control_hint_v117/verification.json)。
+
+本窗口保留v115：diagnose较起点/main同配置频率 **+2.698%**、面积 **−0.089%**，IPC与六项perf周期不变。源码e836157，main e16f5b1未再合并，原opt标签均保留。v112/v114/v117频率无收益，不采用；v116 IPC1.077178低于门槛，未综合。
+v118省略LSU重复取消判断原型：三项冒烟和六项perf通过、IPC1.105023；高W2 19/19、高W1 19/19、默认W2 19/19。综合在子任务截止时终止，无有效报告，不填入PPA表、不采用；[状态与冻结输入](../build/three_hour_20261027/freq_qualified_lsu_issue_v118/window-final-status.json)。
+v119共享ALU0/控制提示原型仅完成三项冒烟和六项perf（IPC1.105023），没有综合、不采用。v118/v119均仅保留生成目录中的原型。窗口结束后无综合任务，opt须等待用户新的明确指令。
+
 ## 2026-10-29 恢复后的三小时 IPC 窗口（已完成）
 
 用户从00:18:46起继续授权三小时，至03:18:46；以6c7b140为窗口起点，综合仍串行，默认配置、main及官方构建流程不改。
@@ -627,6 +655,11 @@ load/store 放入旧的 a0/a1 缓冲。优先做分析和方案设计，单次�
 | 2026-10-29 | [冻结v108](../build/three_hour_20261027/ipc_registered_memory_safe_v108/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.104185 | 35,381.595 (diag) | 362.735 (diag) | 三组各19/19；负收益后中止全套单测，不采用 |
 | 2026-10-29 | `ipc-tier3-class-priority-20261029` | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 35,412.183 (diag) | 384.240 (diag) | 当前诊断达标保留；三组19/19；改动IQ/后端专项重跑，未改模块复用v110全套 |
 | 2026-10-29 | `ipc-tier3-opt-20261029` | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,240.214 (opt) | 420.361 (opt) | 当前opt保留；同源三组19/19，23非配置Git源码及24输入核验 |
+| 2026-10-29 | [冻结v112寄存访存提示](../build/three_hour_20261027/freq_registered_memory_owner_v112/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 35,443.166 (diag) | 375.092 (diag) | 两小时提频对照；高W219/19；最终以opt判断 |
+| 2026-10-29 | [冻结v113恢复计数平衡树](../build/three_hour_20261027/freq_balanced_recovery_count_v113/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 35,377.760 (diag) | 393.846 (diag) | 两小时提频对照；高W20/19；最终以opt判断 |
+| 2026-10-29 | [冻结v114寄存提示加恢复树](../build/three_hour_20261027/freq_owner_and_recovery_tree_v114/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 35,388.841 (diag) | 368.478 (diag) | 两小时提频对照；高W219/19；最终以opt判断 |
+| 2026-10-29 | [冻结v115恢复树加快照使能](../build/three_hour_20261027/freq_recovery_tree_snapshot_v115/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 35,380.763 (diag) | 394.605 (diag) | 两小时提频对照；高W219/19；最终以opt判断 |
+| 2026-10-29 | [冻结v117控制旁路独立提示](../build/three_hour_20261027/freq_uncancelled_control_hint_v117/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 35,332.999 (diag) | 383.234 (diag) | 两小时提频对照；高W2 19/19；最终以opt判断 |
 
 P2 基线 opt 综合：comb 16,361.326、seq 5,648.117、SRAM 2,278.903 µm²，
 min period 17.8320 ns（目标 2 ns，WNS −15.8320 ns）。diagnose 为 25,025.438 µm²、
@@ -820,6 +853,11 @@ ALU，必须先确认 IPC 不低于 0.60。
 | 原始提示＋R1保护v110 | `ipc-tier3-raw-hint-20261029` | 1.105023 | 0.836251 | 35,388.855 | 376.056 | — | — |
 | 访存寄存源预读v108；频率负收益，不采用 | [冻结v108](../build/three_hour_20261027/ipc_registered_memory_safe_v108/verification.json) | 1.104185 | 0.836174 | 35,381.595 | 362.735 | — | — |
 | 类别并行选择v111；当前opt保留 | `ipc-tier3-opt-20261029` | 1.105023 | 0.836251 | 35,412.183 | 384.240 | 34,240.214 | 420.361 |
+| v112寄存访存提示；提频对照 | [冻结v112寄存访存提示](../build/three_hour_20261027/freq_registered_memory_owner_v112/verification.json) | 1.105023 | — | 35,443.166 | 375.092 | — | — |
+| v113恢复计数平衡树；提频对照 | [冻结v113恢复计数平衡树](../build/three_hour_20261027/freq_balanced_recovery_count_v113/verification.json) | 1.105023 | — | 35,377.760 | 393.846 | — | — |
+| v114寄存提示加恢复树；提频对照 | [冻结v114寄存提示加恢复树](../build/three_hour_20261027/freq_owner_and_recovery_tree_v114/verification.json) | 1.105023 | 0.836251 | 35,388.841 | 368.478 | — | — |
+| v115恢复树加快照使能；提频对照 | [冻结v115恢复树加快照使能](../build/three_hour_20261027/freq_recovery_tree_snapshot_v115/verification.json) | 1.105023 | 0.836251 | 35,380.763 | 394.605 | — | — |
+| v117控制旁路独立提示；提频对照 | [冻结v117控制旁路独立提示](../build/three_hour_20261027/freq_uncancelled_control_hint_v117/verification.json) | 1.105023 | 0.836251 | 35,332.999 | 383.234 | — | — |
 
 新增行的“—”表示没有对应同源 opt 数据；不复用历史 main 或其他候选的 opt。
 
