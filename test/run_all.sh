@@ -88,6 +88,7 @@ run "BPU training / frontend response queues W1/W2" sh test/bpu_training_test/ru
 run "LSQ query snapshot depth8/depth16/depth32" sh test/lsq_query_test/run.sh
 run "decoupled store source / ordering and CDB capture" sh test/store_capture_test/run.sh
 run "buffered execution lookahead / mixed dependency chains W1/W2" sh test/execution_lookahead_test/run.sh
+run "squash sequence / independent accepted-dispatch ages W1/W2" sh test/squash_sequence_test/run.sh
 run "lsu v2" sh test/lsu_test/run.sh
 run "LSU 64B read cache / ordering and invalidation" sh test/lsu_cache_test/run.sh
 run "mem_subsystem v2" sh test/mem_subsystem_test/run.sh

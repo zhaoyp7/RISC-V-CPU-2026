@@ -110,7 +110,10 @@ module student_top (
     assign st_req_ready = ms_st_ready;
   end endgenerate
 
+  wire [31:0] br_update_sequence, squash_sequence;
   core_ooo u_core (
+    .br_update_sequence(br_update_sequence),
+    .squash_sequence(squash_sequence),
     .clk               (clock),
     .reset             (reset),
     .backend_ready     (backend_ready),
@@ -131,7 +134,9 @@ module student_top (
     .refill_rdata1     (if_refill_rdata1)
   );
 
-  backend_ooo #(.RAW_MEMORY_HINT(1), .EXECUTION_LOOKAHEAD(1), .MEMORY_BASE_LOOKAHEAD(1), .STORE_DATA_CAPTURE(1), .ORDERED_STORE_COMMIT(1),.DISPATCH_ALU_BYPASS(1),.DISPATCH_CONTROL_BYPASS(1)) u_backend (
+  backend_ooo #(.EXTERNAL_SQUASH_SEQUENCE(1), .RAW_MEMORY_HINT(1), .EXECUTION_LOOKAHEAD(1), .MEMORY_BASE_LOOKAHEAD(1), .STORE_DATA_CAPTURE(1), .ORDERED_STORE_COMMIT(1),.DISPATCH_ALU_BYPASS(1),.DISPATCH_CONTROL_BYPASS(1)) u_backend (
+    .br_update_sequence(br_update_sequence),
+    .squash_sequence(squash_sequence),
     .clk            (clock),
     .reset          (reset),
     .dispatch       (dispatch),

@@ -1,5 +1,7 @@
 // Test-only wrapper selecting decoupled store source capture.
 module store_capture_backend_top #(parameter integer W=`CPU_ISSUE_WIDTH) (
+  input logic [31:0] squash_sequence,
+  output logic [31:0] br_update_sequence,
   input  logic clk,
   input  logic reset,
 
@@ -36,7 +38,10 @@ module store_capture_backend_top #(parameter integer W=`CPU_ISSUE_WIDTH) (
 `ifndef EXECUTION_HINT_TEST
 `define EXECUTION_HINT_TEST 0
 `endif
- backend_ooo #(.W(W), .EXECUTION_LOOKAHEAD(`EXECUTION_HINT_TEST), .MEMORY_BASE_LOOKAHEAD(1), .STORE_DATA_CAPTURE(1), .ORDERED_STORE_COMMIT(1),.DISPATCH_ALU_BYPASS(1),.DISPATCH_CONTROL_BYPASS(1)) dut(.*);
+`ifndef SQUASH_SEQUENCE_TEST
+`define SQUASH_SEQUENCE_TEST 0
+`endif
+ backend_ooo #(.EXTERNAL_SQUASH_SEQUENCE(`SQUASH_SEQUENCE_TEST), .RAW_MEMORY_HINT(`SQUASH_SEQUENCE_TEST), .W(W), .EXECUTION_LOOKAHEAD(`EXECUTION_HINT_TEST), .MEMORY_BASE_LOOKAHEAD(1), .STORE_DATA_CAPTURE(1), .ORDERED_STORE_COMMIT(1),.DISPATCH_ALU_BYPASS(1),.DISPATCH_CONTROL_BYPASS(1)) dut(.*);
  always_ff@(posedge clk)begin
   if(reset)begin future0_events<=0;future1_events<=0;end
   else if(dut.iq_out_valid[1]&&dut.issue_ready[1])begin

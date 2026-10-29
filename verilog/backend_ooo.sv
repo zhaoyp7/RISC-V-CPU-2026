@@ -16,6 +16,7 @@ module backend_ooo #(
   parameter integer ORDERED_STORE_COMMIT = 0,
   parameter integer DISPATCH_ALU_BYPASS = 0,
   parameter integer RAW_MEMORY_HINT = 0,
+  parameter integer EXTERNAL_SQUASH_SEQUENCE = 0,
   parameter integer EXECUTION_LOOKAHEAD = 0,
   parameter integer MEMORY_BASE_LOOKAHEAD = 0,
   parameter integer DISPATCH_CONTROL_BYPASS = 0
@@ -23,6 +24,10 @@ module backend_ooo #(
   input  logic clk,
   input  logic reset,
 
+  // Sequence sideband: the resolving branch's age is registered alongside
+  // ROB squash ownership, avoiding a second ROB-indexed age lookup.
+  input logic [31:0] squash_sequence,
+  output logic [31:0] br_update_sequence,
   // core_ooo 冻结接口
   input  logic [`CPU_DISPATCH_BUS_W-1:0] dispatch,
   input  logic [`CPU_COMMIT_BUS_W-1:0]   commit,
@@ -153,7 +158,15 @@ module backend_ooo #(
   logic [31:0]          squash_seq;
   logic [3:0]           n_disp, n_push;
 
-  assign squash_seq = rob_seq[sq_rob];
+  assign squash_seq = EXTERNAL_SQUASH_SEQUENCE ? squash_sequence : rob_seq[sq_rob];
+  assign br_update_sequence = a0_seq_q;
+`ifndef SYNTHESIS
+  // The legacy dispatch-owned age table is an independent reference in tests;
+  // synthesis removes it when only the external sequence is consumed.
+  always_ff @(posedge clk) if (!reset && EXTERNAL_SQUASH_SEQUENCE && sq_valid)
+    if (squash_sequence != rob_seq[sq_rob])
+      $fatal(1,"registered squash sequence differs from dispatch owner");
+`endif
   assign disp_seq_next = disp_seq + seq_pending;
 
   always_comb begin

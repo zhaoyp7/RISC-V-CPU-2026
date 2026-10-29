@@ -24,6 +24,10 @@ using Vbackend_ooo=Vstore_capture_backend_top;
 #define TB_W 1
 #endif
 
+#ifndef TB_EXTERNAL_SQUASH_SEQUENCE
+#define TB_EXTERNAL_SQUASH_SEQUENCE 0
+#endif
+
 namespace {
 
 constexpr int W = TB_W;
@@ -121,6 +125,26 @@ struct Harness {
     uint8_t mem[1 << 16] = {};
     bool auto_respond = true;
     uint64_t cycle_count=0;
+#if TB_EXTERNAL_SQUASH_SEQUENCE
+    uint32_t model_next_age=0;
+    uint32_t model_rob_age[32]={};
+    uint32_t model_dest_age[64]={};
+    void record_dispatch_age() {
+        if(dut->reset) {
+            model_next_age=0;
+            std::memset(model_rob_age,0,sizeof(model_rob_age));
+            std::memset(model_dest_age,0,sizeof(model_dest_age));
+        } else if(dut->backend_ready) {
+            unsigned accepted=0;
+            for(unsigned lane=0;lane<W;++lane)if(get_field(dut->dispatch,lane*DW+O_VALID,1)) {
+                model_rob_age[get_field(dut->dispatch,lane*DW+O_ROB,ROB)]=model_next_age+lane;
+                model_dest_age[get_field(dut->dispatch,lane*DW+O_DEST,PRF)]=model_next_age+lane;
+                ++accepted;
+            }
+            model_next_age+=accepted;
+        }
+    }
+#endif
     long checks = 0;
     long fails = 0;
     bool br_seen = false;
@@ -176,7 +200,15 @@ struct Harness {
         // CDB/complete/branch outputs are combinational transactions sampled
         // by their consumers at this edge. A response bypass can disappear
         // immediately after the edge and must be captured before state moves.
+#if TB_EXTERNAL_SQUASH_SEQUENCE
+        if(!dut->reset && get_field(dut->br_update,B_VALID,1))
+            expect(dut->br_update_sequence==model_dest_age[get_field(dut->br_update,B_TAG,PRF)],
+                   "branch sequence matches independent accepted dispatch order");
+#endif
         capture_events();
+#if TB_EXTERNAL_SQUASH_SEQUENCE
+        record_dispatch_age();
+#endif
         dut->clk = 1;
         dut->eval();
 
@@ -297,6 +329,9 @@ struct Harness {
     }
 
     void squash_one(uint32_t rob) {
+#if TB_EXTERNAL_SQUASH_SEQUENCE
+        dut->squash_sequence=model_rob_age[rob];
+#endif
         set_int(dut->squash, S_VALID, 1, 1);
         set_int(dut->squash, S_ROB, ROB, rob);
         tick();

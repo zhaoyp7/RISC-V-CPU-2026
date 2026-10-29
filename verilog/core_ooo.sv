@@ -19,6 +19,8 @@ module core_ooo #(
   input  logic        reset,
   input  logic        backend_ready,
 
+  input logic [31:0] br_update_sequence,
+  output logic [31:0] squash_sequence,
   // 来自后端
   input  logic [`CPU_CDB_BUS_W-1:0]     cdb,
   input  logic [`CPU_COMPLETE_BUS_W-1:0] complete,
@@ -41,6 +43,13 @@ module core_ooo #(
   input  logic        refill_resp_valid1,
   input  logic [31:0] refill_rdata1
 );
+
+  // ROB registers squash_valid/index on the resolving branch's clock edge.
+  // Capture that branch's age on the same edge; the value is owned only while
+  // squash.valid is set. Unconditional sampling avoids another flush enable.
+  always_ff @(posedge clk)
+    if (reset) squash_sequence <= '0;
+    else squash_sequence <= br_update_sequence;
 
   localparam integer PW = `CPU_PRF_IDX_W;
   localparam integer RW = `CPU_ROB_TAG_W;
