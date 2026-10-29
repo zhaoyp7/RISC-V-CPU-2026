@@ -314,15 +314,15 @@ module lsq #(
         if(PAIRWISE_AGE)snap_age_low_newer <= age_low_newer;
         else snap_seq <= seq;
         snap_data <= wdata;
+        snap_unknown <= |query_unknown;
+        snap_match <= query_match;
+        snap_full <= query_full;
       end
       if (query_resp_ready || query_flush)
         snap_valid <= 1'b0;
       // 新请求可在旧响应消费 / flush 的同拍进入，必须优先保留新快照。
       if (query_valid && query_ready) begin
         snap_valid <= 1'b1;
-        snap_unknown <= |query_unknown;
-        snap_match <= query_match;
-        snap_full <= query_full;
 
       end
     end

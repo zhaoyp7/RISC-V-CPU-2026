@@ -10,19 +10,21 @@
 | --- | ---: | ---: | ---: |
 | 仲裁相位独热寄存 | 1.105023 | 388.910 | 34,462.384 |
 | 相位无关访存提示 | 1.105023 | 409.273 | 34,468.493 |
-| LSQ快照元数据预采样 | 1.105023 | 419.328 | 34,543.930 |
 | LSQ年龄关系快照 | 1.105023 | 413.070 | 34,534.292 |
+| LSQ快照元数据预采样 | 1.105023 | 419.328 | 34,543.930 |
+| LSQ固定槽位数据写入 | 1.105023 | 409.109 | 34,553.217 |
 | 窗口起点Booth v126 | 1.105023 | 407.319 | 34,468.770 |
 | main e16f5b1同高性能配置 | 1.105023 | 384.240 | 35,412.183 |
 
 仲裁相位独热寄存：三套配置各19/19，六perf与统计版同周期；改动模块专项通过，未改模块复用已记录全套结果；[同源PPA核验](../build/three_hour_20261027/freq_onehot_phase_hint_v128/verification.json)、[当轮三方对照](../build/three_hour_20261027/freq_onehot_phase_hint_v128/window3-comparison.json)。
 相位无关访存提示：三套配置各19/19，六perf与统计版同周期；改动模块专项通过，未改模块复用已记录全套结果；[同源PPA核验](../build/three_hour_20261027/freq_phase_free_memory_hint_v129/verification.json)、[当轮三方对照](../build/three_hour_20261027/freq_phase_free_memory_hint_v129/window3-comparison.json)。
-LSQ快照元数据预采样：三项冒烟和六perf通过；高W2 19/19；[同源PPA核验](../build/three_hour_20261027/freq_lsq_metadata_ready_v131/verification.json)、[当轮三方对照](../build/three_hour_20261027/freq_lsq_metadata_ready_v131/window3-comparison.json)。
 LSQ年龄关系快照：三套配置各19/19，六perf与统计版同周期；改动模块专项通过，未改模块复用已记录全套结果；[同源PPA核验](../build/three_hour_20261027/freq_lsq_age_snapshot_v130/verification.json)、[当轮三方对照](../build/three_hour_20261027/freq_lsq_age_snapshot_v130/window3-comparison.json)。
+LSQ快照元数据预采样：三套配置各19/19，六perf与统计版同周期；改动模块专项通过，未改模块复用已记录全套结果；三套完整验证后保留为检查点；[同源PPA核验](../build/three_hour_20261027/freq_lsq_metadata_ready_v131/verification.json)、[当轮三方对照](../build/three_hour_20261027/freq_lsq_metadata_ready_v131/window3-comparison.json)。
+LSQ固定槽位数据写入：三项冒烟和六perf通过；高W2 19/19；频率−0.959%、面积+0.055%；不采用；[同源PPA核验](../build/three_hour_20261027/freq_lsq_static_payload_v132/verification.json)、[当轮三方对照](../build/three_hour_20261027/freq_lsq_static_payload_v132/window3-comparison.json)。
 
 吞吐敏感性：新load地址先寄存后查询实测IPC1.078049（相对基线-2.441%），低于1.0985；三项冒烟、六perf通过，不启动综合、不采用，不加入完整核心PPA表。
 
-当前保留实验源：`freq_lsq_age_snapshot_v130`；没有以diagnose替代最终opt判断。
+当前保留实验源：`freq_lsq_metadata_ready_v131`；没有以diagnose替代最终opt判断。
 
 ## 2026-10-29 C盘空间事件（已恢复）
 
@@ -752,8 +754,9 @@ load/store 放入旧的 a0/a1 缓冲。优先做分析和方案设计，单次�
 | 2026-10-29 | [冻结v127两位分组地址加法](../build/three_hour_20261027/freq_booth_agu2_v127/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,466.437 (diag) | 350.685 (diag) | 第二窗口提频对照；三项冒烟与六perf；高W2/W1各14项、默认19项通过；频率负收益停止余项，不采用 |
 | 2026-10-30 | [冻结v128 仲裁相位独热寄存](../build/three_hour_20261027/freq_onehot_phase_hint_v128/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,462.384 (diag) | 388.910 (diag) | 三套配置各19/19，六perf与统计版同周期；改动模块专项通过，未改模块复用已记录全套结果；三小时控制链试验，保留决定见窗口记录 |
 | 2026-10-30 | [冻结v129 相位无关访存提示](../build/three_hour_20261027/freq_phase_free_memory_hint_v129/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,468.493 (diag) | 409.273 (diag) | 三套配置各19/19，六perf与统计版同周期；改动模块专项通过，未改模块复用已记录全套结果；三小时控制链试验，保留决定见窗口记录 |
-| 2026-10-30 | [冻结v131 LSQ快照元数据预采样](../build/three_hour_20261027/freq_lsq_metadata_ready_v131/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,543.930 (diag) | 419.328 (diag) | 三项冒烟和六perf通过；高W2 19/19；三小时控制链试验，保留决定见窗口记录 |
 | 2026-10-30 | [冻结v130 LSQ年龄关系快照](../build/three_hour_20261027/freq_lsq_age_snapshot_v130/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,534.292 (diag) | 413.070 (diag) | 三套配置各19/19，六perf与统计版同周期；改动模块专项通过，未改模块复用已记录全套结果；三小时控制链试验，保留决定见窗口记录 |
+| 2026-10-30 | [冻结v132 LSQ固定槽位数据写入](../build/three_hour_20261027/freq_lsq_static_payload_v132/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,553.217 (diag) | 409.109 (diag) | 三项冒烟和六perf通过；高W2 19/19；频率−0.959%、面积+0.055%；不采用；三小时控制链试验，保留决定见窗口记录 |
+| 2026-10-30 | [冻结v131 LSQ快照元数据预采样](../build/three_hour_20261027/freq_lsq_metadata_ready_v131/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,543.930 (diag) | 419.328 (diag) | 三套配置各19/19，六perf与统计版同周期；改动模块专项通过，未改模块复用已记录全套结果；三套完整验证后保留为检查点；三小时控制链试验，保留决定见窗口记录 |
 
 P2 基线 opt 综合：comb 16,361.326、seq 5,648.117、SRAM 2,278.903 µm²，
 min period 17.8320 ns（目标 2 ns，WNS −15.8320 ns）。diagnose 为 25,025.438 µm²、
@@ -961,8 +964,9 @@ ALU，必须先确认 IPC 不低于 0.60。
 | v127两位分组地址加法；第二窗口提频 | [冻结v127两位分组地址加法](../build/three_hour_20261027/freq_booth_agu2_v127/verification.json) | 1.105023 | — | 34,466.437 | 350.685 | — | — |
 | v128 仲裁相位独热寄存；三小时控制链 | [冻结v128 仲裁相位独热寄存](../build/three_hour_20261027/freq_onehot_phase_hint_v128/verification.json) | 1.105023 | — | 34,462.384 | 388.910 | — | — |
 | v129 相位无关访存提示；三小时控制链 | [冻结v129 相位无关访存提示](../build/three_hour_20261027/freq_phase_free_memory_hint_v129/verification.json) | 1.105023 | — | 34,468.493 | 409.273 | — | — |
-| v131 LSQ快照元数据预采样；三小时控制链 | [冻结v131 LSQ快照元数据预采样](../build/three_hour_20261027/freq_lsq_metadata_ready_v131/verification.json) | 1.105023 | — | 34,543.930 | 419.328 | — | — |
 | v130 LSQ年龄关系快照；三小时控制链 | [冻结v130 LSQ年龄关系快照](../build/three_hour_20261027/freq_lsq_age_snapshot_v130/verification.json) | 1.105023 | — | 34,534.292 | 413.070 | — | — |
+| v132 LSQ固定槽位数据写入；三小时控制链 | [冻结v132 LSQ固定槽位数据写入](../build/three_hour_20261027/freq_lsq_static_payload_v132/verification.json) | 1.105023 | — | 34,553.217 | 409.109 | — | — |
+| v131 LSQ快照元数据预采样；三小时控制链 | [冻结v131 LSQ快照元数据预采样](../build/three_hour_20261027/freq_lsq_metadata_ready_v131/verification.json) | 1.105023 | — | 34,543.930 | 419.328 | — | — |
 
 新增行的“—”表示没有对应同源 opt 数据；不复用历史 main 或其他候选的 opt。
 
