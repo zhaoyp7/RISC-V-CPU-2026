@@ -53,6 +53,7 @@ printf 'run_all: root=%s full=%d seed=%s\n' "$root" "$full" "$seed"
 run "config check" python3 tools/config_gen.py --check
 run "core dispatch / rename admission W1/W2" sh test/core_admission_test/run.sh
 run "alu arithmetic" sh test/alu_test/run.sh
+run "Booth / pseudo-Wallace independent 32x32 product reference" sh test/booth_multiplier_test/run.sh
 run "CDB arbitration/lookahead guarantee" sh test/cdb_test/run.sh
 run "CDB guaranteed hints / exhaustive optional source" sh test/cdb_guarantee_test/run.sh
 run "issue queue W1/W2 R1/R2" sh test/issue_queue_test/run.sh

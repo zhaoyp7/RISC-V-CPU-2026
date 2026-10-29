@@ -23,15 +23,17 @@ module alu #(
 );
 
   logic [63:0] mul_product;
-  logic [31:0] mul_high, mul_correct_a, mul_correct_b;
+  logic [31:0] mul_high;
 
-  // signed(a) = unsigned(a) - a[31]*2^32。乘积的高半字因此只需减去
-  // a 为负时的 b，以及 b 为负时的 a；修正项按 32 位自然回绕。
-  assign mul_product = {32'b0, a} * {32'b0, b};
-  assign mul_correct_a = a[31] && ((op == `ALU_MULH) || (op == `ALU_MULHSU))
-                         ? b : 32'b0;
-  assign mul_correct_b = b[31] && (op == `ALU_MULH) ? a : 32'b0;
-  assign mul_high = mul_product[63:32] - mul_correct_a - mul_correct_b;
+  // Signedness is included in Booth partial products, so high-half results
+  // do not need carry-propagating correction subtractors after the tree.
+  mul_booth_wallace u_multiplier (
+    .a(a), .b(b),
+    .a_signed((op==`ALU_MULH)||(op==`ALU_MULHSU)),
+    .b_signed(op==`ALU_MULH),
+    .product(mul_product)
+  );
+  assign mul_high=mul_product[63:32];
 
   // 除法结果缓存
   logic signed [31:0] quot_s;
@@ -90,4 +92,83 @@ module alu #(
     endcase
   end
 
+endmodule
+
+// Shared 32x32 product with independently signed/unsigned operands.
+// Radix-4 Booth needs 17 digits because the multiplier is zero-extended to
+// 33 bits. Negative rows use one's complement plus correction bits, avoiding
+// a carry-propagating negation for every partial product.
+module mul_booth_wallace (
+  input wire [31:0] a,
+  input wire [31:0] b,
+  input wire a_signed,
+  input wire b_signed,
+  output wire [63:0] product
+);
+  localparam integer ROWS=18;
+  localparam integer LEVELS=6;
+  wire [34:0] recode_b={{2{b_signed && b[31]}},b,1'b0};
+  wire [33:0] extended_a={{2{a_signed && a[31]}},a};
+  wire [16:0] negative;
+  wire [63:0] correction;
+  wire [ROWS*64-1:0] tree [0:LEVELS] /* verilator split_var */;
+
+  function automatic integer row_count(input integer level);
+    integer n,k;
+    begin
+      n=ROWS;
+      for(k=0;k<level;k=k+1)n=2*(n/3)+(n%3);
+      row_count=n;
+    end
+  endfunction
+
+  for(genvar digit=0;digit<17;digit=digit+1)begin:gen_booth
+    wire [2:0] code=recode_b[digit*2+:3];
+    logic [33:0] magnitude;
+    logic negate;
+    always_comb begin
+      magnitude='0;
+      negate=1'b0;
+      case(code)
+        3'b001,3'b010: magnitude=extended_a;
+        3'b011: magnitude=extended_a<<1;
+        3'b100: begin magnitude=extended_a<<1;negate=1'b1;end
+        3'b101,3'b110: begin magnitude=extended_a;negate=1'b1;end
+        default: begin magnitude='0;negate=1'b0;end
+      endcase
+    end
+    assign negative[digit]=negate;
+    wire [63:0] encoded={{30{magnitude[33]^negate}},(magnitude^{34{negate}})};
+    assign tree[0][digit*64+:64]=encoded<<(2*digit);
+  end
+  for(genvar bit_idx=0;bit_idx<64;bit_idx=bit_idx+1)begin:gen_correction
+    if((bit_idx%2)==0 && bit_idx/2<17)begin:gen_negative_correction
+      assign correction[bit_idx]=negative[bit_idx/2];
+    end else begin:gen_no_correction
+      assign correction[bit_idx]=1'b0;
+    end
+  end
+  assign tree[0][17*64+:64]=correction;
+
+  // Row-based pseudo-Wallace compression: 18 -> 12 -> 8 -> 6 -> 4 -> 3 -> 2.
+  // Each 3:2 compressor uses XOR sums and shifted majority carries; carries
+  // propagate between compression levels, never along a 64-bit row here.
+  for(genvar level=0;level<LEVELS;level=level+1)begin:gen_compress
+    localparam integer INPUTS=row_count(level);
+    localparam integer OUTPUTS=row_count(level+1);
+    for(genvar group=0;group<INPUTS/3;group=group+1)begin:gen_triple
+      wire [63:0] x=tree[level][(3*group)*64+:64];
+      wire [63:0] y=tree[level][(3*group+1)*64+:64];
+      wire [63:0] z=tree[level][(3*group+2)*64+:64];
+      assign tree[level+1][(2*group)*64+:64]=x^y^z;
+      assign tree[level+1][(2*group+1)*64+:64]=((x&y)|(x&z)|(y&z))<<1;
+    end
+    for(genvar rest=0;rest<INPUTS%3;rest=rest+1)begin:gen_rest
+      assign tree[level+1][(2*(INPUTS/3)+rest)*64+:64]=
+          tree[level][(3*(INPUTS/3)+rest)*64+:64];
+    end
+    assign tree[level+1][OUTPUTS*64+:(ROWS-OUTPUTS)*64]='0;
+  end
+  // Modulo-2^64 arithmetic gives the full signed/unsigned 32x32 bit pattern.
+  assign product=tree[LEVELS][0+:64]+tree[LEVELS][64+:64];
 endmodule
