@@ -14,6 +14,8 @@
 
 20:40只读预检再次确认v126的24项冻结输入、23项Git源码、三档19/19已有日志及改动模块测试证据有效，当前main的23项输入仍对应原opt报告；未启动新测试。[opt前置核查](../build/three_hour_20261027/freq_signed_booth_wallace_v126/opt-preflight-after-disk-incident.json)。已列出393个历史网表的[归档候选清单](../build/synthesis-intermediates-archive-proposal-20261029.json)，未压缩或删除网表。C盘仍约27.5GiB，重任务禁启继续生效。
 
+21:07按用户清理授权删除320个历史diagnose中间JSON，约29.215GiB；全部opt、当前main、Booth候选、关键Git基线及显式baseline目录的中间网表保留，共73个约5.029GiB。清理持有综合锁并确认没有综合进程；其余102,179个构建文件元数据未变，3,022份结果／配置／报告等文件内容SHA逐项一致。build由约61.7降至32.505GiB，连同此前PCH累计释放约52.32GiB客体空间；C盘仍约27.52GiB，等待关闭WSL后的宿主VHD压缩，未启动opt或合并main。[删除清单](../build/synthesis-json-cleanup-20261029-manifest.json)、[删除及保留核验](../build/synthesis-json-cleanup-20261029-result.json)、[清理后统计](../build/disk-inventory-after-json-cleanup-20261029.json)。
+
 ## 当前 opt 检查点：a5835fe（2026-10-29）
 
 最终综合标签 `ipc-tier3-opt-20261029`；生产源码标签 `ipc-tier3-class-priority-20261029`；已从 `feat/ipc-frontend-recovery-20261027` 合入本地 `main`。
