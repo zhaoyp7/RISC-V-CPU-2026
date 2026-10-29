@@ -12,6 +12,8 @@
 
 证据：[删除清单](../build/gch-cleanup-20261029-disk-incident-manifest.json)、[清理前后空间](../build/gch-cleanup-20261029-disk-incident-result.json)、[清理后分类统计](../build/disk-incident-inventory-after-20261029.json)、[缓存保留边界检查](../build/gch-retention-check-20261029.json)。本节没有新增性能测量，原有完整核心表和PPA数字保持有效。
 
+20:40只读预检再次确认v126的24项冻结输入、23项Git源码、三档19/19已有日志及改动模块测试证据有效，当前main的23项输入仍对应原opt报告；未启动新测试。[opt前置核查](../build/three_hour_20261027/freq_signed_booth_wallace_v126/opt-preflight-after-disk-incident.json)。已列出393个历史网表的[归档候选清单](../build/synthesis-intermediates-archive-proposal-20261029.json)，未压缩或删除网表。C盘仍约27.5GiB，重任务禁启继续生效。
+
 ## 当前 opt 检查点：a5835fe（2026-10-29）
 
 最终综合标签 `ipc-tier3-opt-20261029`；生产源码标签 `ipc-tier3-class-priority-20261029`；已从 `feat/ipc-frontend-recovery-20261027` 合入本地 `main`。
