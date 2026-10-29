@@ -77,6 +77,7 @@ run "I-cache early hit / one-cycle latency and backpressure" sh test/icache_hit_
 run "rename W=1" env RENAME_W=1 sh test/rename_test/run.sh $quick --seed "$seed"
 run "rename W=2" env RENAME_W=2 sh test/rename_test/run.sh $quick --seed "$seed"
 run "rename constant x0 sources W1/W2" sh test/rename_zero_test/run.sh
+run "rename recovery count / independent PRF33..96 reference" sh test/rename_recovery_count_test/run.sh
 run "rob W=1" env ROB_W=1 sh test/rob_test/run.sh $quick --seed "$seed"
 run "rob W=2" env ROB_W=2 sh test/rob_test/run.sh $quick --seed "$seed"
 run "rob update PC W=1" env ROB_W=1 ROB_UPDATE_PC=1 sh test/rob_test/run.sh $quick --seed "$seed"

@@ -65,7 +65,7 @@ module rename #(
   localparam [LW-1:0] LSQ_LAST = `CPU_LSQ_DEPTH - 1;
 
   integer i_uop, i_cnt, i_alloc, i_wake, i_src, j_src;
-  integer i_out, i_rec, i_ff;
+  integer i_out, i_ff;
   logic [PRF-1:0] alloc_tmp;
   logic [LW-1:0]  lsq_tmp;
 
@@ -276,11 +276,18 @@ module rename #(
 
   // ---- 恢复计数 ------------------------------------------------------------
   logic [FCW-1:0] recover_count;
-  always_comb begin
-    recover_count = '0;
-    for (i_rec = 1; i_rec < PRF; i_rec = i_rec + 1)
-      if (recover_free_mask[i_rec]) recover_count = recover_count + 1'b1;
+  localparam integer RECOVERY_LEAVES = 1 << $clog2(PRF);
+  wire [FCW-1:0] recovery_count_tree [1:2*RECOVERY_LEAVES-1];
+  for(genvar r=1;r<2*RECOVERY_LEAVES;r=r+1)begin:gen_recovery_count
+    if(r>=RECOVERY_LEAVES)begin:gen_leaf
+      localparam integer TAG=r-RECOVERY_LEAVES;
+      if(TAG>0 && TAG<PRF)assign recovery_count_tree[r]=FCW'(recover_free_mask[TAG]);
+      else assign recovery_count_tree[r]='0;
+    end else begin:gen_sum
+      assign recovery_count_tree[r]=recovery_count_tree[2*r]+recovery_count_tree[2*r+1];
+    end
   end
+  assign recover_count=recovery_count_tree[1];
 
   // ---- 时序 ----------------------------------------------------------------
   always_ff @(posedge clk) begin

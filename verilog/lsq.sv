@@ -273,6 +273,12 @@ module lsq #(
       snap_match <= '0;
       snap_full <= '0;
     end else begin
+      // Payload may be sampled whenever the snapshot slot can be replaced.
+      // Request validity controls ownership only; stalled live snapshots hold.
+      if(query_ready)begin
+        snap_seq <= seq;
+        snap_data <= wdata;
+      end
       if (query_resp_ready || query_flush)
         snap_valid <= 1'b0;
       // 新请求可在旧响应消费 / flush 的同拍进入，必须优先保留新快照。
@@ -281,8 +287,7 @@ module lsq #(
         snap_unknown <= |query_unknown;
         snap_match <= query_match;
         snap_full <= query_full;
-        snap_seq <= seq;
-        snap_data <= wdata;
+
       end
     end
   end
