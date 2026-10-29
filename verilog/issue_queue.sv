@@ -14,7 +14,16 @@
 module issue_queue #(
   parameter integer W  = `CPU_ISSUE_WIDTH,
   parameter integer D  = `CPU_RS_DEPTH,
-  parameter integer IW = 1
+  parameter integer IW = 1,
+  // 后端第二通道只支持普通写回ALU；通用IQ默认仍保持逐年龄选择。
+  parameter integer LANE1_ALU_ONLY = 0,
+  parameter integer LANE1_LOOKAHEAD = 0,
+  parameter integer LANE0_CONTROL_LOOKAHEAD = 0,
+  parameter integer LANE0_SPECIAL_PRIORITY = 0,
+  parameter integer LANE0_ALU_LOOKAHEAD = 0,
+  parameter integer REUSE_ISSUED_SLOTS = 0,
+  parameter integer LANE0_MEMORY_LOOKAHEAD = 0,
+  parameter integer RETIRE_STORE_PREFILL = 0
 ) (
   input  logic clk,
   input  logic reset,
@@ -28,6 +37,19 @@ module issue_queue #(
   // CDB wake (R lanes)
   input  logic [`CPU_CDB_NUM-1:0]            wake_valid,
   input  logic [`CPU_CDB_NUM*`CPU_PRF_IDX_W-1:0] wake_tag,
+
+  // 保证本沿写PRF的独立提示，仅供后接寄存级的普通ALU1提前选择。
+  // 不用于持久ready或lane0/访存选择；实际CDB仍负责状态更新。
+  input  logic                               lookahead_valid,
+  input  logic [`CPU_PRF_IDX_W-1:0]           lookahead_tag,
+  input logic execute1_lookahead_valid,
+  input logic [`CPU_PRF_IDX_W-1:0] execute1_lookahead_tag,
+  input logic memory_lookahead_valid,
+  input logic [`CPU_PRF_IDX_W-1:0]memory_lookahead_tag,
+  input logic execute_lookahead_valid,
+  input logic [`CPU_PRF_IDX_W-1:0] execute_lookahead_tag,
+  input  logic                               lookahead_load_valid,
+  input  logic [`CPU_PRF_IDX_W-1:0]           lookahead_load_tag,
 
   // dispatch sequence: lane i is seq_base + i
   input  logic [31:0]                        seq_base,
@@ -43,7 +65,15 @@ module issue_queue #(
   output logic [IW*32-1:0]                   out_seq,
   input  logic [IW-1:0]                      out_ready,
 
+  // The direct LSU payload is selected only from registered-ready memory
+  // candidates. A control hint can suppress its valid, without changing the
+  // PRF/AGU input cone. Meaningful only when lane 0 actually issues memory.
+  output logic [`CPU_DISPATCH_W-1:0] memory_uop,
+  output logic [31:0] memory_seq,
+  output logic memory_addr_only,
+
   // status
+  output logic registered_alu_ready,
   output logic [7:0]                         count,
   output logic [7:0]                         free_count
 );
@@ -59,6 +89,7 @@ module issue_queue #(
   logic [D*PW-1:0]    src2_tag;
   logic [D-1:0]       src1_ready;
   logic [D-1:0]       src2_ready;
+  logic [D-1:0]       lane1_eligible;
   logic [D*32-1:0]    seq;
 
 
@@ -67,6 +98,7 @@ module issue_queue #(
   logic [PW-1:0]      in_src2_tag [0:W-1];
   logic               in_src1_rdy [0:W-1];
   logic               in_src2_rdy [0:W-1];
+  assign registered_alu_ready=|(valid & src1_ready & src2_ready & lane1_eligible);
   integer             i, lane;
 
   always_comb begin
@@ -83,6 +115,18 @@ module issue_queue #(
   logic [D-1:0] squash_mask;
   logic [7:0] n_squash;
   logic [7:0] free_after;
+  logic [D-1:0] released;
+  logic [7:0] n_released;
+  always_comb begin
+    released='0; n_released='0;
+    if(REUSE_ISSUED_SLOTS) begin
+      for(integer q=0;q<IW;q=q+1)
+        if(out_valid[q] && out_ready[q] && (!out_addr_only[q] || RETIRE_STORE_PREFILL))
+          released[sel_idx[q]]=1'b1;
+      for(integer q=0;q<D;q=q+1)
+        if(released[q] && !squash_mask[q]) n_released=n_released+1'b1;
+    end
+  end
 
   always_comb begin
     n_in = '0;
@@ -110,7 +154,7 @@ module issue_queue #(
     end
   end
 
-  assign free_after = free_count + n_squash;
+  assign free_after = free_count + n_squash + n_released;
 
   assign in_ready = (free_after >= n_in);
 
@@ -126,7 +170,7 @@ module issue_queue #(
       slot_found = 1'b0;
       for (i = 0; i < D; i = i + 1) begin
         if (!slot_found && !alloc_used[i] &&
-            (!valid[i] || squash_mask[i])) begin
+            (!valid[i] || squash_mask[i] || released[i])) begin
           alloc_slot[lane] = i[7:0];
           alloc_used[i] = 1'b1;
           slot_found = 1'b1;
@@ -146,10 +190,27 @@ module issue_queue #(
     end
   endfunction
 
+  function automatic logic lane1_alu(input logic [DW-1:0] entry);
+    logic [4:0] op;
+    begin
+      op = entry[`CPU_DISPATCH_ALU_OP_OFF +: 5];
+      lane1_alu = entry[`CPU_DISPATCH_REG_WE_OFF] &&
+          !entry[`CPU_DISPATCH_IS_LOAD_OFF] && !entry[`CPU_DISPATCH_IS_STORE_OFF] &&
+          !entry[`CPU_DISPATCH_IS_BRANCH_OFF] && !entry[`CPU_DISPATCH_IS_JAL_OFF] &&
+          !entry[`CPU_DISPATCH_IS_JALR_OFF] && !entry[`CPU_DISPATCH_ILLEGAL_OFF] &&
+          op != `ALU_DIV && op != `ALU_DIVU && op != `ALU_REM && op != `ALU_REMU;
+    end
+  endfunction
+
   // ---- 发射选择：最老的 ready 表项 ---------------------------------------
   // lane 0 除了普通发射，还可以对 store 做 address-only 发射：地址源 ready
   // 但数据源尚未 ready 时，先把地址填入 LSQ，store 本体仍留在 IQ 等数据。
   // 这样后面的 load 不会被一个地址未知的 store 长期阻塞。
+  wire [D-1:0] memory_base_ready;
+  for(genvar m=0;m<D;m=m+1)begin : gen_memory_base_ready
+    assign memory_base_ready[m]=src1_ready[m] ||
+      (LANE0_MEMORY_LOOKAHEAD && memory_lookahead_valid && src1_tag[m*PW+:PW]==memory_lookahead_tag);
+  end
   logic [D-1:0] cand_issue;
   logic [D-1:0] cand_prefill;
   logic [IW-1:0] sel_valid;
@@ -165,10 +226,21 @@ module issue_queue #(
     // CDB 本拍只更新 ready，下一拍才参与选择。
     for (i = 0; i < D; i = i + 1) begin
       cand_issue[i] = valid[i] &&
-                      src1_ready[i] && src2_ready[i];
+          ((src1_ready[i] && src2_ready[i]) ||
+           (LANE0_MEMORY_LOOKAHEAD &&
+            (uop[i*DW+`CPU_DISPATCH_IS_LOAD_OFF] || uop[i*DW+`CPU_DISPATCH_IS_STORE_OFF]) &&
+            memory_base_ready[i] && src2_ready[i]) ||
+           (((LANE0_CONTROL_LOOKAHEAD &&
+            (uop[i*DW + `CPU_DISPATCH_IS_BRANCH_OFF] ||
+             uop[i*DW + `CPU_DISPATCH_IS_JALR_OFF])) ||
+             (LANE0_ALU_LOOKAHEAD && lane1_eligible[i])) &&
+            (src1_ready[i] || (lookahead_valid && src1_tag[i*PW +: PW] == lookahead_tag) ||
+             (lookahead_load_valid && src1_tag[i*PW +: PW] == lookahead_load_tag)) &&
+            (src2_ready[i] || (lookahead_valid && src2_tag[i*PW +: PW] == lookahead_tag) ||
+             (lookahead_load_valid && src2_tag[i*PW +: PW] == lookahead_load_tag))));
       cand_prefill[i] = valid[i] && !addr_sent[i] &&
                         uop[i*DW + `CPU_DISPATCH_IS_STORE_OFF] &&
-                        src1_ready[i] && !src2_ready[i];
+                        memory_base_ready[i] && !src2_ready[i];
     end
   end
 
@@ -208,6 +280,10 @@ module issue_queue #(
 
       wire [D-1:0] full_first, full_second, pick0;
       wire [D-1:0] cand_any = cand_issue | cand_prefill;
+      // Reserve the general port for work that cannot use the ALU-only port.
+      wire [D-1:0] special_candidates = cand_any & ~lane1_eligible;
+      wire [D-1:0] port0_candidates = (LANE0_SPECIAL_PRIORITY && LANE1_ALU_ONLY && IW==2 && |special_candidates)
+          ? special_candidates : cand_any;
       for (genvar g = 0; g < D; g = g + 1) begin : gen_rank
         // 树节点只记录是否存在、是否至少两个更老的完整候选。
         // 不使用串行加法统计数量，也不再在选择树每层比较32位seq。
@@ -229,15 +305,63 @@ module issue_queue #(
         end
         assign full_first[g] = cand_issue[g] && !any_older[1];
         assign full_second[g] = cand_issue[g] && any_older[1] && !multi_older[1];
-        assign pick0[g] = cand_any[g] && !(|(older[g] & cand_any));
+        if(LANE0_SPECIAL_PRIORITY && LANE1_ALU_ONLY && IW==2)begin:gen_class_first
+          // Rank each class in parallel. The global class-presence select
+          // comes after ranking, instead of entering every age comparison.
+          wire special_first=special_candidates[g] && !(|(older[g]&special_candidates));
+          wire any_first=cand_any[g] && !(|(older[g]&cand_any));
+          assign pick0[g]=special_first || (!(|special_candidates) && any_first);
+        end else begin:gen_original_priority
+          assign pick0[g]=port0_candidates[g] && !(|(older[g]&port0_candidates));
+        end
       end
+      wire [D-1:0] memory_candidates, memory_pick;
+      for(genvar g=0;g<D;g=g+1)begin : gen_memory_pick
+        wire is_memory = uop[g*DW+`CPU_DISPATCH_IS_LOAD_OFF] || uop[g*DW+`CPU_DISPATCH_IS_STORE_OFF];
+        assign memory_candidates[g] = valid[g] && is_memory && memory_base_ready[g] &&
+          (src2_ready[g] || (uop[g*DW+`CPU_DISPATCH_IS_STORE_OFF] && !addr_sent[g]));
+        assign memory_pick[g] = memory_candidates[g] && !(|(older[g] & memory_candidates));
+      end
+      always_comb begin
+        memory_uop='0;memory_seq='0;
+        for(integer k=0;k<D;k=k+1)begin
+          memory_uop=memory_uop | (uop[k*DW+:DW] & {DW{memory_pick[k]}});
+          memory_seq=memory_seq | (seq[k*32+:32] & {32{memory_pick[k]}});
+        end
+      end
+      assign memory_addr_only = |(memory_pick & cand_prefill);
       wire take_prefill = |(pick0 & cand_prefill);
       wire [IW*D-1:0] picks;
       assign picks[0 +: D] = pick0;
       assign sel_valid[0] = |pick0;
       assign sel_addr_only[0] = take_prefill;
       if (IW == 2) begin : gen_lane1
-        assign picks[D +: D] = take_prefill ? full_first : full_second;
+        if (LANE1_ALU_ONLY) begin : gen_alu_only
+          // 分类在入队时寄存；只在本通道候选中按原年龄关系选最老项。
+          // lane0即使被反压也保留其候选，不能在两个通道重复输出。
+          wire [D-1:0] ready_for_lane1, candidates;
+          for (genvar g = 0; g < D; g = g + 1) begin : gen_ready
+            if (LANE1_LOOKAHEAD) begin : gen_hint
+              assign ready_for_lane1[g] = valid[g] &&
+                  (src1_ready[g] || (execute_lookahead_valid && src1_tag[g*PW+:PW]==execute_lookahead_tag) ||
+                   (execute1_lookahead_valid && src1_tag[g*PW+:PW]==execute1_lookahead_tag) ||
+                   (lookahead_valid && src1_tag[g*PW +: PW] == lookahead_tag) ||
+                   (lookahead_load_valid && src1_tag[g*PW +: PW] == lookahead_load_tag)) &&
+                  (src2_ready[g] || (execute_lookahead_valid && src2_tag[g*PW+:PW]==execute_lookahead_tag) ||
+                   (execute1_lookahead_valid && src2_tag[g*PW+:PW]==execute1_lookahead_tag) ||
+                   (lookahead_valid && src2_tag[g*PW +: PW] == lookahead_tag) ||
+                   (lookahead_load_valid && src2_tag[g*PW +: PW] == lookahead_load_tag));
+            end else begin : gen_registered
+              assign ready_for_lane1[g] = cand_issue[g];
+            end
+          end
+          assign candidates = ready_for_lane1 & lane1_eligible & ~pick0;
+          for (genvar g = 0; g < D; g = g + 1) begin : gen_pick
+            assign picks[D+g] = candidates[g] && !(|(older[g] & candidates));
+          end
+        end else begin : gen_unrestricted
+          assign picks[D +: D] = take_prefill ? full_first : full_second;
+        end
         assign sel_valid[1] = |picks[D +: D];
         assign sel_addr_only[1] = 1'b0;
       end
@@ -259,6 +383,9 @@ module issue_queue #(
         end
       end
     end else begin : gen_select_wide
+      assign memory_uop='0;
+      assign memory_seq='0;
+      assign memory_addr_only=1'b0;
       // 保留 IW>2 的通用逐 lane 选择语义；默认后端使用 IW=2。
       logic [D-1:0] chosen;
       logic [31:0] best_seq;
@@ -324,6 +451,7 @@ module issue_queue #(
       addr_sent  <= '0;
       src1_ready <= '0;
       src2_ready <= '0;
+      lane1_eligible <= '0;
     end else begin
       // 1) squash：清更年轻的表项
       for (i = 0; i < D; i = i + 1) begin
@@ -349,7 +477,7 @@ module issue_queue #(
       //    address-only store 只标记 addr_sent，不删除表项。
       for (lane = 0; lane < IW; lane = lane + 1) begin
         if (out_ready[lane] && out_valid[lane]) begin
-          if (sel_addr_only[lane])
+          if (sel_addr_only[lane] && !RETIRE_STORE_PREFILL)
             addr_sent[sel_idx[lane]] <= 1'b1;
           else
             valid[sel_idx[lane]] <= 1'b0;
@@ -362,6 +490,7 @@ module issue_queue #(
           uop[alloc_slot[lane]*DW +: DW] <= in_uop[lane*DW +: DW];
           src1_tag[alloc_slot[lane]*PW +: PW] <= in_src1_tag[lane];
           src2_tag[alloc_slot[lane]*PW +: PW] <= in_src2_tag[lane];
+          lane1_eligible[alloc_slot[lane]] <= lane1_alu(in_uop[lane*DW +: DW]);
           // 同拍 CDB 旁路：dispatch 写入时新 tag 已在本拍广播则直接 ready。
           src1_ready[alloc_slot[lane]] <= in_src1_rdy[lane] |
                                           tag_hit(in_src1_tag[lane]);

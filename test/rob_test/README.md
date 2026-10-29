@@ -27,7 +27,7 @@ ROB_W=2 sh test/rob_test/run.sh --quick
 
 ## 2. 接口与语义
 
-- **分配**：接收 rename 的 `in_uop` / `in_old_tag`，按程序序分配 `rob_idx`
+- **分配**：按in_ready和低位连续in_capacity接收有效前缀，接收rename的`in_uop` / `in_old_tag`，按程序序分配`rob_idx`
   （循环缓冲索引），同时保存前端给出的 `pred_taken/pred_target`。
 - **完成**：`cdb` 与 `complete[W]` 按 `dest_tag` 定位表项，置 `done`；
   `exception` 一并记录。若接口测试给出多个同tag有效项，保持原实现的规则：
@@ -53,7 +53,7 @@ ROB_W=2 sh test/rob_test/run.sh --quick
 - `in_ready` 在 `recover_valid/redirect_valid` 脉冲期间为 0，避免恢复同拍
   再接收新 uop；
 - 分配与提交同拍时，新表项索引按**提交前**的 head/count 计算；ROB 满时
-  本拍不接收（保守但正确）。
+  本拍不接收（保守但正确）。仅剩一槽时容量为01，可接收lane0；不借当拍提交空间。
 
 ## 4. 测试分组
 
@@ -66,16 +66,28 @@ ROB_W=2 sh test/rob_test/run.sh --quick
 | 随机 | 5 万拍随机分配/完成/分支解析/提交，逐拍对拍组合输出与沿后脉冲 |
 | W=2 | 双 lane 分配、前缀提交、双 lane 完成 |
 | 完成搜索边界 | 遍历所有head位置；重复tag跨回绕、无效广播、年轻项被squash后的再次匹配 |
+| 恢复RAT | 用crat和存活有序队列重放，核对所有32个映射；遍历全部head和分支自身写回/不写回 |
+| 恢复掩码边界 | 满窗口、全部head位置、branch年龄0/15/31、非写回完成tag、高位已提交tag63、同拍完成与LSQ指针回绕 |
 
 完成参考在时钟沿前的有序队列中从后向前查找匹配项，保存其槽位；更新后仅修改
 仍存活的匹配槽。它不使用RTL中的物理槽位优先矩阵，适合检验搜索结构改写。
 
+恢复RAT参考按程序顺序覆盖架构寄存器映射，不使用物理槽排序或选择树。
+定向覆盖非零已提交映射回退、同rd多次写入、reg_we=0、分支自身jalr写回、
+年轻同rd写入取消、rd0/rd31和跨32位字的打包字段；每次恢复脉冲均检查全部32项。
+新增检查先在原恢复逻辑上通过，再用于固定槽选择树，W1/W2完整随机共115666/115664项。
+
+恢复掩码边界仍使用有序deque参考，核对free/busy、LSQ指针与存活队列；
+branch年龄0覆盖无存活访存项，年龄15覆盖LSQ指针回绕，年龄31覆盖全窗口保留。
+同拍CDB与complete分别命中较老、branch及年轻项，非写回uop仍占用其完成tag。
+该组先在dca7d77原实现上通过，再用于固定槽恢复网络；加入后两档完整随机检查如下。
+
 完整输出示例：
 
 ```text
-rob_tb: W=1 checked=100118 fails=0
+rob_tb: W=1 checked=141970 fails=0
 PASS
-rob_tb: W=2 checked=100082 fails=0
+rob_tb: W=2 checked=141968 fails=0
 PASS
 ```
 
@@ -84,3 +96,9 @@ PASS
 - W=1/W=2 随机对拍通过；
 - Yosys `proc; opt; check` 0 problems；
 - 已纳入正式OoO核心；测试台和其参考模型保持独立。
+
+容量边界覆盖：填到仅剩一槽、只接收所提供前缀、满队列同拍commit不借空间、释放沿后绕回复用。
+参考以有序队列剩余容量限定接受条数，逐拍核对容量mask及提交/恢复状态。
+
+分支查找参考按有序deque选最年轻control tag，核对br_update_uncond。新增全部head×三预测场景，
+区分重复tag的PC/预测目标/类型、无效更新和跨回绕取消；先在原ROB上通过，再用于固定槽实现。

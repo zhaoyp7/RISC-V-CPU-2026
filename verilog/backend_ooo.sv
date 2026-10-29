@@ -11,7 +11,14 @@
 // -----------------------------------------------------------------------------
 
 module backend_ooo #(
-  parameter integer W = `CPU_ISSUE_WIDTH
+  parameter integer W = `CPU_ISSUE_WIDTH,
+  parameter integer STORE_DATA_CAPTURE = 0,
+  parameter integer ORDERED_STORE_COMMIT = 0,
+  parameter integer DISPATCH_ALU_BYPASS = 0,
+  parameter integer RAW_MEMORY_HINT = 0,
+  parameter integer EXECUTION_LOOKAHEAD = 0,
+  parameter integer MEMORY_BASE_LOOKAHEAD = 0,
+  parameter integer DISPATCH_CONTROL_BYPASS = 0
 ) (
   input  logic clk,
   input  logic reset,
@@ -72,6 +79,66 @@ module backend_ooo #(
   logic [W*LW-1:0]      skid_lsq;
   logic [W*RW-1:0]      skid_rob;
   logic                 skid_drain, skid_push;
+  logic [W-1:0] dispatch_bypass_mask;
+  logic [DW-1:0] dispatch_bypass_uop;
+  logic [31:0] dispatch_bypass_seq;
+  logic dispatch_bypass_fire;
+  integer bypass_lane;
+  function automatic logic direct_alu(input logic [DW-1:0] u);
+    logic [4:0] op;
+    begin
+      op=u[`CPU_DISPATCH_ALU_OP_OFF+:5];
+      direct_alu=u[`CPU_DISPATCH_REG_WE_OFF] &&
+       !u[`CPU_DISPATCH_IS_LOAD_OFF] && !u[`CPU_DISPATCH_IS_STORE_OFF] && !u[`CPU_DISPATCH_IS_BRANCH_OFF] &&
+       !u[`CPU_DISPATCH_IS_JAL_OFF] && !u[`CPU_DISPATCH_IS_JALR_OFF] && !u[`CPU_DISPATCH_ILLEGAL_OFF] &&
+       op!=`ALU_DIV && op!=`ALU_DIVU && op!=`ALU_REM && op!=`ALU_REMU;
+    end
+  endfunction
+  always_comb begin
+    bypass_lane=0;
+    for(integer b=0;b<W;b=b+1)if(skid_vmask[b])bypass_lane=b;
+    dispatch_bypass_uop=skid_uop[bypass_lane*DW+:DW];
+    dispatch_bypass_seq=skid_seq+32'(bypass_lane);
+    dispatch_bypass_mask='0;
+    if(DISPATCH_ALU_BYPASS && skid_valid && !iq_registered_alu_ready && (!a1_valid_q || !alu1_valid_q) && direct_alu(dispatch_bypass_uop) && (&dispatch_sources_ready) &&
+       iq_free >= (n_disp-1) && lsu_alloc_ready)
+      dispatch_bypass_mask[bypass_lane]=1'b1;
+  end
+  assign dispatch_bypass_fire=skid_drain && (|dispatch_bypass_mask);
+  logic [W-1:0] control_bypass_mask;
+  wire control_bypass_selected=|control_bypass_mask;
+  wire control_bypass_fire=skid_drain && control_bypass_selected;
+  wire [W-1:0] all_dispatch_bypass_mask=dispatch_bypass_mask|control_bypass_mask;
+  always_comb begin
+    control_bypass_mask='0;
+    if(DISPATCH_CONTROL_BYPASS && skid_valid && iq_count==0 && !a0_valid_q && cf_count<CF_DEPTH &&
+       dispatch_bypass_uop[`CPU_DISPATCH_SRC1_READY_OFF] && dispatch_bypass_uop[`CPU_DISPATCH_SRC2_READY_OFF] &&
+       !dispatch_bypass_uop[`CPU_DISPATCH_ILLEGAL_OFF] &&
+       (dispatch_bypass_uop[`CPU_DISPATCH_IS_BRANCH_OFF] || dispatch_bypass_uop[`CPU_DISPATCH_IS_JAL_OFF] ||
+        dispatch_bypass_uop[`CPU_DISPATCH_IS_JALR_OFF]) && iq_free >= (n_disp-1) && lsu_alloc_ready)
+      control_bypass_mask[bypass_lane]=1'b1;
+  end
+
+  wire[1:0]dispatch_sources_ready;
+  (* keep_hierarchy = "yes" *) cdb_source_ready_hint #(.PW(PW)) u_dispatch_hint(
+   .source_tag({dispatch_bypass_uop[`CPU_DISPATCH_SRC2_TAG_OFF+:PW],dispatch_bypass_uop[`CPU_DISPATCH_SRC1_TAG_OFF+:PW]}),
+   .source_ready({dispatch_bypass_uop[`CPU_DISPATCH_SRC2_READY_OFF],dispatch_bypass_uop[`CPU_DISPATCH_SRC1_READY_OFF]}),
+   .compute_mask(cdb_hint_ready),.compute_tags({div_tag_q,alu1_tag_q,alu_tag_q}),.ready(dispatch_sources_ready));
+`ifndef SYNTHESIS
+  always_ff @(posedge clk)if(!reset&&dispatch_bypass_fire)begin
+   for(integer operand=0;operand<2;operand=operand+1)begin
+    if(!dispatch_bypass_uop[operand==0?`CPU_DISPATCH_SRC1_READY_OFF:`CPU_DISPATCH_SRC2_READY_OFF])begin
+     automatic logic granted;
+     granted=0;
+     for(integer n=0;n<R;n=n+1)
+      if(cdb_out[n*CW+`CPU_CDB_VALID_OFF] && cdb_out[n*CW+`CPU_CDB_TAG_OFF+:PW]==dispatch_bypass_uop[(operand==0?`CPU_DISPATCH_SRC1_TAG_OFF:`CPU_DISPATCH_SRC2_TAG_OFF)+:PW])granted=1;
+     if(!granted)$fatal(1,"dispatch operand hint lacks actual writeback");
+    end
+   end
+  end
+`endif
+
+
   logic                 tail_valid;
   logic [W-1:0]         tail_vmask;
   logic [W*DW-1:0]      tail_uop, tail_uop_next;
@@ -176,22 +243,38 @@ module backend_ooo #(
   // Issue Queue
   // ---------------------------------------------------------------------------
   logic        iq_in_ready;
+  wire iq_registered_alu_ready;
   logic [1:0]  iq_out_valid;
   logic [1:0]  iq_out_addr_only;
   logic [2*DW-1:0] issue_uop;
   logic [2*32-1:0] issue_seq;
   logic [1:0]  issue_ready;
   logic [7:0]  iq_count, iq_free;
+  logic iq_lookahead_valid;
+  logic [PW-1:0] iq_lookahead_tag;
+  logic iq_load_lookahead_valid;
+  wire iq_aux_lookahead_valid;
+  wire [PW-1:0] iq_aux_lookahead_tag;
+  logic [DW-1:0] memory_issue_uop;
+  logic [31:0] memory_issue_seq;
+  logic memory_issue_addr_only;
 
-  issue_queue #(.W(W), .IW(2)) u_iq (
+  issue_queue #(.W(W), .IW(2), .LANE1_ALU_ONLY(1), .LANE1_LOOKAHEAD(1), .LANE0_CONTROL_LOOKAHEAD(1), .LANE0_SPECIAL_PRIORITY(1), .LANE0_ALU_LOOKAHEAD(1), .REUSE_ISSUED_SLOTS(0), .LANE0_MEMORY_LOOKAHEAD(MEMORY_BASE_LOOKAHEAD), .RETIRE_STORE_PREFILL(STORE_DATA_CAPTURE)) u_iq (
     .clk            (clk),
     .reset          (reset),
-    .in_valid       (skid_drain ? skid_vmask : '0),
-    .in_alloc_mask  (skid_valid ? skid_vmask : '0),
+    .in_valid       (skid_drain ? (skid_vmask & ~all_dispatch_bypass_mask) : '0),
+    .in_alloc_mask  (skid_valid ? (skid_vmask & ~all_dispatch_bypass_mask) : '0),
     .in_uop         (skid_uop),
     .in_ready       (iq_in_ready),
     .wake_valid     (cdb_wake_valid),
     .wake_tag       (cdb_wake_tag),
+    .lookahead_valid(iq_lookahead_valid),
+    .execute_lookahead_valid(execute_hint_valid),.execute_lookahead_tag(a0_dest),
+    .memory_lookahead_valid(memory_hint_valid),.memory_lookahead_tag(memory_hint_tag),
+    .execute1_lookahead_valid(execute1_hint_valid),.execute1_lookahead_tag(p_dest),
+    .lookahead_tag  (iq_lookahead_tag),
+    .lookahead_load_valid(iq_aux_lookahead_valid),
+    .lookahead_load_tag(iq_aux_lookahead_tag),
     .seq_base       (skid_seq),
     .squash_valid   (sq_valid),
     .squash_seq     (squash_seq),
@@ -200,9 +283,21 @@ module backend_ooo #(
     .out_uop        (issue_uop),
     .out_seq        (issue_seq),
     .out_ready      (issue_ready),
+    .memory_uop(memory_issue_uop),.memory_seq(memory_issue_seq),
+    .memory_addr_only(memory_issue_addr_only),
+    .registered_alu_ready(iq_registered_alu_ready),
     .count          (iq_count),
     .free_count     (iq_free)
   );
+
+`ifndef SYNTHESIS
+  always_ff @(posedge clk) if(!reset && iq_out_valid[0] && issue_ready[0] &&
+      (issue_uop[`CPU_DISPATCH_IS_LOAD_OFF] || issue_uop[`CPU_DISPATCH_IS_STORE_OFF]))begin
+    if(memory_issue_uop != issue_uop[0+:DW] || memory_issue_seq != issue_seq[0+:32] ||
+       memory_issue_addr_only != iq_out_addr_only[0])
+      $fatal(1,"memory payload differs from accepted IQ winner");
+  end
+`endif
 
   // ---------------------------------------------------------------------------
   // issue uop 字段
@@ -368,8 +463,8 @@ module backend_ooo #(
 
   always_comb begin
     prf_raddr = '0;
-    prf_raddr[0 +: PW]    = i_src1_tag;
-    prf_raddr[PW +: PW]   = i_src2_tag;
+    prf_raddr[0 +: PW]    = memory_issue_uop[`CPU_DISPATCH_SRC1_TAG_OFF+:PW];
+    prf_raddr[PW +: PW]   = memory_issue_uop[`CPU_DISPATCH_SRC2_TAG_OFF+:PW];
     prf_raddr[2*PW +: PW] = p_src1_tag;
     prf_raddr[3*PW +: PW] = p_src2_tag;
     prf_raddr[4*PW +: PW] = a0_src1_tag;
@@ -379,13 +474,22 @@ module backend_ooo #(
   logic [31:0] issue_src1, issue_src2;
   logic [31:0] p_src1, p_src2;
   logic [31:0] a0_src1, a0_src2;
-  // IQ 只按寄存后的 ready 位选择，操作数在选择前的时钟沿已写入 PRF。
-  // a0/a1 还会再缓冲一拍，因此六个读口均不需要当前拍 CDB 数据旁路。
+  // lane0/访存只按寄存ready选择；ALU1的保守提示保证接收沿写PRF，
+  // a1缓冲下一拍才读PRF。六个读口均不需要当前拍CDB数据旁路。
   // dispatch/skid/IQ 入队的同拍 wake 匹配仍保留，防止漏掉唯一一次广播。
-  assign issue_src1 = prf_rdata[0 +: 32];
+  // The early base tag is guaranteed to write PRF at this edge. Memory
+  // executes before the edge, so forward that registered producer value.
+  wire early_memory_base = MEMORY_BASE_LOOKAHEAD && memory_hint_valid &&
+      memory_issue_uop[`CPU_DISPATCH_SRC1_TAG_OFF+:PW]!=0 &&
+      memory_issue_uop[`CPU_DISPATCH_SRC1_TAG_OFF+:PW]==memory_hint_tag;
+  wire [31:0] early_memory_value = memory_hint_mask[0] ? alu_value_q :
+      (memory_hint_mask[1] ? alu1_value_q : div_value_q);
+  assign issue_src1 = early_memory_base ? early_memory_value : prf_rdata[0 +: 32];
   assign issue_src2 = prf_rdata[32 +: 32];
-  assign p_src1 = prf_rdata[2*32 +: 32];
-  assign p_src2 = prf_rdata[3*32 +: 32];
+  assign p_src1 = EXECUTION_LOOKAHEAD && alu_valid_q && p_src1_tag!=0 && p_src1_tag==alu_tag_q ? alu_value_q :
+      ((EXECUTION_LOOKAHEAD && alu1_valid_q && p_src1_tag!=0 && p_src1_tag==alu1_tag_q) ? alu1_value_q : prf_rdata[2*32 +: 32]);
+  assign p_src2 = EXECUTION_LOOKAHEAD && alu_valid_q && p_src2_tag!=0 && p_src2_tag==alu_tag_q ? alu_value_q :
+      ((EXECUTION_LOOKAHEAD && alu1_valid_q && p_src2_tag!=0 && p_src2_tag==alu1_tag_q) ? alu1_value_q : prf_rdata[3*32 +: 32]);
   assign a0_src1 = prf_rdata[4*32 +: 32];
   assign a0_src2 = prf_rdata[5*32 +: 32];
 
@@ -585,7 +689,7 @@ module backend_ooo #(
   logic        lsu_alloc_ready;
   logic        lsu_busy;
 
-  lsu #(.W(W)) u_lsu (
+  lsu #(.W(W), .STORE_DATA_CAPTURE(STORE_DATA_CAPTURE), .ORDERED_STORE_COMMIT(ORDERED_STORE_COMMIT)) u_lsu (
     .clk                  (clk),
     .reset                (reset),
     .alloc_valid          (skid_valid ?
@@ -598,11 +702,11 @@ module backend_ooo #(
     .seq_base             (skid_seq),
     .squash_seq           (squash_seq),
     .issue_valid          (iq_out_valid[0] && issue_ready[0] && i_is_mem),
-    .issue_uop            (issue_uop[DW-1:0]),
-    .issue_seq            (issue_seq[31:0]),
+    .issue_uop            (memory_issue_uop),
+    .issue_seq            (memory_issue_seq),
     .issue_src1           (issue_src1),
     .issue_src2           (issue_src2),
-    .issue_addr_only      (addr_only_issue),
+    .issue_addr_only      (memory_issue_addr_only),
     .issue_ready          (lsu_issue_ready),
     .commit_valid         (cm_valid),
     .commit_is_store      (cm_is_store),
@@ -615,6 +719,7 @@ module backend_ooo #(
     .load_result_value    (lsu_load_value),
     .load_result_exception(lsu_load_exc),
     .load_result_ready    (cdb_src_ready[2]),
+    .store_cdb(cdb_out),
     .store_complete_valid (lsu_store_valid),
     .store_complete_tag   (lsu_store_tag),
     .store_complete_exception (lsu_store_exc),
@@ -641,17 +746,35 @@ module backend_ooo #(
   // address-only store 不产生 complete，不占用 complete FIFO。
   assign addr_only_issue = iq_out_valid[0] && iq_out_addr_only[0] && i_is_store;
   assign i_mem_ready = lsu_issue_ready &&
-                       (addr_only_issue || !noval_expected || cf_allow);
+                       ((addr_only_issue && !STORE_DATA_CAPTURE) || !noval_expected || cf_allow);
   // lane0：load/store 仍然直连 LSU；非访存进入 a0 缓冲，下一拍执行。
   assign issue_ready[0] = i_is_mem ? i_mem_ready :
-                          (a0_accept && (!noval_expected || cf_allow));
-  assign a0_push = iq_out_valid[0] && issue_ready[0] && !i_is_mem;
+                          (a0_accept && (!noval_expected || cf_allow) && !control_bypass_selected);
+  assign a0_push = (iq_out_valid[0] && issue_ready[0] && !i_is_mem) || control_bypass_fire;
+  wire [DW-1:0] a0_input_uop=control_bypass_selected?dispatch_bypass_uop:issue_uop[DW-1:0];
+  wire [31:0] a0_input_seq=control_bypass_selected?dispatch_bypass_seq:issue_seq[31:0];
   // lane 1 只接收普通写回 ALU；资源独立且不产生有副作用的完成。
   // IQ 选中后先进入 a1 缓冲，下一拍再做 PRF 读/ALU；缓冲能吸收时即可
   // 从 IQ 弹出，保持 lane1 每拍一条的吞吐。
-  assign issue_ready[1] = iq_out_valid[1] && j_lane_ok && a1_accept;
-  assign a1_push        = iq_out_valid[1] && issue_ready[1];
+  assign issue_ready[1] = iq_out_valid[1] && j_lane_ok && a1_accept && !(|dispatch_bypass_mask);
+  assign a1_push        = (iq_out_valid[1] && issue_ready[1]) || dispatch_bypass_fire;
+  wire [DW-1:0] a1_input_uop=(|dispatch_bypass_mask)?dispatch_bypass_uop:issue_uop[2*DW-1:DW];
+  wire [31:0] a1_input_seq=(|dispatch_bypass_mask)?dispatch_bypass_seq:issue_seq[63:32];
+`ifndef SYNTHESIS
+  always_ff @(posedge clk)if(!reset&&dispatch_bypass_fire)begin
+    if(iq_out_valid[1]&&issue_ready[1])$fatal(1,"two owners of lane1 input buffer");
+    if(!direct_alu(dispatch_bypass_uop)||iq_registered_alu_ready||!a1_accept)$fatal(1,"unsafe direct ALU admission");
+  end
+`endif
 
+`ifndef SYNTHESIS
+  always_ff @(posedge clk)if(!reset&&control_bypass_fire)begin
+    if(iq_count!=0 || a0_valid_q || noval_issue || dispatch_bypass_fire)
+      $fatal(1,"control bypass has conflicting owner");
+    if(!(&{dispatch_bypass_uop[`CPU_DISPATCH_SRC1_READY_OFF],dispatch_bypass_uop[`CPU_DISPATCH_SRC2_READY_OFF]}))
+      $fatal(1,"control bypass operand unready");
+  end
+`endif
   logic alu_issue, div_issue, alu1_issue;
   assign alu_issue  = a0_issue && !a0_is_div;
   assign div_issue  = a0_issue && a0_is_div;
@@ -659,6 +782,17 @@ module backend_ooo #(
 
   assign div_start = div_issue;
 
+`ifndef SYNTHESIS
+  always_ff@(posedge clk)if(!reset && iq_out_valid[0] && issue_ready[0] && i_is_mem && early_memory_base)begin
+    automatic logic matched;
+    matched=0;
+    for(integer w=0;w<R;w=w+1)
+      if(cdb_out[w*CW+`CPU_CDB_VALID_OFF] &&
+         cdb_out[w*CW+`CPU_CDB_TAG_OFF+:PW]==memory_issue_uop[`CPU_DISPATCH_SRC1_TAG_OFF+:PW] &&
+         cdb_out[w*CW+`CPU_CDB_VALUE_OFF+:32]==issue_src1) matched=1;
+    if(!matched)$fatal(1,"early memory base lacks matching real writeback");
+  end
+`endif
   // ---------------------------------------------------------------------------
   // CDB
   // ---------------------------------------------------------------------------
@@ -668,7 +802,61 @@ module backend_ooo #(
   logic [N*32-1:0]                cdb_src_value;
   logic [N-1:0]                   cdb_src_exc;
   logic [N-1:0]                   cdb_src_ready;
+  wire [N-1:0] cdb_hint_ready;
   logic [`CPU_CDB_BUS_W-1:0]      cdb_out;
+
+  // Source 0 owns the first CDB lane when R>=2. If absent, a sole remaining
+  // compute producer is also guaranteed alongside at most one LSU result.
+  // The hint reads registered producers, without LSU/arbiter feedback.
+  wire [2:0] compute_pending = {div_valid_q, alu1_valid_q, alu_valid_q};
+  // At most one registered compute result plus one LSU result fits R>=2.
+  // This guarantee uses no arbiter ready or new lane1 selection feedback.
+  assign iq_load_lookahead_valid = (R >= 2) && lsu_load_valid &&
+      (compute_pending == 0 || compute_pending == 1 ||
+       compute_pending == 2 || compute_pending == 4);
+`ifndef SYNTHESIS
+  always_ff @(posedge clk) if (!reset && iq_load_lookahead_valid && !cdb_src_ready[2])
+    $fatal(1,"load lookahead without guaranteed CDB writeback");
+`endif
+
+  // The current registered ALU0 owner will deposit its result at this edge.
+  // A lane1 consumer enters its buffer now and reads that result next cycle.
+  // Nothing depending on the new IQ winner, ALU data, LSU validity or CDB ready
+  // enters this early scheduling cone. Cancellation remains late in IQ valid.
+  wire execute_hint_valid=EXECUTION_LOOKAHEAD && R>=2 && a0_valid_q &&
+      a0_needs_alu_result && !a0_is_div && !a0_is_branch_any && (!alu_valid_q || cdb_hint_ready[0]);
+  wire execute1_hint_valid=EXECUTION_LOOKAHEAD && R>=2 && a1_valid_q &&
+      p_needs_alu_result && (!alu1_valid_q || cdb_hint_ready[1]);
+  wire[3:0]cdb_phase;
+  wire[N-1:0]raw_memory_hint_mask;
+  wire[N-1:0]memory_hint_mask=RAW_MEMORY_HINT ? raw_memory_hint_mask : cdb_hint_ready;
+  wire memory_hint_valid=|memory_hint_mask;
+  wire[PW-1:0]memory_hint_tag=memory_hint_mask[0]?alu_tag_q:(memory_hint_mask[1]?alu1_tag_q:div_tag_q);
+  generate if(R>=2)begin:gen_raw_memory_guarantee
+  (* keep_hierarchy="yes" *)cdb_compute_hint #(.N(4),.R(R),.PRIORITY_ALU0(1),.OPTIONAL(2)) u_raw_memory_hint(
+    .last(cdb_phase),.compute_valid(compute_pending),.hint_mask(raw_memory_hint_mask));
+  end else begin:gen_no_raw_memory_guarantee
+    assign raw_memory_hint_mask='0;
+  end endgenerate
+`ifndef SYNTHESIS
+  always_ff@(posedge clk)if(!reset && RAW_MEMORY_HINT)
+    for(integer source=0;source<N;source++)
+      if(raw_memory_hint_mask[source] && cdb_src_valid[source] && !cdb_src_ready[source])
+        $fatal(1,"raw compute grant failed after cancellation");
+`endif
+  assign iq_lookahead_valid=|cdb_hint_ready;
+  assign iq_lookahead_tag=cdb_hint_ready[0]?alu_tag_q:(cdb_hint_ready[1]?alu1_tag_q:div_tag_q);
+  wire [N-1:0] extra_hint_mask=cdb_hint_ready & ~(cdb_hint_ready[0]?N'(1):(cdb_hint_ready[1]?N'(2):N'(8)));
+  wire extra_compute_hint=|extra_hint_mask;
+  assign iq_aux_lookahead_valid=extra_compute_hint || iq_load_lookahead_valid;
+  assign iq_aux_lookahead_tag=extra_compute_hint?(extra_hint_mask[1]?alu1_tag_q:div_tag_q):lsu_load_tag;
+`ifndef SYNTHESIS
+  always_ff @(posedge clk)if(!reset)begin
+    if(|(cdb_hint_ready & ~cdb_src_ready))$fatal(1,"guaranteed compute hint lacks real CDB grant");
+    if(extra_compute_hint && iq_load_lookahead_valid && R==2)$fatal(1,"three simultaneous two-lane hints");
+  end
+`endif
+
 
   always_comb begin
     cdb_src_valid = '0;
@@ -697,7 +885,7 @@ module backend_ooo #(
     cdb_src_exc[3] = div_exc_q;
   end
 
-  cdb #(.W(2), .R(R)) u_cdb (
+  cdb #(.W(2), .R(R), .PRIORITY_ALU0(1),.HINT_OPTIONAL_SOURCE(2)) u_cdb (
     .clk           (clk),
     .reset         (reset),
     .src_valid     (cdb_src_valid),
@@ -705,6 +893,8 @@ module backend_ooo #(
     .src_value     (cdb_src_value),
     .src_exception (cdb_src_exc),
     .src_ready     (cdb_src_ready),
+    .hint_ready_mask(cdb_hint_ready),
+    .arbitration_phase(cdb_phase),
     .cdb_out       (cdb_out)
   );
 
@@ -820,19 +1010,19 @@ module backend_ooo #(
       // lane0 非访存缓冲：丢弃/执行后释放；新选中覆盖旧内容。
       if (a0_discard || a0_issue)
         a0_valid_q <= 1'b0;
-      if (a0_push && !(sq_valid && (issue_seq[31:0] > squash_seq))) begin
+      if (a0_push && !(sq_valid && (a0_input_seq > squash_seq))) begin
         a0_valid_q <= 1'b1;
-        a0_uop_q   <= issue_uop[DW-1:0];
-        a0_seq_q   <= issue_seq[31:0];
+        a0_uop_q   <= a0_input_uop;
+        a0_seq_q   <= a0_input_seq;
       end
 
       // lane1 发射缓冲：丢弃/执行后释放；新选中覆盖旧内容。
       if (a1_discard || a1_issue)
         a1_valid_q <= 1'b0;
-      if (a1_push && !(sq_valid && (issue_seq[63:32] > squash_seq))) begin
+      if (a1_push && !(sq_valid && (a1_input_seq > squash_seq))) begin
         a1_valid_q <= 1'b1;
-        a1_uop_q   <= issue_uop[2*DW-1:DW];
-        a1_seq_q   <= issue_seq[63:32];
+        a1_uop_q   <= a1_input_uop;
+        a1_seq_q   <= a1_input_seq;
       end
 `ifdef LOCAL_TRACE
       if (a1_push)
@@ -912,16 +1102,17 @@ module backend_ooo #(
   // 在 issue 当拍就压入，避免“上一拍 store complete”与“本拍新 issue”
   // 同时产生两个 complete 源。单发射保证每拍最多一个。
   assign noval_issue = iq_out_valid[0] && issue_ready[0] &&
-                       !(iq_out_addr_only[0] && i_is_store) &&
+                       (! (iq_out_addr_only[0] && i_is_store) || STORE_DATA_CAPTURE) &&
                        (i_is_store ||
                         (!i_is_load && !i_is_div &&
                          (i_illegal || !i_reg_we)));
-  assign cf_push = noval_issue;
+  wire control_noval=control_bypass_fire && !dispatch_bypass_uop[`CPU_DISPATCH_REG_WE_OFF];
+  assign cf_push = noval_issue || control_noval;
   assign cf_pop  = (cf_count != 0);
 
-  assign cf_tag_in = i_dest;
-  assign cf_exc_in = i_illegal;
-  assign cf_seq_in = issue_seq[31:0];
+  assign cf_tag_in = control_bypass_selected?dispatch_bypass_uop[`CPU_DISPATCH_DEST_TAG_OFF+:PW]:i_dest;
+  assign cf_exc_in = control_bypass_selected?1'b0:i_illegal;
+  assign cf_seq_in = control_bypass_selected?dispatch_bypass_seq:issue_seq[31:0];
 
   always_comb begin
     complete = '0;
@@ -1147,3 +1338,4 @@ module backend_ooo #(
 `endif
 
 endmodule
+

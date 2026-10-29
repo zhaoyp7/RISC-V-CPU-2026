@@ -13,6 +13,7 @@ set -eu
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 root=$(CDPATH= cd -- "$here/../.." && pwd)
 w=${ROB_W:-1}
+update_pc=${ROB_UPDATE_PC:-0}
 
 if [ -z "${VERILATOR:-}" ] && [ -n "${CPU2026_APPDIR:-}" ] && [ -x "$CPU2026_APPDIR/bin/verilator" ]; then
     VERILATOR="$CPU2026_APPDIR/bin/verilator"
@@ -31,18 +32,19 @@ fi
 
 out="$here/build"
 marker="$out/.rob_w"
-if [ ! -f "$marker" ] || [ "$(cat "$marker" 2>/dev/null || true)" != "$w" ]; then
+if [ ! -f "$marker" ] || [ "$(cat "$marker" 2>/dev/null || true)" != "$w/$update_pc" ]; then
     rm -rf "$out"
 fi
 mkdir -p "$out"
-printf '%s\n' "$w" > "$marker"
+printf '%s\n' "$w/$update_pc" > "$marker"
 
 "$VERILATOR" --cc --exe --build --assert -Wall -Wno-fatal \
     --top-module rob -Mdir "$out" \
     -DCPU_ISSUE_WIDTH="$w" -DCPU_LSQ_DEPTH=8 \
     -DCPU_PRF_SIZE=64 -DCPU_ROB_DEPTH=32 \
+    -GBRANCH_PC_FROM_UPDATE="$update_pc" \
     "$root/verilog/cpu_config.sv" "$root/verilog/if_defs.sv" \
     "$root/verilog/commit.sv" "$root/verilog/rob.sv" "$here/rob_tb.cpp" \
-    -CFLAGS "-std=c++17 -DTB_W=$w" -o "$out/tb"
+    -CFLAGS "-std=c++17 -DTB_W=$w -DTB_BRANCH_PC_FROM_UPDATE=$update_pc" -o "$out/tb"
 
 exec "$out/tb" "$@"

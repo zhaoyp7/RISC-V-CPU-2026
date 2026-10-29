@@ -77,7 +77,8 @@ def main() -> int:
                         help="explicit RTL source list (test-only; never filelist.f)")
     parser.add_argument("--out", type=Path, default=None,
                         help="output directory (default: build/unit/<top>)")
-    parser.add_argument("--jobs", type=int, default=4)
+    parser.add_argument("--jobs", type=int, default=os.environ.get("CPU_UNIT_JOBS", "4"),
+                        help="build parallelism (default: CPU_UNIT_JOBS or 4)")
     parser.add_argument("--appimage", default=str(DEFAULT_APPIMAGE),
                         help="course AppImage providing Verilator")
     parser.add_argument("--verilator", help="explicit Verilator executable")

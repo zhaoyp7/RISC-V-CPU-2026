@@ -19,7 +19,12 @@
 // -----------------------------------------------------------------------------
 
 module icache_pipe #(
-  parameter integer INDEX_BITS = `CPU_ICACHE_INDEX_BITS
+  parameter integer INDEX_BITS = `CPU_ICACHE_INDEX_BITS,
+  // The integrated frontend can preview an old response during flush;
+  // its state is flushed and ROB admission rejects that speculative decode.
+  parameter integer MASK_RESPONSE_ON_FLUSH = 1,
+  parameter integer BANKED_WORD = 0,
+  parameter integer S1_HIT_BYPASS = 0
 ) (
   input  logic        clk,
   input  logic        reset,
@@ -45,7 +50,8 @@ module icache_pipe #(
 );
 
   localparam integer DEPTH    = 1 << INDEX_BITS;
-  localparam integer TAG_BITS = 32 - INDEX_BITS - 2;
+  localparam integer INDEX_LOW = BANKED_WORD ? 3 : 2;
+  localparam integer TAG_BITS = 32 - INDEX_BITS - INDEX_LOW;
 
   typedef enum logic [1:0] {
     ST_NORMAL,
@@ -126,8 +132,8 @@ module icache_pipe #(
   logic [INDEX_BITS-1:0] fetch_index;
   logic [TAG_BITS-1:0]   fetch_tag;
 
-  assign fetch_index = fetch_pc[INDEX_BITS+1:2];
-  assign fetch_tag   = fetch_pc[31:INDEX_BITS+2];
+  assign fetch_index = fetch_pc[INDEX_BITS+INDEX_LOW-1:INDEX_LOW];
+  assign fetch_tag   = fetch_pc[31:INDEX_BITS+INDEX_LOW];
 
   logic s2_hit;
   assign s2_hit = s2_valid && s2_line_valid && (s2_tag_ram == s2_tag);
@@ -161,7 +167,7 @@ module icache_pipe #(
                        (s1_valid && !s2_accept));
   // lookup_room时可读未接收PC，结果仅在真正接收且下一拍s1_valid时使用。
   assign read_index = lookup_room ? fetch_index :
-                      (load_pending ? pending_pc[INDEX_BITS+1:2] : s1_index);
+                      (load_pending ? pending_pc[INDEX_BITS+INDEX_LOW-1:INDEX_LOW] : s1_index);
 
   // ---- SRAM 读写 ------------------------------------------------------------
   always_comb begin
@@ -190,14 +196,18 @@ module icache_pipe #(
     end
   end
 
+  wire s1_early_valid=S1_HIT_BYPASS && state==ST_NORMAL && !buf_valid && !s2_valid &&
+    !pending_valid && s1_valid && valid[s1_index] && tag_rdata==s1_tag;
+  wire s1_early_consume=s1_early_valid && fetch_resp_ready;
+
   // ---- 输出 ----------------------------------------------------------------
-  assign fetch_resp_valid = !flush &&
-                            (buf_valid || ((state == ST_NORMAL) && s2_valid && s2_hit));
-  assign fetch_resp_pc    = buf_valid ? buf_pc : s2_pc;
-  assign fetch_inst       = buf_valid ? buf_inst : s2_data;
+  assign fetch_resp_valid = (!MASK_RESPONSE_ON_FLUSH || !flush) &&
+                            (buf_valid || ((state == ST_NORMAL) && s2_valid && s2_hit) || s1_early_valid);
+  assign fetch_resp_pc    = buf_valid ? buf_pc : ((S1_HIT_BYPASS && !s2_valid) ? s1_pc : s2_pc);
+  assign fetch_inst       = buf_valid ? buf_inst : ((S1_HIT_BYPASS && !s2_valid) ? data_rdata : s2_data);
 
   assign refill_valid = (state == ST_REFILL) || (state == ST_DRAIN);
-  assign refill_addr  = {refill_tag, refill_index, 2'b00};
+  assign refill_addr  = BANKED_WORD ? {refill_pc[31:2],2'b00} : {refill_tag, refill_index, 2'b00};
 
   // ---- 时序 ----------------------------------------------------------------
   always_ff @(posedge clk) begin
@@ -248,15 +258,15 @@ module icache_pipe #(
             // 缺失：记录回填信息，清空 s2；s1 中唯一的年轻 PC 存入 pending。
             state         <= ST_REFILL;
             refill_pc     <= s2_pc;
-            refill_index  <= s2_pc[INDEX_BITS+1:2];
-            refill_tag    <= s2_pc[31:INDEX_BITS+2];
+            refill_index  <= s2_pc[INDEX_BITS+INDEX_LOW-1:INDEX_LOW];
+            refill_tag    <= s2_pc[31:INDEX_BITS+INDEX_LOW];
             s2_valid      <= 1'b0;
             pending_valid <= s1_valid;
             if (s1_valid) pending_pc <= s1_pc;
             s1_valid      <= 1'b0;
           end else if (s2_accept && s1_valid) begin
             // s1 -> s2；同时把 s1 的 SRAM 读结果打一拍
-            s2_valid      <= 1'b1;
+            s2_valid      <= !s1_early_consume;
             s2_pc         <= s1_pc;
             s2_tag        <= s1_tag;
             s2_tag_ram    <= tag_rdata;
@@ -276,8 +286,8 @@ module icache_pipe #(
           end else if (load_pending) begin
             s1_valid      <= 1'b1;
             s1_pc         <= pending_pc;
-            s1_index      <= pending_pc[INDEX_BITS+1:2];
-            s1_tag        <= pending_pc[31:INDEX_BITS+2];
+            s1_index      <= pending_pc[INDEX_BITS+INDEX_LOW-1:INDEX_LOW];
+            s1_tag        <= pending_pc[31:INDEX_BITS+INDEX_LOW];
             pending_valid <= 1'b0;
           end
 

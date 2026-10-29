@@ -111,6 +111,8 @@ struct Harness {
         for (int i = 0; i < IN_WORDS; ++i) dut->in_uop[i] = 0;
         dut->wake_valid = 0;
         dut->wake_tag = 0;
+        dut->lookahead_valid = 0;
+        dut->lookahead_tag = 0;
         dut->squash_valid = 0;
         dut->squash_seq = 0;
         dut->out_ready = 0;

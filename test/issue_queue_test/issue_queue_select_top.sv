@@ -12,6 +12,8 @@ module issue_queue_select_top (
   // CDB wake (R lanes)
   input  logic [`CPU_CDB_NUM-1:0]            wake_valid,
   input  logic [`CPU_CDB_NUM*`CPU_PRF_IDX_W-1:0] wake_tag,
+  input  logic lookahead_valid,
+  input  logic [`CPU_PRF_IDX_W-1:0] lookahead_tag,
 
   // dispatch sequence: lane i is seq_base + i
   input  logic [31:0]                        seq_base,
@@ -27,9 +29,59 @@ module issue_queue_select_top (
   output logic [`IQ_TEST_IW*32-1:0]                   out_seq,
   input  logic [`IQ_TEST_IW-1:0]                      out_ready,
 
+  output logic [`CPU_DISPATCH_W-1:0] memory_uop,
+  output logic [31:0] memory_seq,
+  output logic memory_addr_only,
+
   // status
   output logic [7:0]                         count,
   output logic [7:0]                         free_count
 );
-  issue_queue #(.IW(`IQ_TEST_IW)) dut (.*);
+`ifndef IQ_TEST_ALU_ONLY
+`define IQ_TEST_ALU_ONLY 0
+`endif
+`ifndef IQ_TEST_LOOKAHEAD
+`define IQ_TEST_LOOKAHEAD 0
+`endif
+`ifndef IQ_TEST_LOAD_HINT
+`define IQ_TEST_LOAD_HINT 0
+`endif
+`ifndef IQ_TEST_CONTROL_HINT
+`define IQ_TEST_CONTROL_HINT 0
+`endif
+`ifndef IQ_TEST_RETIRE_PREFILL
+`define IQ_TEST_RETIRE_PREFILL 0
+`endif
+`ifndef IQ_TEST_SPECIAL_PRIORITY
+`define IQ_TEST_SPECIAL_PRIORITY 0
+`endif
+`ifndef IQ_TEST_REUSE_ISSUED
+`define IQ_TEST_REUSE_ISSUED 0
+`endif
+`ifndef IQ_TEST_ALU0_HINT
+`define IQ_TEST_ALU0_HINT 0
+`endif
+`ifndef IQ_TEST_MEMORY_HINT
+`define IQ_TEST_MEMORY_HINT 0
+`endif
+  logic unused_registered_alu_ready;
+  wire memory_lookahead_valid=lookahead_valid;
+  wire [`CPU_PRF_IDX_W-1:0]memory_lookahead_tag=lookahead_tag;
+  wire execute_lookahead_valid=1'b0,execute1_lookahead_valid=1'b0;
+  wire [`CPU_PRF_IDX_W-1:0]execute_lookahead_tag='0,execute1_lookahead_tag='0;
+  issue_queue #(.IW(`IQ_TEST_IW), .LANE1_ALU_ONLY(`IQ_TEST_ALU_ONLY),
+                .LANE1_LOOKAHEAD(`IQ_TEST_LOOKAHEAD),
+                .LANE0_CONTROL_LOOKAHEAD(`IQ_TEST_CONTROL_HINT),
+                .LANE0_SPECIAL_PRIORITY(`IQ_TEST_SPECIAL_PRIORITY),
+                .REUSE_ISSUED_SLOTS(`IQ_TEST_REUSE_ISSUED),
+                .LANE0_ALU_LOOKAHEAD(`IQ_TEST_ALU0_HINT),
+`ifdef IQ_TEST_MEMORY_HINT
+                .LANE0_MEMORY_LOOKAHEAD(`IQ_TEST_MEMORY_HINT),
+`endif
+                .RETIRE_STORE_PREFILL(`IQ_TEST_RETIRE_PREFILL)) dut (
+    .lookahead_valid(`IQ_TEST_LOAD_HINT ? 1'b0 : lookahead_valid),
+    .lookahead_tag(lookahead_tag),
+    .registered_alu_ready(unused_registered_alu_ready),
+    .lookahead_load_valid(`IQ_TEST_LOAD_HINT ? lookahead_valid : 1'b0),
+    .lookahead_load_tag(lookahead_tag), .*);
 endmodule

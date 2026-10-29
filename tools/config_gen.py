@@ -30,8 +30,11 @@ DEFAULTS = {
     "icache_ways": 1,
     "icache_line_bytes": 4,
     "dcache_index_bits": 10,
+    "dcache_enable": 0,
     "dcache_ways": 1,
     "dcache_line_bytes": 4,
+    "line_cache_enable": 0,
+    "line_cache_index_bits": 7,
     "btb_index_bits": 5,
     "bht_index_bits": 7,
 }
@@ -43,6 +46,14 @@ def is_power_of_two(value):
 
 def validate(args):
     errors = []
+    if args.dcache_enable not in (0, 1):
+        errors.append("--dcache-enable must be 0 or 1")
+    if args.line_cache_enable not in (0, 1):
+        errors.append("--line-cache-enable must be 0 or 1")
+    if not 3 <= args.line_cache_index_bits <= 9:
+        errors.append("--line-cache-index-bits must be 3..9 (256 B..16 KiB)")
+    if args.dcache_enable and (args.dcache_ways not in (1, 2) or args.dcache_line_bytes != 4):
+        errors.append("enabled LSU read cache currently supports 1/2 ways and 4-byte lines")
     if not 1 <= args.issue_width <= 4:
         errors.append("--issue-width must be 1..4")
     if not 1 <= args.cdb_num <= 4:
@@ -86,9 +97,12 @@ def render(args):
             f"--icache-index-bits {args.icache_index_bits}",
             f"--icache-ways {args.icache_ways}",
             f"--icache-line-bytes {args.icache_line_bytes}",
+            f"--dcache-enable {args.dcache_enable}",
             f"--dcache-index-bits {args.dcache_index_bits}",
             f"--dcache-ways {args.dcache_ways}",
             f"--dcache-line-bytes {args.dcache_line_bytes}",
+            f"--line-cache-enable {args.line_cache_enable}",
+            f"--line-cache-index-bits {args.line_cache_index_bits}",
             f"--btb-index-bits {args.btb_index_bits}",
             f"--bht-index-bits {args.bht_index_bits}",
         ]
@@ -134,6 +148,9 @@ def render(args):
 `ifndef CPU_ICACHE_LINE_BYTES
   `define CPU_ICACHE_LINE_BYTES {args.icache_line_bytes}
 `endif
+`ifndef CPU_DCACHE_ENABLE
+  `define CPU_DCACHE_ENABLE {args.dcache_enable}
+`endif
 `ifndef CPU_DCACHE_INDEX_BITS
   `define CPU_DCACHE_INDEX_BITS {args.dcache_index_bits}
 `endif
@@ -142,6 +159,12 @@ def render(args):
 `endif
 `ifndef CPU_DCACHE_LINE_BYTES
   `define CPU_DCACHE_LINE_BYTES {args.dcache_line_bytes}
+`endif
+`ifndef CPU_LINE_CACHE_ENABLE
+  `define CPU_LINE_CACHE_ENABLE {args.line_cache_enable}
+`endif
+`ifndef CPU_LINE_CACHE_INDEX_BITS
+  `define CPU_LINE_CACHE_INDEX_BITS {args.line_cache_index_bits}
 `endif
 
 // ---- 分支预测参数（BTB / BHT 项数 = 2^index_bits）---------------------------
@@ -180,9 +203,12 @@ def main():
     parser.add_argument("--icache-index-bits", type=int, default=DEFAULTS["icache_index_bits"])
     parser.add_argument("--icache-ways", type=int, default=DEFAULTS["icache_ways"])
     parser.add_argument("--icache-line-bytes", type=int, default=DEFAULTS["icache_line_bytes"])
+    parser.add_argument("--dcache-enable", type=int, default=DEFAULTS["dcache_enable"])
     parser.add_argument("--dcache-index-bits", type=int, default=DEFAULTS["dcache_index_bits"])
     parser.add_argument("--dcache-ways", type=int, default=DEFAULTS["dcache_ways"])
     parser.add_argument("--dcache-line-bytes", type=int, default=DEFAULTS["dcache_line_bytes"])
+    parser.add_argument("--line-cache-enable", type=int, default=DEFAULTS["line_cache_enable"])
+    parser.add_argument("--line-cache-index-bits", type=int, default=DEFAULTS["line_cache_index_bits"])
     parser.add_argument("--btb-index-bits", type=int, default=DEFAULTS["btb_index_bits"])
     parser.add_argument("--bht-index-bits", type=int, default=DEFAULTS["bht_index_bits"])
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT,

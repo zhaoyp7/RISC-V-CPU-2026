@@ -747,3 +747,113 @@ diagnose 20,505.024 µm² / 402.36 MHz，opt **19,808.712 µm² / 456.12 MHz**�
 实际约7分20秒，唯一一次opt，无新增RTL；沿用W1/W2各19/19、run_all及IPC0.5221/0.4988验证。
 标签freq-age-matrix-opt-20261024，完整归档build/synth/iq_age_matrix_opt_checkpoint/。未合main、未推送。
 详见同源opt对比记录。
+
+## 37. ROB容量约束前端部分出队
+
+基于f4a0555，新增寄存占用容量mask，前端按可接受前缀出队，ROB只分配实际前缀，不借当拍提交空间。
+W1/W2各19/19、run_all ALL PASS，ROB28,094/28,038、前端293/325项通过，W1周期不变。
+W2 IPC0.5221→0.5285（+1.217%）；diagnose20,535.904 µm² /401.25 MHz，较基线面积+0.151%、频率-0.274%。
+IPC×Fmax+0.939%，保留ipc-rob-single-slot-20261025独立候选，不合main、不跑opt。
+单槽实际接收qsort28,061/rsort23,026次，候选普通/统计版周期相同，详见rob-single-slot.md。
+
+## 38. ALU1候选资格与端口匹配
+
+基于f21ac1f的单槽候选，入队寄存ALU1资格位，lane1跳过其不支持的类型，按原年龄关系选最老普通ALU。
+不增加执行单元/流水级，不改lane0和registered wake；两档19/19、run_all ALL PASS，新增四档IQ参考1,245,047项通过。
+W2/W1 IPC0.532763/0.499840，较上轮+0.814%/+0.200%；一次diagnose20,555.952 µm² /403.31 MHz，
+频率+0.512%、面积+0.098%、IPC×Fmax+1.330%，保留ipc-lane1-select-20261025。
+普通/统计版六项周期相同、24个源码hash一致，qsort实际绕过不支持项发射17,499次。
+首条路径a0源tag→PRF→ALU0→结果寄存器2.419 ns，后续IPC方向仍需核对load依赖等待与唤醒，不能直接加深流水。
+本轮无opt、未合main、未推送，报告归档build/synth/lane1_select_candidate/。
+详见[ALU1选择实验](../experiments/lane1-select.md)。
+
+## 39. ALU1受限提前wake与控制链瓶颈
+
+基于8cbb580，只有普通ALU1允许CDB当拍唤醒并进入a1，下一拍读PRF；lane0/访存仍寄存ready。
+两档19/19、run_all ALL PASS，新增IQ四档1,245,951项、后端580/606项通过，普通/统计版周期相同。
+W2/W1 IPC0.543730/0.507784，较403.31版+2.058%/+1.589%；一次diagnose20,569.059 µm² /383.38 MHz。
+频率-4.942%、面积+0.064%、W2 IPC×Fmax-2.985%，不采纳，保留trial标签并恢复8cbb580功能RTL。
+ROB取消→LSU→CDB→IQ→后端接收的2.553 ns新路径表明，即使只提前ALU1，仍会接回全局控制链。
+后续不能直接扩大同拍wake范围；先证明独立lookahead资格、实际写PRF与取消/仲裁一致，或转向其他瓶颈。
+完整归档build/synth/lane1_early_candidate/，24个源码hash匹配，无opt/合main/推送。
+详见[提前wake试验](../experiments/lane1-early-wake.md)。
+
+## 40. 无争用计算结果的独立提示
+
+基于6b341e3，恰好一个ALU0/ALU1/divider结果且R>=2时用寄存tag提示ALU1，保证最多compute+load两源均写回。
+不依赖当拍LSU valid、取消或CDB仲裁；持久ready和访存仍按实际CDB隔拍更新/选择。
+W1/W2各19/19、run_all重跑ALL PASS，IQ新增四档1,245,917、CDB69,833、后端586/612通过。
+W2/W1 IPC0.538263/0.504223（+1.032%/+0.877%）；一次完整diagnose20,571.946 µm² /400.00 MHz。
+频率-0.820%、面积+0.078%、诊断IPC×Fmax+0.204%，保留独立IPC组合候选，整体收益很小，403.31版检查点继续保留。
+首条时序恢复PRF→ALU0→结果寄存器2.444 ns；普通/统计版周期相同、24个输入hash匹配，所有提示missing_grant=0。
+首次完整回归遇Verilator线程池错误并中断初次diag；同二进制及完整suite重跑通过，独立重启后的diag完成，原日志保留。
+标签ipc-uncontended-wake-20261025，完整归档build/synth/uncontended_wake_candidate/；无opt、未合main、未推送。
+详见[无争用提示实验](../experiments/uncontended-wake.md)。
+
+## 41. 先测窗口上限，再处理32项ROB控制链
+
+| 配置 ROB/PRF/IQ/LSQ | W2 IPC | W1 IPC | diagnose面积 µm² | MHz | W2 IPC×Fmax变化 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 原参数16/48/8/16 | 0.538263 | 0.504223 | 20,571.946 | 400.00 | — |
+| 第一组：ROB32+PRF64（32/64/8/16） | 0.607639 | 0.549105 | 23,406.633 | 351.05 | -0.927% |
+| 第二组：再加LSQ32（32/64/8/32） | 0.620532 | 0.558531 | 27,459.844 | 356.67 | +2.796% |
+| 第三组：再加IQ16（32/64/16/32） | 0.639400 | 0.567505 | 29,817.241 | 347.71 | +3.260% |
+
+当前已测IPC×Fmax最好为第三组：再加IQ16，较400 MHz原参数候选+3.260%，面积+44.941%。
+三组两档各19/19，最终run_all ALL PASS，24源码/7库hash与宏覆盖核验通过。
+三组关键路径回到ROB取消/完成搜索/恢复busy掩码；后续优先重审32项完成搜索，不直接继续加窗口。
+默认参数保持不变；本轮3次有效diagnose加1次宏注入未生效的中止尝试，无opt/合main/推送。
+详见[窗口PPA实验](../experiments/ipc-window-ppa.md)。
+
+## 42. ROB32缩短完成匹配后，面积和前端准入成为后续方向
+
+ROB32/PRF64/IQ8/LSQ16，固定物理槽比较/one-hot更新/直接tag生成done_now_mask，保持最年轻同tag语义和周期。
+W2/W1 IPC0.607639/0.549105；一次diagnose23,429.641 µm²/376.47 MHz。
+较原32频率+7.243%、面积+0.098%；较旧16 IPC×Fmax+6.248%、面积+13.891%。
+未全面满足面积不增/380 MHz目标，保留独立trial，默认不改。四组各19/19且周期不变，run_all ALL PASS。
+首条转为ROB取消→LSU/CDB→分支资格→ROB/rename准入→前端I$，D端2.616 ns。
+下一步先考虑ROB表项/恢复网络面积；继续频率时重新针对前端准入链。24候选输入/7库/工具约束核对，无opt/合main/推送。
+详见[ROB32固定匹配](../experiments/rob32-fixed-match.md)。
+
+## 43. 用映射面积锥指导恢复RAT改写
+
+以9747662为基线，替换head旋转+动态RAT写索引为固定槽位平衡树，保持crat回退和最年轻存活写语义。
+面积23,281.158 µm²/376.47 MHz；面积-148.483（-0.634%），频率/IPC不变；一次diagnose。
+四组各19/19及周期相同，run_all ALL PASS，新增recover_rat参考先在原RTL通过，115666/115664项零失败。
+面积锥分析原RAT独占1322，新1191，实际全核只降148；共享逻辑不可重复计入。
+保留独立检查点，用户已授权继续后续轮次；下一步恢复掩码/存活判定固定槽位化，无opt/合main/推送。
+详见[恢复RAT实验](../experiments/rob-rat-tree.md)。
+
+## 44. 共用恢复存活判定，继续按统计定位IPC机会
+
+恢复掩码/LSQ指针/flush共用固定槽存活判定，分支feat/area-rob-recovery-masks，基于dca7d77。
+ROB32/PRF64/IQ8/LSQ16：W2/W1 IPC0.607639/0.549105，diagnose22,878.356 µm²/375.23 MHz。
+面积-402.802 µm²（-1.730%），频率-0.330%，单位面积吞吐+1.425%；频率不降目标未完全满足，接受小幅代价保留独立候选。
+四组各19/19且全部周期相同，run_all ALL PASS；新增恢复掩码边界先在原版通过，完整随机131698/131696零失败。
+普通/统计六项全部计数器同dca7d77，24输入/7库/工具约束与实际容量核验通过；一次diag约12.63分钟，无opt。
+恢复掩码独占806→602、LSQ指针123→27 µm²；ROB少423.841，全核净少402.802，逻辑锥不可相加。
+首条仍ROB→LSU/CDB→准入→前端I$，D端2.625 ns；默认参数与main不改，不复用默认16旧PPA。
+用户继续自主工作及Git授权保持；下一步按新统计分解load延迟，再选IPC改动；完成年龄矩阵压缩仍是面积候选。
+归档build/synth/rob_recovery_masks/，详见[恢复掩码实验](../experiments/rob-recovery-masks.md)。
+
+## 45. 测量load阶段并旁路空结果FIFO
+
+空结果FIFO时，存活内存响应直通CDB；反压则入预留队列，旧队首优先，保留squash与前递语义。
+ROB32/PRF64/IQ8/LSQ16：W2/W1 IPC0.621226/0.558328，diagnose22,865.599 µm²/368.08 MHz。
+较ce32682：IPC+2.236%/+1.680%、频率-1.905%、面积-0.056%；W2 IPC×Fmax仅+0.288%，保留独立IPC候选，未升级默认。
+四组各19/19，普通/统计周期相同、全部守恒核验；最终run_all ALL PASS，LSU四档63803/63994/64274/64274通过。
+backend观测改沿前采样后，候选与原LSU均586/612通过；初次漏记失败日志保留，完整回归已从头重跑。
+24输入仅LSU改变、7库/工具约束与实际容量核对；一次diag，无opt/合main/推送，默认16不复用旧PPA。
+下一轮按当前关键链改写ROB分支查找/资格控制，争取减少旋转选择并保留本轮IPC。
+归档build/synth/load_response_bypass/，详见[load响应直通](../experiments/load-response-bypass.md)。
+
+## 46. 在load旁路后按时序报告优化ROB分支控制
+
+固定物理槽匹配分支，保留最年轻同tag语义；预测payload先形成，最后限定有效恢复动作。
+ROB32/PRF64/IQ8/LSQ16：W2/W1 IPC0.621226/0.558328，diagnose22,903.492 µm²/393.39 MHz。
+较007bd09：频率+6.877%，面积+0.166%，全部正确性/perf周期与统计计数器不变；保留独立检查点。
+四组各19/19，新增ROB边界先在原版通过，再在候选141970/141968零失败；最终单任务run_all ALL PASS。
+两次Verilator编译线程池内部故障及统计等待超时日志均保留；单测CPU_UNIT_JOBS=1重跑通过，未改生产工具/约束。
+24输入仅ROB改变，7库/工具约束及实际容量核验，一次diag约9.92分钟；默认16不复用旧PPA。
+一小时相对ce32682累计W2 IPC+2.236%、W1+1.680%、Fmax+4.841%、面积+0.110%、W2 IPC×Fmax+7.185%。
+无opt/合main/推送；归档build/synth/rob_branch_match/，详见[ROB分支查找](../experiments/rob-branch-match.md)。

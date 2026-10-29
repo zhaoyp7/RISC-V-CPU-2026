@@ -15,7 +15,8 @@
 
 module rob #(
   parameter integer W     = `CPU_ISSUE_WIDTH,
-  parameter integer DEPTH = `CPU_ROB_DEPTH
+  parameter integer DEPTH = `CPU_ROB_DEPTH,
+  parameter integer BRANCH_PC_FROM_UPDATE = 0
 ) (
   input  logic        clk,
   input  logic        reset,
@@ -27,6 +28,7 @@ module rob #(
   input  logic [W-1:0]                 in_pred_taken,
   input  logic [W*32-1:0]              in_pred_target,
   output logic                         in_ready,
+  output logic [W-1:0]                 in_capacity,
   output logic [W*`CPU_ROB_TAG_W-1:0]  alloc_rob_idx,
 
   // 完成口（R 条 CDB）
@@ -117,14 +119,14 @@ module rob #(
   always_comb begin
     n_valid = '0;
     for (i_alloc = 0; i_alloc < W; i_alloc = i_alloc + 1)
-      if (in_valid[i_alloc]) n_valid = n_valid + 1'b1;
+      if (in_valid[i_alloc] && in_capacity[i_alloc]) n_valid = n_valid + 1'b1;
   end
 
   integer i_ar;
   always_comb begin
     alloc_rob_idx = '0;
     for (i_ar = 0; i_ar < W; i_ar = i_ar + 1)
-      if (in_valid[i_ar])
+      if (in_valid[i_ar] && in_capacity[i_ar])
         alloc_rob_idx[i_ar*RW +: RW] = (head + count + i_ar) & MASK;
   end
 
@@ -147,41 +149,47 @@ module rob #(
   logic          br_found;
   logic          br_mispredict;
   integer        br_age_i;
-  integer        i_br, i_br_idx;
+  logic br_pred_taken_c, br_uncond_c;
+  logic [31:0] br_pred_target_c, br_pc_c;
+  wire [DEPTH-1:0] br_match, br_pick;
+  for (genvar s = 0; s < DEPTH; s = s + 1) begin : gen_branch_match
+    assign br_match[s] = entry_valid[s] && entry_control[s] &&
+                          (entry_dest_tag[s] == br_update_tag);
+    assign br_pick[s] = br_match[s] && !(|(br_match & later_slot[s]));
+  end
 
+  integer i_br;
   always_comb begin
-    br_idx        = '0;
-    br_found      = 1'b0;
-    br_mispredict = 1'b0;
-    br_age_i      = 0;
-
+    br_idx = '0;
+    br_pred_taken_c = 1'b0;
+    br_pred_target_c = '0;
+    br_pc_c = (BRANCH_PC_FROM_UPDATE != 0) ? br_update_pc : '0;
+    br_uncond_c = 1'b0;
+    // Fixed physical slots; the one-hot winner is the youngest matching
+    // control uop, including duplicate-tag interface cases across wrap.
     for (i_br = 0; i_br < DEPTH; i_br = i_br + 1) begin
-      i_br_idx = (head + i_br) & MASK;
-      if (entry_valid[i_br_idx] && entry_control[i_br_idx] &&
-          (entry_dest_tag[i_br_idx] == br_update_tag)) begin
-        br_found = 1'b1;
-        br_idx   = i_br_idx;
-        br_age_i = i_br;
-      end
+      br_idx = br_idx | (RW'(i_br) & {RW{br_pick[i_br]}});
+      br_pred_taken_c = br_pred_taken_c | (entry_pred_taken[i_br] && br_pick[i_br]);
+      br_pred_target_c = br_pred_target_c | (entry_pred_tgt[i_br] & {32{br_pick[i_br]}});
+      if (BRANCH_PC_FROM_UPDATE == 0)
+        br_pc_c = br_pc_c | (entry_pc[i_br] & {32{br_pick[i_br]}});
+      br_uncond_c = br_uncond_c | (entry_uncond[i_br] && br_pick[i_br]);
     end
-
-    if (br_update_valid && br_found) begin
-      if (br_update_taken != entry_pred_taken[br_idx]) begin
-        br_mispredict = 1'b1;
-      end else if (br_update_taken &&
-                   (br_update_target != entry_pred_tgt[br_idx])) begin
-        br_mispredict = 1'b1;
-      end
-    end
+    br_found = |br_match;
+    br_age_i = br_found ? 32'(RW'(br_idx - head)) : 0;
+    // Prediction payload can settle before late branch issue qualification.
+    // Only flush/update outputs are qualified by br_update_valid below.
+    br_mispredict = (br_update_taken != br_pred_taken_c) ||
+                    (br_update_taken && (br_update_target != br_pred_target_c));
   end
 
   logic flush_young;
   logic [31:0] redirect_pc_c;
   assign flush_young = br_update_valid && br_found && br_mispredict;
-  assign br_update_uncond = br_update_valid && br_found && entry_uncond[br_idx];
+  assign br_update_uncond = br_update_valid && br_found && br_uncond_c;
   assign redirect_valid = flush_young;
   assign redirect_pc_c  = br_update_taken ? br_update_target :
-                          (entry_pc[br_idx] + 32'd4);
+                          (br_pc_c + 32'd4);
   assign redirect_pc     = redirect_pc_c;
 
   // ---- 提交选择 ------------------------------------------------------------
@@ -248,49 +256,98 @@ module rob #(
   logic [`CPU_PRF_SIZE-1:0] done_now_mask;
   logic [LW-1:0]            lsq_ptr_c;
   logic [32*PW-1:0]         recover_rat_c;
-  integer i_mask, i_reg, i_mask_idx;
-  integer i_rat, i_rat_idx;
 
   // 恢复时的 RAT：从已提交 crat 出发，按程序序重放 branch 及更老的
   // 在飞表项。仅靠 crat 会丢失尚未提交的 branch 自身 rd 映射（例如
   // jalr 写 ra），导致恢复后重新取指的指令读到旧物理寄存器。
-  always_comb begin
-    recover_rat_c = '0;
-    for (i_rat = 0; i_rat < 32; i_rat = i_rat + 1)
-      recover_rat_c[i_rat*PW +: PW] = crat[i_rat];
-    for (i_rat = 0; i_rat < DEPTH; i_rat = i_rat + 1) begin
-      i_rat_idx = (head + i_rat) & MASK;
-      if (entry_valid[i_rat_idx] && (i_rat <= br_age_i) &&
-          entry_reg_we[i_rat_idx])
-        recover_rat_c[entry_rd[i_rat_idx]*PW +: PW] =
-            entry_dest_tag[i_rat_idx];
-    end
+  // Fixed physical leaves avoid rotating rd/tag arrays and dynamic writes
+  // into the packed RAT. Age order is (wrapped, physical slot), where slots
+  // below head are younger than slots at/above head. A balanced tree selects
+  // the youngest surviving writer independently for each architectural rd.
+  localparam integer RAT_LEAVES = 1 << $clog2(DEPTH);
+  wire [DEPTH-1:0] recovery_keep, recovery_live;
+  wire [DEPTH-1:0] rat_writer, rat_wrapped;
+  for (genvar s = 0; s < DEPTH; s = s + 1) begin : gen_rat_writer
+    localparam [RW-1:0] SLOT = RW'(s);
+    wire [RW-1:0] age;
+    assign age = SLOT - head;
+    assign recovery_keep[s] = 32'(age) <= br_age_i;
+    assign recovery_live[s] = entry_valid[s] && recovery_keep[s];
+    assign rat_writer[s] = recovery_live[s] && entry_reg_we[s];
+    assign rat_wrapped[s] = head > SLOT;
   end
-
-  always_comb begin
-    free_mask_c    = '1;
-    free_mask_c[0] = 1'b0;
-    busy_mask_c    = '0;
-    lsq_ptr_c      = '0;
-
-    // committed RAT 占用的 tag 不能释放
-    for (i_reg = 0; i_reg < 32; i_reg = i_reg + 1)
-      if (crat[i_reg] != '0) free_mask_c[crat[i_reg]] = 1'b0;
-
-    // 存活表项（branch 及更老）的 dest tag 不能释放；未完成的还是 busy
-    for (i_mask = 0; i_mask < DEPTH; i_mask = i_mask + 1) begin
-      i_mask_idx = (head + i_mask) & MASK;
-      if (entry_valid[i_mask_idx] && (i_mask <= br_age_i)) begin
-        if (entry_dest_tag[i_mask_idx] != '0)
-          free_mask_c[entry_dest_tag[i_mask_idx]] = 1'b0;
-        if (!entry_done[i_mask_idx] && entry_dest_tag[i_mask_idx] != '0)
-          busy_mask_c[entry_dest_tag[i_mask_idx]] = 1'b1;
-        if (entry_is_store[i_mask_idx] || entry_is_load[i_mask_idx])
-          lsq_ptr_c = (entry_lsq_id[i_mask_idx] == LSQ_LAST) ? '0 :
-                      (entry_lsq_id[i_mask_idx] + 1'b1);
+  for (genvar rd = 0; rd < 32; rd = rd + 1) begin : gen_recover_rat
+    for (genvar n = 1; n < 2*RAT_LEAVES; n = n + 1) begin : gen_node
+      wire valid, wrapped;
+      wire [PW-1:0] tag;
+      if (n >= RAT_LEAVES) begin : gen_leaf
+        localparam integer SLOT = n - RAT_LEAVES;
+        if (SLOT < DEPTH) begin : gen_entry
+          assign valid = rat_writer[SLOT] && (entry_rd[SLOT] == 5'(rd));
+          assign wrapped = rat_wrapped[SLOT];
+          assign tag = entry_dest_tag[SLOT];
+        end else begin : gen_padding
+          assign valid = 1'b0;
+          assign wrapped = 1'b0;
+          assign tag = '0;
+        end
+      end else begin : gen_select
+        wire take_right;
+        assign take_right = gen_node[2*n+1].valid &&
+                              (!gen_node[2*n].valid || gen_node[2*n+1].wrapped || !gen_node[2*n].wrapped);
+        assign valid = gen_node[2*n].valid || gen_node[2*n+1].valid;
+        assign wrapped = take_right ? gen_node[2*n+1].wrapped : gen_node[2*n].wrapped;
+        assign tag = take_right ? gen_node[2*n+1].tag : gen_node[2*n].tag;
       end
     end
+    assign recover_rat_c[rd*PW +: PW] = gen_node[1].valid ? gen_node[1].tag : crat[rd];
   end
+
+  // Compare each constant physical tag against fixed slots. Both occupancy
+  // masks share tag equality; reg_we=0 uops still own their completion tags.
+  assign free_mask_c[0] = 1'b0;
+  assign busy_mask_c[0] = 1'b0;
+  for (genvar tag = 1; tag < `CPU_PRF_SIZE; tag = tag + 1) begin : gen_recover_mask
+    wire [31:0] committed_match;
+    wire [DEPTH-1:0] live_match, pending_match;
+    for (genvar rd = 0; rd < 32; rd = rd + 1) begin : gen_committed
+      assign committed_match[rd] = crat[rd] == PW'(tag);
+    end
+    for (genvar s = 0; s < DEPTH; s = s + 1) begin : gen_live
+      assign live_match[s] = recovery_live[s] && (entry_dest_tag[s] == PW'(tag));
+      assign pending_match[s] = live_match[s] && !entry_done[s];
+    end
+    assign free_mask_c[tag] = !(|committed_match) && !(|live_match);
+    assign busy_mask_c[tag] = |pending_match;
+  end
+
+  // Youngest surviving memory uop, using the same circular slot order as RAT.
+  // Select its raw LSQ id first so pointer increment/wrap is computed once.
+  for (genvar n = 1; n < 2*RAT_LEAVES; n = n + 1) begin : gen_recover_lsq
+    wire valid, wrapped;
+    wire [LW-1:0] id;
+    if (n >= RAT_LEAVES) begin : gen_leaf
+      localparam integer SLOT = n - RAT_LEAVES;
+      if (SLOT < DEPTH) begin : gen_entry
+        assign valid = recovery_live[SLOT] && (entry_is_store[SLOT] || entry_is_load[SLOT]);
+        assign wrapped = rat_wrapped[SLOT];
+        assign id = entry_lsq_id[SLOT];
+      end else begin : gen_padding
+        assign valid = 1'b0;
+        assign wrapped = 1'b0;
+        assign id = '0;
+      end
+    end else begin : gen_select
+      wire take_right;
+      assign take_right = gen_recover_lsq[2*n+1].valid &&
+                            (!gen_recover_lsq[2*n].valid || gen_recover_lsq[2*n+1].wrapped || !gen_recover_lsq[2*n].wrapped);
+      assign valid = gen_recover_lsq[2*n].valid || gen_recover_lsq[2*n+1].valid;
+      assign wrapped = take_right ? gen_recover_lsq[2*n+1].wrapped : gen_recover_lsq[2*n].wrapped;
+      assign id = take_right ? gen_recover_lsq[2*n+1].id : gen_recover_lsq[2*n].id;
+    end
+  end
+  assign lsq_ptr_c = !gen_recover_lsq[1].valid || (gen_recover_lsq[1].id == LSQ_LAST)
+                      ? '0 : gen_recover_lsq[1].id + 1'b1;
 
   // ---- 空间/握手 -----------------------------------------------------------
   logic [CNTW-1:0] n_commit;
@@ -301,55 +358,73 @@ module rob #(
       if (commit_valid[i_commit_cnt]) n_commit = n_commit + 1'b1;
   end
 
+  // Prefix capacity from registered occupancy only; no same-cycle commit credit.
+  for (genvar lane = 0; lane < W; lane = lane + 1) begin : gen_input_capacity
+    assign in_capacity[lane] = (count + lane < DEPTH);
+  end
   assign in_ready = !flush_young && !recover_valid && !redirect_valid &&
-                    ((count + W) <= DEPTH);
+                    (count < DEPTH);
 
-  // ---- 完成搜索（组合） ----------------------------------------------------
-  logic [R-1:0]  cdb_hit;
-  logic [RW-1:0] cdb_idx [0:R-1];
-  logic [W-1:0]  comp_hit;
-  logic [RW-1:0] comp_idx [0:W-1];
-  integer i_cmp, i_clane, i_cmp_idx, r_cmp;
-
-  always_comb begin
-    done_now_mask = '0;
-    for (r_cmp = 0; r_cmp < R; r_cmp = r_cmp + 1) begin
-      cdb_hit[r_cmp] = 1'b0;
-      cdb_idx[r_cmp] = '0;
-      for (i_cmp = 0; i_cmp < DEPTH; i_cmp = i_cmp + 1) begin
-        i_cmp_idx = (head + i_cmp) & MASK;
-        if (entry_valid[i_cmp_idx] &&
-            (entry_dest_tag[i_cmp_idx] == cdb_tag[r_cmp*PW +: PW])) begin
-          cdb_hit[r_cmp] = 1'b1;
-          cdb_idx[r_cmp] = i_cmp_idx;
-        end
-      end
-      if (cdb_valid[r_cmp] && cdb_hit[r_cmp] &&
-          (entry_dest_tag[cdb_idx[r_cmp]] != '0))
-        done_now_mask[entry_dest_tag[cdb_idx[r_cmp]]] = 1'b1;
-    end
-
-    for (i_clane = 0; i_clane < W; i_clane = i_clane + 1) begin
-      comp_hit[i_clane] = 1'b0;
-      comp_idx[i_clane] = '0;
-      if (complete_valid[i_clane]) begin
-        for (i_cmp = 0; i_cmp < DEPTH; i_cmp = i_cmp + 1) begin
-          i_cmp_idx = (head + i_cmp) & MASK;
-          if (entry_valid[i_cmp_idx] &&
-              (entry_dest_tag[i_cmp_idx] == complete_tag[i_clane*PW +: PW])) begin
-            comp_hit[i_clane] = 1'b1;
-            comp_idx[i_clane] = i_cmp_idx;
-          end
-        end
-        if (comp_hit[i_clane] &&
-            (entry_dest_tag[comp_idx[i_clane]] != '0))
-          done_now_mask[entry_dest_tag[comp_idx[i_clane]]] = 1'b1;
+  // ---- 完成搜索（固定物理槽比较，保持最年轻命中优先）---------------------
+  wire [DEPTH-1:0] later_slot [0:DEPTH-1];
+  for (genvar i = 0; i < DEPTH; i = i + 1) begin : gen_completion_order
+    for (genvar j = 0; j < DEPTH; j = j + 1) begin : gen_later
+      // 从head开始的环形顺序：先[head,DEPTH)，再[0,head)。
+      // 不旋转表项数据；只由寄存head提前计算哪些固定槽位更年轻。
+      if (j > i) begin : gen_above
+        assign later_slot[i][j] = (head <= i) || (head > j);
+      end else if (j < i) begin : gen_below
+        assign later_slot[i][j] = (head <= i) && (head > j);
+      end else begin : gen_same
+        assign later_slot[i][j] = 1'b0;
       end
     end
   end
 
+  wire [DEPTH-1:0] cdb_match [0:R-1];
+  wire [DEPTH-1:0] cdb_pick [0:R-1];
+  wire [R-1:0] cdb_hit;
+  for (genvar r = 0; r < R; r = r + 1) begin : gen_cdb_match
+    assign cdb_hit[r] = |cdb_match[r];
+    for (genvar i = 0; i < DEPTH; i = i + 1) begin : gen_slot
+      assign cdb_match[r][i] = entry_valid[i] &&
+                               (entry_dest_tag[i] == cdb_tag[r*PW +: PW]);
+      assign cdb_pick[r][i] = cdb_match[r][i] &&
+                               !(|(cdb_match[r] & later_slot[i]));
+    end
+  end
+
+  wire [DEPTH-1:0] comp_match [0:W-1];
+  wire [DEPTH-1:0] comp_pick [0:W-1];
+  wire [W-1:0] comp_hit;
+  for (genvar l = 0; l < W; l = l + 1) begin : gen_complete_match
+    assign comp_hit[l] = |comp_match[l];
+    for (genvar i = 0; i < DEPTH; i = i + 1) begin : gen_slot
+      assign comp_match[l][i] = entry_valid[i] &&
+                                (entry_dest_tag[i] == complete_tag[l*PW +: PW]);
+      assign comp_pick[l][i] = comp_match[l][i] &&
+                                !(|(comp_match[l] & later_slot[i]));
+    end
+  end
+
+  integer r_mask, l_mask;
+  always_comb begin
+    done_now_mask = '0;
+    for (r_mask = 0; r_mask < R; r_mask = r_mask + 1) begin
+      // hit保证选中表项的dest_tag等于广播tag，不必编码索引再读一次tag。
+      if (cdb_valid[r_mask] && cdb_hit[r_mask] &&
+          (cdb_tag[r_mask*PW +: PW] != '0))
+        done_now_mask[cdb_tag[r_mask*PW +: PW]] = 1'b1;
+    end
+    for (l_mask = 0; l_mask < W; l_mask = l_mask + 1) begin
+      if (complete_valid[l_mask] && comp_hit[l_mask] &&
+          (complete_tag[l_mask*PW +: PW] != '0))
+        done_now_mask[complete_tag[l_mask*PW +: PW]] = 1'b1;
+    end
+  end
+
   // ---- 时序 ----------------------------------------------------------------
-  integer i_ff, i_flush, i_alloc2, i_alloc_idx, i_ff_clane;
+  integer i_ff, i_flush, i_alloc2, i_alloc_idx, i_ff_clane, r_cmp, i_done;
 
   always_ff @(posedge clk) begin
     if (reset) begin
@@ -368,18 +443,21 @@ module rob #(
       recover_valid  <= 1'b0;
       squash_valid   <= 1'b0;
 
-      // 完成广播（R 条）
+      // 完成广播直接使用one-hot命中写固定槽位，valid只在状态更新处门控。
       for (r_cmp = 0; r_cmp < R; r_cmp = r_cmp + 1) begin
-        if (cdb_valid[r_cmp] && cdb_hit[r_cmp]) begin
-          entry_done[cdb_idx[r_cmp]] <= 1'b1;
-          if (cdb_exception[r_cmp]) entry_exception[cdb_idx[r_cmp]] <= 1'b1;
+        for (i_done = 0; i_done < DEPTH; i_done = i_done + 1) begin
+          if (cdb_valid[r_cmp] && cdb_pick[r_cmp][i_done]) begin
+            entry_done[i_done] <= 1'b1;
+            if (cdb_exception[r_cmp]) entry_exception[i_done] <= 1'b1;
+          end
         end
       end
       for (i_ff_clane = 0; i_ff_clane < W; i_ff_clane = i_ff_clane + 1) begin
-        if (complete_valid[i_ff_clane] && comp_hit[i_ff_clane]) begin
-          entry_done[comp_idx[i_ff_clane]] <= 1'b1;
-          if (complete_exception[i_ff_clane])
-            entry_exception[comp_idx[i_ff_clane]] <= 1'b1;
+        for (i_done = 0; i_done < DEPTH; i_done = i_done + 1) begin
+          if (complete_valid[i_ff_clane] && comp_pick[i_ff_clane][i_done]) begin
+            entry_done[i_done] <= 1'b1;
+            if (complete_exception[i_ff_clane]) entry_exception[i_done] <= 1'b1;
+          end
         end
       end
 
@@ -391,8 +469,8 @@ module rob #(
       if (flush_young) begin
         // 冲刷比分支更年轻的表项；分支及更老的保留
         for (i_flush = 0; i_flush < DEPTH; i_flush = i_flush + 1) begin
-          if (i_flush > br_age_i)
-            entry_valid[(head + i_flush) & MASK] <= 1'b0;
+          if (!recovery_keep[i_flush])
+            entry_valid[i_flush] <= 1'b0;
         end
         count             <= br_age_i + 1;
         recover_valid     <= 1'b1;
@@ -420,7 +498,7 @@ module rob #(
         if (in_ready) begin
           for (i_alloc2 = 0; i_alloc2 < W; i_alloc2 = i_alloc2 + 1) begin
             i_alloc_idx = (head + count + i_alloc2) & MASK;
-            if (in_valid[i_alloc2]) begin
+            if (in_valid[i_alloc2] && in_capacity[i_alloc2]) begin
               entry_valid[i_alloc_idx]   <= 1'b1;
               entry_pc[i_alloc_idx]      <= in_uop[i_alloc2*`CPU_RENAME_W + `CPU_DISPATCH_PC_OFF +: 32];
               entry_inst[i_alloc_idx]    <= in_uop[i_alloc2*`CPU_RENAME_W + `CPU_DISPATCH_INST_OFF +: 32];
@@ -456,6 +534,17 @@ module rob #(
     end
   end
 
+`ifndef SYNTHESIS
+  // The integrated backend supplies the PC of this same resolved uop.
+  // Keep the stored copy observable for simulation/trace and validate that
+  // opting into the narrower production path never changes redirection.
+  always_ff @(posedge clk) begin
+    if (!reset && BRANCH_PC_FROM_UPDATE && br_update_valid && br_found &&
+        br_update_pc != entry_pc[br_idx])
+      $fatal(1, "ROB branch update PC mismatch: update=%08x stored=%08x", br_update_pc, entry_pc[br_idx]);
+  end
+`endif
+
 `ifdef LOCAL_TRACE
   always_ff @(posedge clk) begin
     if (!reset) begin
@@ -471,7 +560,7 @@ module rob #(
       if (flush_young)
         $display("[ROB_FLUSH] t=%0t br_idx=%0d br_age=%0d recover=%0b redirect=%08x squash=%0b",
                  $time, br_idx, br_age_i, recover_valid,
-                 br_update_taken ? br_update_target : (entry_pc[br_idx] + 32'd4),
+                 br_update_taken ? br_update_target : (br_pc_c + 32'd4),
                  squash_valid);
       if (recover_valid)
         $display("[ROB_RECOVER] t=%0t free=%016x busy=%016x", $time,

@@ -1,0 +1,78 @@
+{
+  "name": "tier3-class-priority-20261029",
+  "source_commit": "a5835fe7882a57348c8893d181a60f82604a4d0e",
+  "source_tag": "ipc-tier3-class-priority-20261029",
+  "generator": "tools/config_gen.py",
+  "generator_args": [
+    "--issue-width",
+    "2",
+    "--rob",
+    "32",
+    "--prf",
+    "64",
+    "--dcache-enable",
+    "1",
+    "--dcache-index-bits",
+    "2",
+    "--dcache-ways",
+    "2",
+    "--line-cache-enable",
+    "1",
+    "--line-cache-index-bits",
+    "9"
+  ],
+  "generated_cpu_config_sha256": "438e66e6183a721296ab13b4b384f9a5f00b90036cae9ad2652080e5559184df",
+  "default_cpu_config_modified": false,
+  "measurement_mode": "diagnose",
+  "ipc_geomean": 1.1050225312414483,
+  "fmax_mhz": 384.2401500938086,
+  "area_um2": 35412.18334600092,
+  "score_screen": {
+    "ipc_strictly_greater_than": 1.0985,
+    "area_strictly_less_than_um2": 36000,
+    "frequency_at_least_mhz": 300,
+    "final_opt_confirmed": true
+  },
+  "verification_artifact": "build/three_hour_20261027/ipc_factored_port_priority_v111/validation.json",
+  "unit_scope": "Fresh changed-IQ and backend parameter checks; unchanged modules reuse v110 completed whole suite. Not a fresh whole-suite run.",
+  "correctness_profiles": [
+    {
+      "name": "ipc_factored_port_priority_v111",
+      "passed": 19,
+      "total": 19,
+      "ipc": 1.1050225312414483
+    },
+    {
+      "name": "factored_priority_v111_w1",
+      "passed": 19,
+      "total": 19,
+      "ipc": 0.8362511237607829
+    },
+    {
+      "name": "factored_priority_v111_default_w2",
+      "passed": 19,
+      "total": 19,
+      "ipc": 0.6567251193518457
+    }
+  ],
+  "fresh_repository_entry_suites": [
+    "issue_queue_test",
+    "execution_lookahead_test",
+    "backend_test"
+  ],
+  "opt": {
+    "mode": "opt",
+    "ipc": 1.1050225312414483,
+    "area_um2": 34240.2137859771,
+    "fmax_mhz": 420.36124794745484,
+    "throughput": 464.50865024271064,
+    "qualifies_for_tier3": true,
+    "score_from_repository_table": 102,
+    "source_commit": "a5835fe7882a57348c8893d181a60f82604a4d0e",
+    "source_tag": "ipc-tier3-opt-20261029",
+    "report": "build/three_hour_20261027/ipc_factored_port_priority_v111/synth/opt/report.json",
+    "verification": "build/three_hour_20261027/ipc_factored_port_priority_v111/opt-verification.json",
+    "same_source_as_diagnose": true,
+    "elapsed_seconds": 1111.3898152719994
+  }
+}

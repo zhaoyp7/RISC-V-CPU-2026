@@ -1,5 +1,10 @@
 // Observe training latency and prediction snapshots through frontend ports only.
+#ifdef TB_WORD_BANKING
+#include "Vfrontend_banked_top.h"
+using Vfrontend_ooo=Vfrontend_banked_top;
+#else
 #include "Vfrontend_ooo.h"
+#endif
 #include "verilated.h"
 #include <cstdint>
 #include <cstdio>
@@ -27,6 +32,9 @@ struct Harness {
         for(int ch=0;ch<2;++ch) {
             bool valid=ch?d.refill_valid1:d.refill_valid;
             uint32_t addr=ch?d.refill_addr1:d.refill_addr;
+#ifdef TB_WORD_BANKING
+            if(valid)check(((addr>>2)&1u)==unsigned(ch),"physical instruction bank parity");
+#endif
             auto& m=mem[ch];
             if(m.pending && (!valid || addr!=m.addr)) {
                 check(d.redirect_valid || !valid,"refill address stable");m.pending=false;
@@ -50,6 +58,7 @@ struct Harness {
         d.refill_resp_valid=0;d.refill_resp_valid1=0;d.eval();
     }
     void reset() {
+        d.decode_capacity=(1u<<TB_W)-1;
         d.reset=1;d.backend_ready=0;d.rename_ready=0;d.redirect_valid=0;d.redirect_pc=0;
         d.br_update_valid=0;d.br_update_pc=0;d.br_update_taken=0;d.br_update_target=0;
         d.br_update_uncond=0;d.br_update_is_jalr=0;d.br_update_tag=0;
@@ -81,19 +90,86 @@ struct Harness {
         reset();d.backend_ready=1;d.rename_ready=0;tick();tick();
         check(d.pc_out==16,"two paired requests accepted before backend stall");
         d.backend_ready=0;
-        for(int i=0;i<64;++i)tick();
+        for(int i=0;i<128;++i)tick();
         check(d.dec_valid!=0 && field(d.dec_uop,1,32)==0,
               "in-flight responses buffered while backend is stalled");
         if(TB_W==2)check(d.dec_valid==3 && field(d.dec_uop,133,32)==4,
                         "paired response remains together during backend stall");
-        // Consume only already-issued requests, keeping new fetches disabled.
+        // With rename stopped, bounded prefetch must eventually stop too.
+        uint32_t stopped_pc=d.pc_out;
+        for(int i=0;i<32;++i) {
+            tick();check(d.pc_out==stopped_pc,"prefetch remains bounded during backend stall");
+        }
+        // Rename may drain responses independently of the backend hint.
+        // Check every observed instruction, including any new prefetches.
         d.rename_ready=1;
         for(int i=0;i<32;++i)tick();
-        check(records.size()==4,"backend stall admits no new fetches or duplicate responses");
+        check(records.size()>=4,"all initially issued responses drain during backend stall");
         for(unsigned i=0;i<records.size();++i)
             check(records[i].pc==4*i && !records[i].taken,"stalled response order and snapshot");
-        check(d.pc_out==16,"PC stays at first unissued request while backend is stalled");
+        check(d.pc_out>=4*records.size(),"request PC covers the decoded prefix");
         d.rename_ready=0;
+    }
+    void partial_decode_capacity() {
+        if(TB_W!=2)return;
+        reset();update(4,0x80);settle();redirect(0);
+        d.backend_ready=1;d.rename_ready=0;tick();tick();d.backend_ready=0;
+        for(int i=0;i<64;++i)tick();
+        uint64_t targets=d.dec_pred_target;
+        bool second_taken=(d.dec_pred_taken>>1)&1;
+        uint32_t second_target=uint32_t(targets>>32);
+        check(second_taken && second_target==0x80,"partial group includes nonzero taken prediction snapshot");
+        d.decode_capacity=1;d.rename_ready=1;tick();
+        check(records.size()==1 && records[0].pc==0,"one slot consumes only first decoded instruction");
+        d.rename_ready=0;tick();
+        check(d.dec_valid==1 && field(d.dec_uop,1,32)==4,"second decoded instruction retained at FIFO head");
+        check(bool(d.dec_pred_taken&1)==second_taken && uint32_t(d.dec_pred_target)==second_target,
+              "retained instruction keeps prediction snapshot");
+        d.decode_capacity=0;d.rename_ready=1;
+        for(int i=0;i<5;++i)tick();
+        check(records.size()==1 && d.dec_valid==0,"zero capacity consumes nothing even when rename is ready");
+        d.decode_capacity=1;tick();d.decode_capacity=3;tick();
+        check(records.size()==4,"single then dual admission preserves exact instruction count");
+        const uint32_t expected[]={0,4,0x80,0x84};
+        for(unsigned i=0;i<records.size();++i)check(records[i].pc==expected[i],"partial admission preserves program order");
+        check(d.pc_out>=0x88,"partial decode capacity preserves the requested prefix");
+        // Redirect while a suffix remains queued after a one-instruction pop.
+        d.rename_ready=0;d.backend_ready=1;tick();tick();d.backend_ready=0;
+        for(int i=0;i<64;++i)tick();
+        d.decode_capacity=1;d.rename_ready=1;tick();redirect(0x100);until(4);
+        for(unsigned i=0;i<4 && i<records.size();++i)
+            check(records[i].pc==0x100+4*i,"redirect drops partially consumed group suffix");
+        d.decode_capacity=3;d.rename_ready=0;d.backend_ready=0;
+    }
+    void randomized_flush_and_capacity(uint32_t seed) {
+        reset();uint32_t expected_pc=0;unsigned accepted=0, redirects=0;
+        auto random=[&](){seed^=seed<<13;seed^=seed>>17;seed^=seed<<5;return seed;};
+        for(unsigned cycle=0;cycle<30000;++cycle) {
+            uint32_t bits=random();bool flush=bits%47==0;
+            d.redirect_valid=flush;d.redirect_pc=((bits>>8)&127u)*4;
+            d.backend_ready=(bits>>16)&1;d.rename_ready=(bits>>17)&1;
+            unsigned slots=(bits>>18)%3;
+            d.decode_capacity=slots==0?0:slots==1?1:((1u<<TB_W)-1);
+            latency[0]=(bits>>22)&7;latency[1]=(bits>>25)&7;
+            unsigned before=records.size();tick();
+            if(flush){expected_pc=d.redirect_pc;++redirects;}
+            for(unsigned i=before;i<records.size();++i) {
+                check(records[i].pc==expected_pc,"random flush/capacity preserves exact PC stream");
+                check(!records[i].taken,"untrained prediction survives random flush/capacity");
+                expected_pc+=4;++accepted;
+            }
+        }
+        d.redirect_valid=0;d.rename_ready=1;d.backend_ready=1;
+        d.decode_capacity=(1u<<TB_W)-1;
+        for(unsigned cycle=0;cycle<128;++cycle) {
+            unsigned before=records.size();tick();
+            for(unsigned i=before;i<records.size();++i) {
+                check(records[i].pc==expected_pc,"randomized stream drains without loss or duplication");
+                expected_pc+=4;++accepted;
+            }
+        }
+        check(redirects>500 && accepted>3000,"randomized flush/capacity exercises sustained progress");
+        latency[0]=latency[1]=2;d.rename_ready=0;d.backend_ready=0;
     }
     void response_skew(int slow_bank) {
         reset();latency[0]=slow_bank==0?9:0;latency[1]=slow_bank==1?9:0;
@@ -169,7 +245,8 @@ int main(int argc,char** argv) {
     // Reset discards any pending training valid and predictor table state.
     d.backend_ready=0;d.rename_ready=0;h.update(0,0x100);h.reset();h.until(1);
     if(!h.records.empty())h.check(h.records[0].pc==0 && !h.records[0].taken,"reset drops pending training");
-    h.backend_stall_responses();h.response_skew(0);h.response_skew(1);
+    h.backend_stall_responses();h.partial_decode_capacity();h.response_skew(0);h.response_skew(1);
+    for(uint32_t seed:{0x23ad4581u,0x6f9c20b3u,0xa3158e47u})h.randomized_flush_and_capacity(seed);
     std::printf("BPU training / response queues W=%d checks=%u fails=%u\n",TB_W,h.checks,h.fails);
     return h.fails?1:0;
 }

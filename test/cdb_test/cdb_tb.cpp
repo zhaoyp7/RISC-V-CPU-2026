@@ -18,6 +18,9 @@
 #ifndef TB_R
 #define TB_R 1
 #endif
+#ifndef TB_PRIORITY_ALU0
+#define TB_PRIORITY_ALU0 0
+#endif
 
 namespace {
 
@@ -182,7 +185,8 @@ struct Harness {
                 unsigned used=0;
                 for (int lane=0;lane<R;++lane) {
                     int winner=-1;
-                    for (int k=0;k<N;++k) {
+                    if(TB_PRIORITY_ALU0&&R>=2&&lane==0&&(mask&1))winner=0;
+                    for (int k=0;k<N&&winner<0;++k) {
                         int i=(rotation+lane+k+1)%N;
                         if ((mask>>i&1u) && !(used>>i&1u)) {winner=i;break;}
                     }
@@ -196,6 +200,15 @@ struct Harness {
                     expect(cdb_lane(lane)==expected,"exhaustive exact lane payload/order");
                 }
                 expect((unsigned)dut->src_ready==used,"exhaustive exact ready mask");
+                if(TB_PRIORITY_ALU0&&R>=2&&(mask&1))
+                    expect(ready(0)&&cdb_tag(0)==1,"ALU0 guaranteed first writeback lane");
+                // With one compute result and at most one load source,
+                // two CDB lanes must grant the compute result for every
+                // rotation. This is the backend's lookahead-wake contract.
+                const unsigned compute=mask&~(1u<<W);
+                if(R>=2&&compute&&!(compute&(compute-1)))
+                    expect(((unsigned)dut->src_ready&compute)==compute,
+                           "single compute result guaranteed with two CDB lanes");
             }
         }
         reset();
@@ -254,6 +267,22 @@ struct Harness {
             }
         }
     }
+
+    void sustained_fairness() {
+        reset();unsigned wait[N]={},grants[N]={};
+        dut->src_valid=(1u<<N)-1;
+        for(int i=0;i<N;i++){set_tag(i,i+1);set_value(i,0x12340000u+i);}
+        for(int cycle=0;cycle<128;cycle++){
+            dut->clk=0;dut->eval();
+            for(int i=0;i<N;i++){
+                if(ready(i)){wait[i]=0;grants[i]++;}else wait[i]++;
+                expect(wait[i]<=N+1,"bounded wait with every source continuously valid");
+            }
+            dut->clk=1;dut->eval();
+        }
+        for(int i=0;i<N;i++)expect(grants[i]!=0,"all continuously valid sources make progress");
+        reset();
+    }
 };
 
 }  // namespace
@@ -269,6 +298,7 @@ int main(int argc, char** argv) {
     h.single_source();
     h.drain_all();
     h.random_stress();
+    h.sustained_fairness();
 
     printf("\nW=%d R=%d N=%d checked=%ld fails=%ld\n", W, R, N, h.checks, h.fails);
     bool pass = (h.fails == 0);

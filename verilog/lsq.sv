@@ -14,7 +14,9 @@
 
 module lsq #(
   parameter integer W = `CPU_ISSUE_WIDTH,
-  parameter integer D = `CPU_LSQ_DEPTH
+  parameter integer D = `CPU_LSQ_DEPTH,
+  parameter integer STORE_DATA_CAPTURE = 0,
+  parameter integer ORDERED_STORE_COMMIT = 0
 ) (
   input  logic clk,
   input  logic reset,
@@ -39,6 +41,11 @@ module lsq #(
   input  logic                         prefill_valid,
   input  logic [`CPU_LSQ_IDX_W-1:0]    prefill_id,
   input  logic [31:0]                  prefill_addr,
+
+  // Optional source capture after an address-only store leaves the IQ.
+  input logic [`CPU_PRF_IDX_W-1:0] prefill_data_tag,
+  input logic [3:0] prefill_wstrb,
+  input logic [`CPU_CDB_BUS_W-1:0] store_cdb,
 
   // commit
   input  logic [W-1:0]                 commit_valid,
@@ -77,6 +84,9 @@ module lsq #(
   output logic [7:0]                   count
 );
 
+  localparam integer PW = `CPU_PRF_IDX_W;
+  localparam integer CW = `CPU_CDB_W;
+  localparam integer R = `CPU_CDB_NUM;
   localparam integer LW = `CPU_LSQ_IDX_W;
   localparam integer RW = `CPU_ROB_TAG_W;
   localparam integer QW = (D > 1) ? $clog2(D) : 1;
@@ -91,6 +101,8 @@ module lsq #(
   logic [D*32-1:0] addr;
   logic [D*32-1:0] wdata;
   logic [D*4-1:0]  wstrb;
+  logic [D-1:0]    data_known, data_raw;
+  logic [D*PW-1:0] data_tag;
   logic [D-1:0]    committed;
   logic [D-1:0]    sent;
 
@@ -98,6 +110,27 @@ module lsq #(
   logic [D*LW-1:0] sent_fifo;
   logic [QW-1:0]   sent_head, sent_tail;
   logic [FN-1:0]   sent_count;
+  logic [QW-1:0] commit_tail;
+  logic [FN-1:0] ordered_count;
+  logic [W-1:0] new_commit;
+  logic [QW-1:0] commit_position [0:W-1];
+  logic [FN-1:0] commit_count;
+  integer ci,cj;
+  logic duplicate_commit;
+  always_comb begin
+    new_commit='0;commit_count='0;duplicate_commit=0;
+    for(ci=0;ci<W;ci=ci+1)begin
+      commit_position[ci]=commit_tail+QW'(commit_count);
+      duplicate_commit=0;
+      for(cj=0;cj<ci;cj=cj+1)
+        if(new_commit[cj] && commit_id[cj*LW+:LW]==commit_id[ci*LW+:LW])duplicate_commit=1;
+      if(commit_valid[ci] && commit_is_store[ci] && valid[commit_id[ci*LW+:LW]] &&
+         is_store[commit_id[ci*LW+:LW]] && !committed[commit_id[ci*LW+:LW]] && !duplicate_commit)begin
+        new_commit[ci]=1;commit_count=commit_count+1'b1;
+      end
+    end
+  end
+
 
   integer i, lane;
   integer lane_free;
@@ -143,20 +176,40 @@ module lsq #(
   wire drain_tree_valid [0:2*QLEAVES-1] /* verilator split_var */;
   wire [31:0] drain_tree_seq [0:2*QLEAVES-1] /* verilator split_var */;
   wire [LW-1:0] drain_tree_id [0:2*QLEAVES-1] /* verilator split_var */;
+  wire [31:0] drain_tree_addr [0:2*QLEAVES-1] /* verilator split_var */;
+  wire [31:0] drain_tree_wdata [0:2*QLEAVES-1] /* verilator split_var */;
+  wire [3:0] drain_tree_wstrb [0:2*QLEAVES-1] /* verilator split_var */;
+  wire drain_tree_raw [0:2*QLEAVES-1] /* verilator split_var */;
+  assign drain_tree_raw[0]=1'b0;
+  wire drain_tree_ready [0:2*QLEAVES-1] /* verilator split_var */;
+  assign drain_tree_ready[0] = 1'b0;
   assign drain_tree_valid[0] = 1'b0;
   assign drain_tree_seq[0] = '0;
   assign drain_tree_id[0] = '0;
+  assign drain_tree_addr[0] = '0;
+  assign drain_tree_wdata[0] = '0;
+  assign drain_tree_wstrb[0] = '0;
   generate
     for (genvar g = 0; g < QLEAVES; g = g + 1) begin : gen_drain_leaf
       if (g < D) begin : gen_entry
         assign drain_tree_valid[QLEAVES+g] = valid[g] && is_store[g] &&
                                             committed[g] && !sent[g];
+        assign drain_tree_raw[QLEAVES+g] = data_raw[g];
+        assign drain_tree_ready[QLEAVES+g] = data_known[g];
         assign drain_tree_seq[QLEAVES+g] = seq[g*32 +: 32];
         assign drain_tree_id[QLEAVES+g] = LW'(g);
+        assign drain_tree_addr[QLEAVES+g] = addr[g*32 +: 32];
+        assign drain_tree_wdata[QLEAVES+g] = wdata[g*32 +: 32];
+        assign drain_tree_wstrb[QLEAVES+g] = wstrb[g*4 +: 4];
       end else begin : gen_pad
         assign drain_tree_valid[QLEAVES+g] = 1'b0;
+        assign drain_tree_raw[QLEAVES+g] = 1'b0;
+        assign drain_tree_ready[QLEAVES+g] = 1'b0;
         assign drain_tree_seq[QLEAVES+g] = '0;
         assign drain_tree_id[QLEAVES+g] = '0;
+        assign drain_tree_addr[QLEAVES+g] = '0;
+        assign drain_tree_wdata[QLEAVES+g] = '0;
+        assign drain_tree_wstrb[QLEAVES+g] = '0;
       end
     end
     for (genvar g = 1; g < QLEAVES; g = g + 1) begin : gen_drain_merge
@@ -164,15 +217,32 @@ module lsq #(
                          (!drain_tree_valid[2*g] ||
                           drain_tree_seq[2*g+1] < drain_tree_seq[2*g]);
       assign drain_tree_valid[g] = drain_tree_valid[2*g] || drain_tree_valid[2*g+1];
+      assign drain_tree_raw[g] = take_right ? drain_tree_raw[2*g+1] : drain_tree_raw[2*g];
+      assign drain_tree_ready[g] = take_right ? drain_tree_ready[2*g+1] : drain_tree_ready[2*g];
       assign drain_tree_seq[g] = take_right ? drain_tree_seq[2*g+1] : drain_tree_seq[2*g];
       assign drain_tree_id[g] = take_right ? drain_tree_id[2*g+1] : drain_tree_id[2*g];
+      assign drain_tree_addr[g] = take_right ? drain_tree_addr[2*g+1] : drain_tree_addr[2*g];
+      assign drain_tree_wdata[g] = take_right ? drain_tree_wdata[2*g+1] : drain_tree_wdata[2*g];
+      assign drain_tree_wstrb[g] = take_right ? drain_tree_wstrb[2*g+1] : drain_tree_wstrb[2*g];
     end
   endgenerate
-  assign drain_valid = drain_tree_valid[1];
-  assign drain_id = drain_valid ? drain_tree_id[1] : '0;
-  assign drain_addr = drain_valid ? addr[drain_tree_id[1]*32 +: 32] : '0;
-  assign drain_wdata = drain_valid ? wdata[drain_tree_id[1]*32 +: 32] : '0;
-  assign drain_wstrb = drain_valid ? wstrb[drain_tree_id[1]*4 +: 4] : '0;
+  // A committed id stays in the shared ring through send and write response.
+  // The send cursor cannot bypass a data-waiting oldest committed store.
+  wire [LW-1:0] raw_drain_id = ORDERED_STORE_COMMIT ? sent_fifo[sent_tail*LW+:LW] : drain_tree_id[1];
+  wire raw_drain_valid = ORDERED_STORE_COMMIT ? ordered_count!=0 : drain_tree_valid[1];
+  wire raw_drain_ready = ORDERED_STORE_COMMIT ? data_known[raw_drain_id] : drain_tree_ready[1];
+  wire [31:0] raw_drain_addr = ORDERED_STORE_COMMIT ? addr[raw_drain_id*32+:32] : drain_tree_addr[1];
+  wire [31:0] raw_drain_data = ORDERED_STORE_COMMIT ? wdata[raw_drain_id*32+:32] : drain_tree_wdata[1];
+  wire [3:0] raw_drain_mask = ORDERED_STORE_COMMIT ? wstrb[raw_drain_id*4+:4] : drain_tree_wstrb[1];
+  wire raw_drain_unshifted = ORDERED_STORE_COMMIT ? data_raw[raw_drain_id] : drain_tree_raw[1];
+  assign drain_valid = raw_drain_valid && (!STORE_DATA_CAPTURE || raw_drain_ready);
+  // Readiness qualifies the transaction, without feeding its address/data mux.
+  assign drain_id = raw_drain_valid ? raw_drain_id : '0;
+  assign drain_addr = raw_drain_valid ? raw_drain_addr : '0;
+  assign drain_wstrb = raw_drain_valid ? raw_drain_mask : '0;
+  assign drain_wdata = !raw_drain_valid ? '0 :
+    ((STORE_DATA_CAPTURE && raw_drain_unshifted && raw_drain_mask!=4'hf) ?
+      raw_drain_data << {raw_drain_addr[1:0],3'b000} : raw_drain_data);
 
   // ---- query stage 1: independent comparisons and a coherent snapshot ------
   // 不只保存 slot id：store 可在下一拍释放并复用。候选的 seq/data/full
@@ -189,7 +259,8 @@ module lsq #(
       assign query_unknown[qg] = older_store && !addr_known[qg];
       assign query_match[qg] = older_store && addr_known[qg] &&
                                (addr[qg*32+2 +: 30] == query_addr[31:2]);
-      assign query_full[qg] = (wstrb[qg*4 +: 4] == 4'b1111);
+      assign query_full[qg] = (wstrb[qg*4 +: 4] == 4'b1111) &&
+                              (!STORE_DATA_CAPTURE || data_known[qg]);
     end
   endgenerate
 
@@ -278,17 +349,35 @@ module lsq #(
     if (reset) begin
       valid     <= '0;
       addr_known<= '0;
+      data_known<= '0;
+      data_raw<= '0;
       committed <= '0;
       sent      <= '0;
       sent_head <= '0;
       sent_tail <= '0;
       sent_count<= '0;
+      commit_tail<='0;ordered_count<='0;
     end else begin
+      // Capture once, before a physical tag can be recycled. Squash and a
+      // fresh allocation below override this update for the affected owner.
+      if(STORE_DATA_CAPTURE)begin
+        for(integer k=0;k<D;k=k+1)begin
+          if(valid[k] && is_store[k] && addr_known[k] && !data_known[k] && !squash_mask[k])begin
+            for(integer r=0;r<R;r=r+1)
+              if(store_cdb[r*CW+`CPU_CDB_VALID_OFF] &&
+                 store_cdb[r*CW+`CPU_CDB_TAG_OFF+:PW]==data_tag[k*PW+:PW])begin
+                wdata[k*32+:32] <= store_cdb[r*CW+`CPU_CDB_VALUE_OFF+:32];
+                data_known[k] <= 1'b1;
+              end
+          end
+        end
+      end
       // squash
       for (i = 0; i < D; i = i + 1) begin
         if (squash_mask[i]) begin
           valid[i]      <= 1'b0;
           addr_known[i] <= 1'b0;
+          data_known[i] <= 1'b0;
           committed[i]  <= 1'b0;
           sent[i]       <= 1'b0;
         end
@@ -301,6 +390,8 @@ module lsq #(
         wstrb[fill_id*4 +: 4]       <= fill_wstrb;
         is_store[fill_id]           <= fill_is_store;
         addr_known[fill_id]         <= 1'b1;
+        data_known[fill_id]         <= 1'b1;
+        data_raw[fill_id]           <= 1'b0;
       end
 
       // address-only fill on issue: data/wstrb 留到 store 真正发射时再填。
@@ -308,9 +399,18 @@ module lsq #(
       if (prefill_valid && valid[prefill_id] && !squash_mask[prefill_id]) begin
         addr[prefill_id*32 +: 32]   <= prefill_addr;
         wdata[prefill_id*32 +: 32]  <= 32'b0;
-        wstrb[prefill_id*4 +: 4]    <= 4'b0;
+        wstrb[prefill_id*4 +: 4]    <= STORE_DATA_CAPTURE ? prefill_wstrb : 4'b0;
+        data_known[prefill_id] <= STORE_DATA_CAPTURE && prefill_wstrb==0;
+        data_tag[prefill_id*PW+:PW] <= prefill_data_tag;
+        data_raw[prefill_id] <= STORE_DATA_CAPTURE!=0;
         is_store[prefill_id]        <= 1'b1;
         addr_known[prefill_id]      <= 1'b1;
+        if(STORE_DATA_CAPTURE)for(integer r=0;r<R;r=r+1)
+          if(store_cdb[r*CW+`CPU_CDB_VALID_OFF] &&
+             store_cdb[r*CW+`CPU_CDB_TAG_OFF+:PW]==prefill_data_tag)begin
+            wdata[prefill_id*32+:32] <= store_cdb[r*CW+`CPU_CDB_VALUE_OFF+:32];
+            data_known[prefill_id] <= 1'b1;
+          end
       end
 
       // commit release / mark
@@ -327,10 +427,17 @@ module lsq #(
         end
       end
 
+      if(ORDERED_STORE_COMMIT)begin
+        for(integer c=0;c<W;c=c+1)
+          if(new_commit[c])sent_fifo[commit_position[c]*LW+:LW]<=commit_id[c*LW+:LW];
+        commit_tail<=commit_tail+QW'(commit_count);
+        ordered_count<=ordered_count+commit_count-FN'(drain_valid&&drain_fire);
+      end
+
       // store drain accepted by memory
       if (drain_valid && drain_fire) begin
         sent[drain_id] <= 1'b1;
-        sent_fifo[sent_tail*LW +: LW] <= drain_id;
+        if(!ORDERED_STORE_COMMIT)sent_fifo[sent_tail*LW +: LW] <= drain_id;
         sent_tail  <= (sent_tail == D - 1) ? '0 : sent_tail + 1'b1;
       end
 
@@ -359,6 +466,8 @@ module lsq #(
             wdata[alloc_id[lane*LW +: LW]*32 +: 32] <= 32'b0;
             wstrb[alloc_id[lane*LW +: LW]*4 +: 4]   <= 4'b0;
             addr_known[alloc_id[lane*LW +: LW]] <= 1'b0;
+            data_known[alloc_id[lane*LW +: LW]] <= 1'b0;
+            data_raw[alloc_id[lane*LW +: LW]] <= 1'b0;
             committed[alloc_id[lane*LW +: LW]]  <= 1'b0;
             sent[alloc_id[lane*LW +: LW]]       <= 1'b0;
           end
@@ -366,6 +475,23 @@ module lsq #(
       end
     end
   end
+
+`ifndef SYNTHESIS
+  integer ref_stores,ref_oldest;
+  logic [31:0] ref_seq;
+  always @(posedge clk)if(!reset && ORDERED_STORE_COMMIT)begin
+    ref_stores=0;ref_oldest=-1;ref_seq='1;
+    for(integer k=0;k<D;k=k+1)if(valid[k]&&is_store[k]&&committed[k]&&!sent[k])begin
+      ref_stores=ref_stores+1;
+      if(ref_oldest<0 || seq[k*32+:32]<ref_seq)begin ref_seq=seq[k*32+:32];ref_oldest=k;end
+    end
+    if(ref_stores!=int'(ordered_count))$fatal(1,"committed store ring count mismatch");
+    if(raw_drain_valid && (ref_oldest<0 || raw_drain_id!=LW'(ref_oldest)))
+      $fatal(1,"commit ring differs from independent oldest-store selection");
+    if(int'(ordered_count)+int'(sent_count)>D)$fatal(1,"committed store ring overflow");
+  end
+  initial if(ORDERED_STORE_COMMIT && (D&(D-1))!=0)$fatal(1,"ordered store ring requires power-of-two depth");
+`endif
 
 `ifdef LOCAL_TRACE
   integer dbg_q = 0;

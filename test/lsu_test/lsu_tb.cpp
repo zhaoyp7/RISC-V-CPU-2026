@@ -19,11 +19,31 @@
 #ifndef TB_LSQ_DEPTH
 #define TB_LSQ_DEPTH 8
 #endif
+#ifndef TB_READ_CACHE
+#define TB_READ_CACHE 0
+#endif
+#ifndef TB_QUERY_CUTTHROUGH
+#define TB_QUERY_CUTTHROUGH 0
+#endif
+#ifndef TB_CACHE_ENQUEUE_BYPASS
+#define TB_CACHE_ENQUEUE_BYPASS 0
+#endif
+#ifndef TB_DCACHE_INDEX_BITS
+#define TB_DCACHE_INDEX_BITS 3
+#endif
+#ifndef TB_DCACHE_WAYS
+#define TB_DCACHE_WAYS 2
+#endif
 
 namespace {
 
 constexpr int PRF = 6;
-constexpr int LSQ = (TB_LSQ_DEPTH == 16) ? 4 : 3;
+constexpr int index_width(unsigned size) {
+    int bits = 0;
+    for (unsigned value = size - 1; value; value >>= 1) ++bits;
+    return bits;
+}
+constexpr int LSQ = index_width(TB_LSQ_DEPTH);
 constexpr int ROB = 5;
 constexpr int DW = 124 + 3 * PRF + LSQ + ROB;
 constexpr int IN_WORDS = (DW + 31) / 32;
@@ -78,6 +98,7 @@ struct Harness {
     std::deque<uint8_t>  st_pending;
     std::vector<uint32_t> accepted_loads;
     std::deque<std::pair<uint32_t, uint32_t>> results;
+    bool last_memory_response = false, last_result_fire = false;
 
     uint32_t read_word(uint32_t addr) const {
         uint32_t a = addr & 0xffff;
@@ -114,6 +135,8 @@ struct Harness {
         const uint32_t st_data = dut->st_req_wdata;
         const uint8_t  st_strb = (uint8_t)dut->st_req_wstrb;
         const bool result_fire = dut->load_result_valid && dut->load_result_ready;
+        last_memory_response = ld_resp;
+        last_result_fire = result_fire;
         const uint32_t result_tag = dut->load_result_tag;
         const uint32_t result_value = dut->load_result_value;
 
@@ -297,6 +320,10 @@ struct Harness {
     }
 
     void address_case(uint32_t base, uint32_t imm, bool store) {
+        // This test writes backing memory directly and observes a bus request.
+        // Start cold so cache hits do not hide the AGU transaction or retain
+        // values changed outside the CPU's store/invalidation protocol.
+        reset();
         // Independent arithmetic reference; observe only real LSU ports.
         const uint32_t want = uint32_t(uint64_t(base) + uint64_t(imm));
         const uint32_t data = 0x89abcdefu ^ base ^ imm;
@@ -345,6 +372,7 @@ struct Harness {
     }
 };
 
+#if !TB_READ_CACHE
 // A reused slot belongs to its new payload, even when enqueue and squash
 // coincide. Check both the result FIFO and request-metadata FIFO externally.
 void run_reused_slot_squash(Harness& h) {
@@ -399,6 +427,358 @@ void run_reused_slot_squash(Harness& h) {
              "metadata slot reuse preserves older request on squash");
 }
 
+#endif
+
+void run_response_bypass(Harness& h) {
+    constexpr bool bypass = true;
+    auto prepare = [&](int count) {
+        h.reset(); h.auto_respond = false;
+        for (int i = 0; i < count; ++i) {
+            h.write_word(0x1800 + 4*i, 0x12345678u + i, 15);
+            h.expect(h.alloc(i, i+1, false), "response path allocate");
+            Uop u;u.dest=10+i;u.is_load=1;u.lsq=i;u.rob=i+1;
+            h.expect(h.issue(u,0x1800+4*i,0), "response path issue");
+        }
+        for(int n=0;n<32 && int(h.ld_pending.size())<count;++n)h.tick();
+        h.expect(int(h.ld_pending.size())==count, "response path requests accepted");
+        h.clear_inputs();
+    };
+
+    prepare(1);
+    h.auto_respond=true;h.dut->load_result_ready=1;h.tick();
+    h.expect(h.last_memory_response && h.last_result_fire==bypass,
+             "response follows configured direct or registered timing");
+    if(!bypass) {
+        h.tick();
+        h.expect(h.last_result_fire,"registered response writes back on next edge");
+    }
+    h.expect(h.results.size()==1 && h.results.front()==std::make_pair(10u,0x12345678u),
+             "direct response tag and value");
+    for(int n=0;n<5;++n)h.tick();
+    h.expect(h.results.size()==1,"direct response is not queued again");
+
+    prepare(1);
+    h.auto_respond=true;h.dut->load_result_ready=0;h.tick();
+    h.expect(!h.last_result_fire && h.dut->load_result_valid,
+             "stalled direct response is buffered");
+    for(int n=0;n<3;++n) {
+        h.write_word(0x1800,0xbad00000u+n,15);h.tick();
+        h.expect(h.dut->load_result_valid && h.dut->load_result_tag==10 &&
+                 h.dut->load_result_value==0x12345678u,
+                 "buffered response payload remains stable under backpressure");
+    }
+    h.dut->load_result_ready=1;h.tick();
+    for(int n=0;n<5;++n)h.tick();
+    h.expect(h.results.size()==1 && h.results.front()==std::make_pair(10u,0x12345678u),
+             "stalled response writes back exactly once");
+
+    prepare(2);
+    h.auto_respond=true;h.dut->load_result_ready=0;h.tick();
+    h.dut->load_result_ready=1;h.tick();
+    h.expect(h.last_memory_response && h.results.size()==1 &&
+             h.results.front()==std::make_pair(10u,0x12345678u),
+             "older buffered result wins over simultaneous younger response");
+    h.tick();
+    h.expect(h.results.size()==2 && h.results.back()==std::make_pair(11u,0x12345679u),
+             "younger response is retained behind older result");
+    for(int n=0;n<5;++n)h.tick();
+    h.expect(h.results.size()==2,"concurrent pop and response have no duplicate");
+
+    prepare(2);
+    h.auto_respond=true;h.dut->load_result_ready=1;
+    h.dut->squash_valid=1;h.dut->squash_seq=h.seq_of_rob[1];h.tick();
+    h.expect(h.last_memory_response && h.last_result_fire==bypass &&
+             h.results.size()==size_t(bypass),"squash preserves configured response timing");
+    h.dut->squash_valid=0;h.tick();
+    h.expect(h.last_memory_response && h.last_result_fire==!bypass &&
+             h.results.size()==1 && h.results.front().first==10,
+             "older response survives while younger response is discarded");
+    for(int n=0;n<5;++n)h.tick();
+    h.expect(h.results.size()==1,"discarded response never reappears");
+
+    // An older outstanding response can reuse a FIFO slot last occupied by a
+    // much younger local result. Squash must classify the new payload, not
+    // stale age metadata left behind when that slot was popped.
+    prepare(1);
+    h.seq_base=100;
+    for(int n=0;n<8;++n) {
+        h.expect(h.alloc(1,2,false),"reuse younger local allocate");
+        Uop u;u.dest=20;u.is_load=1;u.lsq=1;u.rob=2;u.illegal=1;
+        h.expect(h.issue(u,0x1a00,0),"reuse younger local issue");
+        h.dut->load_result_ready=1;
+        for(int i=0;i<32 && int(h.results.size())<n+1;++i)h.tick();
+        h.expect(int(h.results.size())==n+1,"reuse younger local completed");
+        h.commit(1,false,true);
+    }
+    h.results.clear();h.clear_inputs();
+    h.auto_respond=true;h.dut->load_result_ready=0;
+    h.dut->squash_valid=1;h.dut->squash_seq=1;h.tick();
+    h.expect(h.last_memory_response,"reuse old response arrives on squash");
+    h.dut->squash_valid=0;h.dut->load_result_ready=1;
+    for(int n=0;n<8;++n)h.tick();
+    h.expect(h.results.size()==1 && h.results.front()==std::make_pair(10u,0x12345678u),
+             "reused FIFO slot keeps older response across younger squash");
+
+    struct Format { uint32_t size, uns, expected; };
+    for(const Format& f : {Format{BYTE,0,0xffffffffu},Format{BYTE,1,0xffu},
+                          Format{HALF,0,0xffff80ffu},Format{HALF,1,0x80ffu}}) {
+        h.reset();h.auto_respond=false;h.write_word(0x1900,0x123480ffu,15);
+        h.expect(h.alloc(0,1,false),"direct formatted load allocate");
+        Uop u;u.dest=12;u.is_load=1;u.lsq=0;u.rob=1;u.mem_size=f.size;u.mem_uns=f.uns;
+        h.expect(h.issue(u,0x1900,0),"direct formatted load issue");
+        for(int n=0;n<32 && h.ld_pending.empty();++n)h.tick();
+        h.auto_respond=true;h.dut->load_result_ready=1;h.tick();
+        h.expect(h.last_memory_response && h.last_result_fire==bypass,
+                 "formatted response follows configured latency");
+        if(!bypass)h.tick();
+        h.expect(h.results.size()==1 && h.results.front()==std::make_pair(12u,f.expected),
+                 "direct byte/half signed and unsigned reference value");
+    }
+    h.reset();
+}
+
+#if TB_READ_CACHE
+// Observe memory transactions and tagged results, never cache internals.
+void run_read_cache(Harness& h) {
+    const uint32_t a=0xa000,b=0xa004;
+    auto load_uop=[](uint32_t id,uint32_t tag) {
+        Uop u;u.dest=tag;u.is_load=1;u.lsq=id;u.rob=id+1;return u;
+    };
+    auto wait_requests=[&](size_t count) {
+        for(int n=0;n<64 && h.ld_pending.size()<count;++n)h.tick();
+        h.expect(h.ld_pending.size()==count,"cache outstanding memory ownership");
+    };
+    auto wait_results=[&](size_t count) {
+        for(int n=0;n<128 && h.results.size()<count;++n)h.tick();
+        h.expect(h.results.size()==count,"cache tagged result count");
+    };
+    auto read=[&](uint32_t addr,uint32_t expected,uint32_t size=WORD,uint32_t uns=0) {
+        h.expect(h.results.empty(),"cache serial load has no previous duplicate");
+        size_t before=h.accepted_loads.size();
+        h.expect(h.alloc(0,1,false),"cache serial allocate");
+        Uop u=load_uop(0,31);u.mem_size=size;u.mem_uns=uns;
+        h.expect(h.issue(u,addr,0),"cache serial issue");
+        h.dut->load_result_ready=1;wait_results(1);
+        if(!h.results.empty()) {
+            h.expect(h.results.front()==std::make_pair(31u,expected),"cache serial independent value");
+            h.results.pop_front();
+        }
+        h.commit(0,false,true);
+        return h.accepted_loads.size()-before;
+    };
+    auto write=[&](uint32_t addr,uint32_t value,uint32_t size=WORD) {
+        h.expect(h.alloc(1,2,true),"cache store allocate");
+        Uop u;u.dest=40;u.is_store=1;u.lsq=1;u.rob=2;u.mem_size=size;
+        h.expect(h.issue(u,addr,value),"cache store issue");
+        h.commit(1,true,false);h.expect(h.wait_idle("cache store drains"),"cache store memory completion");
+    };
+
+#if TB_CACHE_ENQUEUE_BYPASS
+    h.reset();h.write_word(a,7,15);h.auto_respond=false;
+    h.expect(h.alloc(0,1,false),"early query load allocate");
+    h.expect(h.issue(load_uop(0,10),a,0),"early query load enqueue");
+    h.expect(h.accepted_loads.empty(),"load request waits for registered LSQ snapshot");
+    h.tick();
+#if TB_QUERY_CUTTHROUGH
+    h.expect(h.accepted_loads.size()==1,"empty query stage forwards enqueue into snapshot");
+    h.tick();h.expect(h.accepted_loads.size()==1,"direct query is not also retained as duplicate owner");
+#else
+    h.expect(h.accepted_loads.empty(),"early query preserves snapshot edge");
+    h.tick();h.expect(h.accepted_loads.size()==1,"idle query captures enqueue without LP wait");
+#endif
+    h.auto_respond=true;h.dut->load_result_ready=1;wait_results(1);
+    if(!h.results.empty()) {
+        h.expect(h.results.front()==std::make_pair(10u,7u),"early query tagged response");
+        h.results.pop_front();
+    }
+    h.commit(0,false,true);h.expect(h.wait_idle("early query idle"),"early query owner released");
+#endif
+
+    h.reset();h.write_word(a,0x80ff81feu,15);
+    h.expect(read(a,0x80ff81feu)==1,"cold cache sends one memory request");
+    h.expect(read(a,0x80ff81feu)==0,"warm cache suppresses memory request");
+    h.expect(read(a,0xfffffffeu,BYTE)==0,"cache signed byte format");
+    h.expect(read(a,0xfeu,BYTE,1)==0,"cache unsigned byte format");
+    h.expect(read(a,0xffff81feu,HALF)==0,"cache signed half format");
+    h.expect(read(a,0x81feu,HALF,1)==0,"cache unsigned half format");
+
+    // A hit may finish before an older, unrelated external miss returns.
+    h.write_word(b,0x76543210u,15);h.auto_respond=false;
+    h.expect(h.alloc(1,2,false),"nonblocking miss allocate");
+    h.expect(h.issue(load_uop(1,10),b,0),"nonblocking miss issue");wait_requests(1);
+    size_t requests=h.accepted_loads.size();
+    h.expect(h.alloc(2,3,false),"nonblocking hit allocate");
+    h.expect(h.issue(load_uop(2,11),a,0),"nonblocking hit issue");
+    h.dut->load_result_ready=1;wait_results(1);
+    h.expect(h.ld_pending.size()==1 && h.accepted_loads.size()==requests,
+             "cache hit does not wait for or add to external miss");
+    if(!h.results.empty()) {
+        h.expect(h.results.front()==std::make_pair(11u,0x80ff81feu),"younger hit retains its own tag");
+        h.results.pop_front();
+    }
+    h.auto_respond=true;wait_results(1);
+    if(!h.results.empty()) {
+        h.expect(h.results.front()==std::make_pair(10u,0x76543210u),"older miss retains its own tag");
+        h.results.pop_front();
+    }
+    h.commit(1,false,true);h.commit(2,false,true);
+
+    // A new fill must not retract a miss already stalled on ready=0.
+    h.reset();h.write_word(a,7,15);h.auto_respond=false;
+    h.expect(h.alloc(0,1,false),"locked miss first allocate");
+    h.expect(h.issue(load_uop(0,10),a,0),"locked miss first issue");wait_requests(1);
+    h.load_ready=false;h.expect(h.alloc(1,2,false),"locked miss second allocate");
+    h.expect(h.issue(load_uop(1,11),a,0),"locked miss second issue");
+    for(int n=0;n<32 && !h.dut->ld_req_valid;++n)h.tick();
+    h.expect(h.dut->ld_req_valid,"second miss presents valid under backpressure");
+    h.auto_respond=true;h.dut->load_result_ready=1;h.tick();
+    for(int n=0;n<3;++n) {
+        h.expect(h.dut->ld_req_valid && h.dut->ld_req_addr==a,
+                 "filled line cannot retract or change stalled request");h.tick();
+    }
+    h.load_ready=true;h.tick();wait_results(2);
+    h.expect(h.accepted_loads.size()==2,"locked miss is accepted exactly once");
+    if(h.results.size()==2) {
+        h.expect(h.results[0]==std::make_pair(10u,7u) && h.results[1]==std::make_pair(11u,7u),
+                 "locked duplicate miss data and identities");
+    }
+    h.results.clear();h.commit(0,false,true);h.commit(1,false,true);
+    h.expect(read(a,7)==0,"cache remains usable after stalled miss");
+
+    h.reset();h.write_word(a,0,15);write(a,0x11223344u);
+    h.expect(read(a,0x11223344u)==0,"committed word store allocates cache line");
+    write(a,0xaau,BYTE);
+    h.expect(read(a,0x112233aau)==1,"partial byte store invalidates instead of allocating");
+    h.expect(read(a,0x112233aau)==0,"byte-updated line refills correctly");
+    write(a,0xbeefu,HALF);
+    h.expect(read(a,0x1122beefu)==1,"partial half store preserves untouched bytes");
+
+    // Cache hit eligibility must still obey older unknown store disambiguation.
+    h.reset();h.write_word(a,7,15);read(a,7);
+    h.expect(h.alloc(1,2,true),"unknown store reserves older age");
+    h.expect(h.alloc(0,1,false),"cached younger load allocate");
+    h.expect(h.issue(load_uop(0,10),a,0),"cached younger load issue");
+    requests=h.accepted_loads.size();h.dut->load_result_ready=1;
+    for(int n=0;n<10;++n)h.tick();
+    h.expect(h.results.empty() && h.accepted_loads.size()==requests,
+             "warm line cannot bypass unknown older store");
+    Uop st;st.dest=40;st.is_store=1;st.lsq=1;st.rob=2;
+    h.expect(h.issue(st,a,9),"older store data becomes ready");h.commit(1,true,false);
+    h.dut->load_result_ready=1;wait_results(1);
+    if(!h.results.empty()) {
+        h.expect(h.results.front()==std::make_pair(10u,9u),"older store forwarding wins over old cached value");
+        h.results.pop_front();
+    }
+    h.commit(0,false,true);h.expect(h.wait_idle("unknown store completion"),"unknown store final idle");
+
+    // An older load can fill after a younger store's issue-time invalidation.
+    // The later committed drain must still invalidate that old cached word.
+    h.reset();h.write_word(a,7,15);
+    h.expect(h.alloc(0,1,false),"refill-before-drain older load allocate");
+    h.expect(h.alloc(1,2,true),"refill-before-drain partial store allocate");
+    Uop partial=st;partial.mem_size=BYTE;
+    h.expect(h.issue(partial,a,9),"partial store issues before older load returns");
+    h.expect(h.issue(load_uop(0,10),a,0),"older load ignores younger partial store");
+    h.dut->load_result_ready=1;wait_results(1);
+    if(!h.results.empty()) {
+        h.expect(h.results.front()==std::make_pair(10u,7u),"older refill contains old word");
+        h.results.pop_front();
+    }
+    h.commit(0,false,true);h.store_ready=false;h.commit(1,true,false);
+    h.expect(h.alloc(0,1,false),"younger load before partial drain allocate");
+    h.expect(h.issue(load_uop(0,11),a,0),"younger load before partial drain issue");
+    requests=h.accepted_loads.size();h.dut->load_result_ready=1;
+    for(int n=0;n<8;++n)h.tick();
+    h.expect(h.results.empty() && h.accepted_loads.size()==requests,
+             "older partial store blocks resident old cache word");
+    h.store_ready=true;wait_results(1);
+    if(!h.results.empty()) {
+        h.expect(h.results.front()==std::make_pair(11u,9u),"partial drain invalidates later old refill");
+        h.results.pop_front();
+    }
+    h.expect(h.accepted_loads.size()==requests+1,"partial drain requires fresh memory value");
+    h.commit(0,false,true);h.expect(h.wait_idle("refill-before-drain idle"),"partial drain final idle");
+
+    // Invalidation cancels an already outstanding cache fill, even if that
+    // speculative store is later squashed without changing memory.
+    h.reset();h.write_word(a,7,15);h.auto_respond=false;
+    h.expect(h.alloc(0,1,false),"old fill allocate");
+    h.expect(h.issue(load_uop(0,10),a,0),"old fill issue");wait_requests(1);
+    h.expect(h.alloc(1,2,true),"younger invalidating store allocate");
+    h.expect(h.issue(st,a,9),"younger invalidating store issue");
+    h.auto_respond=true;h.dut->load_result_ready=1;wait_results(1);
+    if(!h.results.empty()) {
+        h.expect(h.results.front()==std::make_pair(10u,7u),"older load retains old memory value");
+        h.results.pop_front();
+    }
+    h.squash(0);h.commit(0,false,true);
+    h.expect(read(a,7)==1,"invalidated pending fill never resurrects line");
+
+    h.reset();h.write_word(a,7,15);h.auto_respond=false;
+    h.expect(h.alloc(TB_LSQ_DEPTH-1,0,false),"canceled miss age seed");
+    h.expect(h.alloc(0,1,false),"canceled cache miss allocate");
+    h.expect(h.issue(load_uop(0,10),a,0),"canceled cache miss issue");wait_requests(1);
+    h.squash(0);h.auto_respond=true;h.dut->load_result_ready=1;
+    for(int n=0;n<8;++n)h.tick();
+    h.expect(h.results.empty(),"canceled cache miss has no result");
+    h.expect(read(a,7)==1,"canceled response never fills cache");
+
+    if(TB_DCACHE_WAYS==2) {
+        h.reset();const uint32_t stride=(1u<<TB_DCACHE_INDEX_BITS)*4;
+        h.write_word(a,1,15);h.write_word(a+stride,2,15);h.write_word(a+2*stride,3,15);
+        h.expect(read(a,1)==1 && read(a+stride,2)==1,"two ways hold both colliding lines");
+        h.expect(read(a,1)==0,"cache touch refreshes LRU");
+        h.expect(read(a+2*stride,3)==1,"third colliding line misses");
+        h.expect(read(a,1)==0,"most recent colliding line survives replacement");
+        h.expect(read(a+stride,2)==1,"least recent colliding line is evicted");
+    }
+
+    // A committed store and a memory response share one cache data write port.
+    h.reset();h.write_word(a,7,15);h.write_word(b,0,15);
+    h.auto_respond=false;h.store_ready=false;
+    h.expect(h.alloc(1,2,true),"fill-port store allocate");
+    h.expect(h.issue(st,b,11),"fill-port store issue");h.commit(1,true,false);
+    h.expect(h.alloc(0,1,false),"fill-port load allocate");
+    h.expect(h.issue(load_uop(0,10),a,0),"fill-port load issue");wait_requests(1);
+    h.store_ready=true;h.tick(); // Capture the committed maintenance payload.
+    h.auto_respond=true;h.dut->load_result_ready=1;h.tick();
+    wait_results(1);
+    if(!h.results.empty()) {
+        h.expect(h.results.front()==std::make_pair(10u,7u),"cache write conflict cannot drop load result");
+        h.results.pop_front();
+    }
+    h.commit(0,false,true);h.expect(h.wait_idle("fill port drain"),"fill-port final idle");
+    h.expect(read(b,11)==0,"committed store wins cache write port");
+    h.expect(read(a,7)==1,"conflicting read fill is safely skipped");
+
+    // Result credits cover cache hits as well as external requests.
+    h.reset();h.write_word(a,13,15);read(a,13);requests=h.accepted_loads.size();
+    const int count=TB_LSQ_DEPTH>8?9:8;
+    for(int id=0;id<count;++id) {
+        h.expect(h.alloc(id,id+1,false),"cache credit allocate");
+        h.expect(h.issue(load_uop(id,10+id),a,0),"cache credit issue");
+    }
+    for(int n=0;n<20;++n)h.tick();
+    h.expect(h.results.empty() && h.accepted_loads.size()==requests,"stalled cache hits retain ownership without memory");
+    h.dut->load_result_ready=1;wait_results(count);
+    bool seen[16]={};
+    while(!h.results.empty()) {
+        auto result=h.results.front();h.results.pop_front();int id=int(result.first)-10;
+        bool ok=id>=0 && id<count;
+        h.expect(ok && result.second==13,"cache credit result identity and value");
+        if(ok){h.expect(!seen[id],"cache credit result unique");seen[id]=true;}
+    }
+    for(int id=0;id<count;++id){h.expect(seen[id],"every stalled cache hit completes");h.commit(id,false,true);}
+    h.expect(h.wait_idle("cache credits drain"),"cache credits final idle");
+
+    h.reset();h.write_word(0,0x55667788u,15);read(0,0x55667788u);
+    h.expect(read(0x80000000u,0x55667788u)==1,"MMIO bypasses resident RAM alias");
+    h.expect(read(0x80000000u,0x55667788u)==1,"MMIO response is never cached");
+    h.expect(read(0,0x55667788u)==0,"MMIO does not replace RAM line");
+    h.reset();
+}
+#endif
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -409,8 +789,17 @@ int main(int argc, char** argv) {
     Harness h;
     h.dut = &dut;
     h.reset();
+
+    run_response_bypass(h);
+#if !TB_READ_CACHE
+    const long reuse_failures_before=h.fails;
     run_reused_slot_squash(h);
+    std::printf("MAIN_FIFO_REUSE_REGRESSION failures=%ld\n",h.fails-reuse_failures_before);
     h.reset();
+#endif
+#if TB_READ_CACHE
+    run_read_cache(h);
+#endif
 
     // ---- store: complete at issue, write only after commit ----------------
     h.expect(h.alloc(0, 1, true), "store alloc");

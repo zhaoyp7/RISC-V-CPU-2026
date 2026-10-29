@@ -9,6 +9,30 @@
 #include <vector>
 
 constexpr int W=TB_W, R=TB_R, D=TB_D, IW=TB_IW, DW=150;
+#ifndef TB_ALU_ONLY
+#define TB_ALU_ONLY 0
+#endif
+#ifndef TB_LOOKAHEAD
+#define TB_LOOKAHEAD 0
+#endif
+#ifndef TB_CONTROL_HINT
+#define TB_CONTROL_HINT 0
+#endif
+#ifndef TB_RETIRE_PREFILL
+#define TB_RETIRE_PREFILL 0
+#endif
+#ifndef TB_SPECIAL_PRIORITY
+#define TB_SPECIAL_PRIORITY 0
+#endif
+#ifndef TB_REUSE_ISSUED
+#define TB_REUSE_ISSUED 0
+#endif
+#ifndef TB_ALU0_HINT
+#define TB_ALU0_HINT 0
+#endif
+#ifndef TB_MEMORY_HINT
+#define TB_MEMORY_HINT 0
+#endif
 using Bits=std::array<uint32_t,(DW+31)/32>;
 template<class V> void put(V& v,int off,int width,uint32_t x) {
     for(int b=0;b<width;++b) {
@@ -28,6 +52,7 @@ struct Stim {
     int n=0; std::array<Bits,W> bits{};
     uint32_t base=0, cut=0; bool squash=false;
     unsigned ready=0, wake_valid=0; uint32_t wake_tag=0;
+    bool hint=false; unsigned hint_tag=0;
 };
 struct Test {
     Vissue_queue_select_top& d;
@@ -53,11 +78,31 @@ struct Test {
         for(auto& x:b)x=rng();
         put(b,117,1,store);put(b,128,6,t1);put(b,134,1,r1);
         put(b,135,6,t2);put(b,141,1,r2);
+        // Generate coherent instruction classes so the constrained-port
+        // scoreboard exercises both supported and unsupported candidates.
+        if(TB_ALU_ONLY) {
+            put(b,102,1,1);put(b,103,5,rng()%14);
+            for(int off=113;off<=118;++off)put(b,off,1,0);
+            put(b,117,1,store);
+            if(!store) {
+                unsigned kind=rng()%12;
+                if(kind<5)put(b,113+kind,1,1);
+                else if(kind==5)put(b,118,1,1);
+                else if(kind==6)put(b,102,1,0);
+                else if(kind==7)put(b,103,5,14+rng()%4);
+            }
+        }
         return b;
+    }
+    bool lane1_ok(const Bits& b) {
+        if(!get(b,102,1))return false;
+        for(int off=113;off<=118;++off)if(get(b,off,1))return false;
+        unsigned op=get(b,103,5);return op<14||op>17;
     }
     void reset() {
         entries={};d.reset=1;d.in_valid=0;d.in_alloc_mask=0;d.out_ready=0;
         d.wake_valid=0;d.wake_tag=0;d.squash_valid=0;d.squash_seq=0;d.seq_base=0;
+        d.lookahead_valid=0;d.lookahead_tag=0;
         for(int i=0;i<(W*DW+31)/32;++i)d.in_uop[i]=0;
         edge();d.reset=0;d.eval();
     }
@@ -67,6 +112,7 @@ struct Test {
         for(int i=0;i<(W*DW+31)/32;++i)d.in_uop[i]=0;
         for(int l=0;l<W;++l)for(int b=0;b<DW;++b)put(d.in_uop,l*DW+b,1,get(s.bits[l],b,1));
         d.wake_valid=s.wake_valid;d.wake_tag=s.wake_tag;
+        d.lookahead_valid=s.hint;d.lookahead_tag=s.hint_tag;
         d.out_ready=s.ready;d.squash_valid=s.squash;d.squash_seq=s.cut;d.eval();
         std::array<bool,D> killed{}, used{};
         std::vector<int> order;
@@ -75,19 +121,67 @@ struct Test {
             auto& e=entries[i];count+=e.valid;
             killed[i]=e.valid&&s.squash&&e.seq>s.cut;
             free_after+=!e.valid||killed[i];
-            if(e.valid&&!killed[i])order.push_back(i);
+            if(e.valid)order.push_back(i);
         }
         std::sort(order.begin(),order.end(),[&](int a,int b){
             return entries[a].seq!=entries[b].seq ? entries[a].seq<entries[b].seq : a<b;
         });
         std::array<int,IW> sel;sel.fill(-1);
         std::array<bool,IW> pre{};
+        // Independent policy: stable-sort the general port's candidates by
+        // instruction class, then age. Cancel each selected transaction only
+        // after choosing both ports; cancellation never changes payload muxes.
+        if(TB_SPECIAL_PRIORITY&&TB_ALU_ONLY&&IW==2)
+            std::stable_partition(order.begin(),order.end(),[&](int i) {
+                const auto& e=entries[i];
+                bool memory=get(e.bits,116,1)||get(e.bits,117,1);
+                bool r1=e.r1||(TB_MEMORY_HINT&&memory&&s.hint&&get(e.bits,128,6)==s.hint_tag);
+                bool full=r1&&e.r2;
+                if((TB_CONTROL_HINT&&(get(e.bits,113,1)||get(e.bits,115,1)))||
+                   (TB_ALU0_HINT&&lane1_ok(e.bits)))
+                    full=(e.r1||(s.hint&&get(e.bits,128,6)==s.hint_tag))&&
+                         (e.r2||(s.hint&&get(e.bits,135,6)==s.hint_tag));
+                bool pf=r1&&!e.r2&&get(e.bits,117,1)&&!e.addr_sent;
+                return !lane1_ok(e.bits)&&(full||pf);
+            });
         for(int l=0;l<IW;++l)for(int i:order) {
-            auto& e=entries[i];bool full=e.r1&&e.r2;
-            bool pf=e.r1&&!e.r2&&get(e.bits,117,1)&&!e.addr_sent;
-            if(!used[i]&&(full||(l==0&&pf))) {sel[l]=i;used[i]=true;pre[l]=!full;break;}
+            auto& e=entries[i];
+            bool memory=get(e.bits,116,1)||get(e.bits,117,1);
+            bool r1=e.r1||(TB_MEMORY_HINT&&memory&&s.hint&&get(e.bits,128,6)==s.hint_tag);
+            bool full=r1&&e.r2;
+            if((TB_LOOKAHEAD&&TB_ALU_ONLY&&l==1) ||
+               (l==0&&((TB_CONTROL_HINT&&(get(e.bits,113,1)||get(e.bits,115,1)))||
+                       (TB_ALU0_HINT&&lane1_ok(e.bits)))))
+                full=(e.r1||(s.hint&&get(e.bits,128,6)==s.hint_tag))&&
+                     (e.r2||(s.hint&&get(e.bits,135,6)==s.hint_tag));
+            bool pf=r1&&!e.r2&&get(e.bits,117,1)&&!e.addr_sent;
+            bool supported=!(TB_ALU_ONLY&&l==1)||lane1_ok(e.bits);
+            if(!used[i]&&supported&&(full||(l==0&&pf))) {sel[l]=i;used[i]=true;pre[l]=!full;break;}
+        }
+        for(int l=0;l<IW;++l)if(sel[l]>=0&&killed[sel[l]]){sel[l]=-1;pre[l]=false;}
+        int mem=-1;
+        for(int i=0;i<D;i++) {
+            const auto& e=entries[i];
+            bool store=get(e.bits,117,1),load=get(e.bits,116,1);
+            bool r1=e.r1||(TB_MEMORY_HINT&&s.hint&&get(e.bits,128,6)==s.hint_tag);
+            if(e.valid&&(load||store)&&r1&&(e.r2||(store&&!e.addr_sent))&&
+               (mem<0||e.seq<entries[mem].seq||(e.seq==entries[mem].seq&&i<mem)))mem=i;
+        }
+        bool mpf=mem>=0&&get(entries[mem].bits,117,1)&&!entries[mem].r2&&!entries[mem].addr_sent;
+        check(bool(d.memory_addr_only)==mpf,"memory prefill ignores hints and squash");
+        if(mem>=0) {
+            check(d.memory_seq==entries[mem].seq,"memory payload oldest registered-ready sequence");
+            bool same=true;
+            for(int bit=0;bit<DW;bit++)same &= get(d.memory_uop,bit,1)==get(entries[mem].bits,bit,1);
+            check(same,"memory payload matches independent registered-ready winner");
         }
         check(d.count==count,"occupied count");check(d.free_count==D-count,"free count");
+        std::array<bool,D> released{};
+        if(TB_REUSE_ISSUED)for(int l=0;l<IW;++l)
+            if(sel[l]>=0&&(s.ready>>l&1)&&(!pre[l]||TB_RETIRE_PREFILL)) {
+                released[sel[l]]=true;
+                if(entries[sel[l]].valid&&!killed[sel[l]])++free_after;
+            }
         bool accept=free_after>=s.n;
         check(bool(d.in_ready)==accept,"dispatch capacity after squash");
         for(int l=0;l<IW;++l) {
@@ -102,14 +196,14 @@ struct Test {
         }
         std::array<int,W> slots{};std::array<bool,D> allocated{};
         for(int l=0;l<W;++l)for(int i=0;i<D;++i)
-            if((!entries[i].valid||killed[i])&&!allocated[i]) {slots[l]=i;allocated[i]=true;break;}
+            if((!entries[i].valid||killed[i]||released[i])&&!allocated[i]) {slots[l]=i;allocated[i]=true;break;}
         for(int i=0;i<D;++i) {
             auto& e=entries[i];
             if(killed[i]) {e.valid=false;e.addr_sent=false;e.r1=false;e.r2=false;}
             else if(e.valid) {e.r1|=hit(s,get(e.bits,128,6));e.r2|=hit(s,get(e.bits,135,6));}
         }
         for(int l=0;l<IW;++l)if(sel[l]>=0&&(s.ready>>l&1)) {
-            auto& e=entries[sel[l]];if(pre[l])e.addr_sent=true;else e.valid=false;
+            auto& e=entries[sel[l]];if(pre[l]&&!TB_RETIRE_PREFILL)e.addr_sent=true;else e.valid=false;
         }
         if(accept)for(int l=0;l<s.n;++l) {
             auto& e=entries[slots[l]];e={};e.valid=true;e.seq=s.base+l;e.bits=s.bits[l];
@@ -120,6 +214,73 @@ struct Test {
     }
     void run() {
         reset();
+        if(TB_CONTROL_HINT) {
+            for(int kind=0;kind<4;kind++)for(int scenario=0;scenario<8;scenario++) {
+                reset();Stim t;t.n=1;t.base=20;
+                Bits b=uop(false,false,false,11,12);
+                put(b,102,1,1);put(b,103,5,0);
+                for(int off=113;off<=118;off++)put(b,off,1,0);
+                put(b,kind==0?113:kind==1?115:kind==2?116:117,1,1);
+                if(scenario==0||scenario==7)put(b,141,1,1);
+                if(scenario==1)put(b,135,6,11);
+                t.bits[0]=b;step(t);
+                t={};t.wake_valid=1;t.wake_tag=11;t.ready=3;t.hint=true;t.hint_tag=11;
+                if(R>1&&scenario==2){t.wake_valid=3;t.wake_tag|=12<<6;}
+                if(scenario==3)t.ready=0;
+                if(scenario==4){t.squash=true;t.cut=19;}
+                if(scenario==5){t.squash=true;t.cut=20;}
+                if(scenario==7)t.hint=false;
+                step(t);
+                t={};t.wake_valid=1;t.wake_tag=12;t.ready=3;step(t);
+                t={};t.ready=3;step(t);step(t);
+            }
+            reset();
+        }
+        if(TB_LOOKAHEAD&&TB_ALU_ONLY&&IW==2) {
+            for(int scenario=0;scenario<8;++scenario) {
+                reset();Stim t;t.n=1;t.base=20;
+                Bits b=uop(false,false,false,11,12);
+                put(b,102,1,1);put(b,103,5,0);
+                for(int off=113;off<=118;++off)put(b,off,1,0);
+                if(scenario==0||scenario==7)put(b,141,1,1);
+                if(scenario==1)put(b,135,6,11);
+                if(scenario==4)put(b,116,1,1); // load never uses hint
+                t.bits[0]=b;step(t);
+                t={};t.wake_valid=1;t.wake_tag=11;t.ready=3;t.hint=true;t.hint_tag=11;
+                if(R>1&&scenario==2) {t.wake_valid=3;t.wake_tag|=12<<6;}
+                if(scenario==3)t.ready=0;
+                if(scenario==5) {t.squash=true;t.cut=19;}
+                if(scenario==6) {t.squash=true;t.cut=20;}
+                if(scenario==7)t.hint=false; // actual CDB alone cannot issue early
+                step(t);
+                t={};t.wake_valid=1;t.wake_tag=12;t.ready=3;step(t);
+                t={};t.ready=3;step(t);step(t);
+            }
+            reset();
+        }
+        if(TB_ALU_ONLY&&IW==2) {
+            // For every unsupported class, lane1 must skip it, reserve
+            // lane0's oldest entry under backpressure, and retain the loser.
+            for(int kind=0;kind<11;++kind) {
+                reset();
+                for(int n=0;n<4;++n) {
+                    Stim t;t.n=1;t.base=10+n;
+                    Bits b=uop(false,true,true,1,2);
+                    put(b,102,1,1);put(b,103,5,0);
+                    for(int off=113;off<=118;++off)put(b,off,1,0);
+                    if(n==1) {
+                        if(kind<6)put(b,113+kind,1,1);
+                        else if(kind<10)put(b,103,5,14+kind-6);
+                        else put(b,102,1,0);
+                    }
+                    t.bits[0]=b;step(t);
+                }
+                Stim t;t.ready=2;step(t); // oldest held; third issued
+                t={};t.squash=true;t.cut=11;t.ready=3;step(t);
+                t={};t.ready=3;step(t);step(t);
+            }
+            reset();
+        }
         // Old partial store can prefill while an independently-ready lane issues.
         Stim s;s.n=1;s.base=10;s.bits[0]=uop(true,true,false,3,4);step(s);
         s={};s.n=1;s.base=20;s.bits[0]=uop(false,true,true,5,6);step(s);
@@ -173,6 +334,10 @@ struct Test {
                 for(int l=0;l<W;++l)t.bits[l]=uop((rng()%3)==0,rng()&1,rng()&1,rng()%64,rng()%64);
                 t.ready=rng()% (1u<<IW);t.wake_valid=rng()%(1u<<R);
                 for(int r=0;r<R;++r)t.wake_tag|=(rng()%64)<<(6*r);
+                if(TB_LOOKAHEAD&&(rng()&1)&&t.wake_valid) {
+                    int r=(t.wake_valid&1)?0:1;
+                    t.hint=true;t.hint_tag=(t.wake_tag>>(6*r))&63;
+                }
                 t.squash=(rng()%23)==0;t.cut=base;
                 if(t.squash) {
                     int i=rng()%D;
@@ -182,7 +347,7 @@ struct Test {
                 step(t);base+=rng()%4; // includes equal ages, no wrap within batch
             }
         }
-        std::printf("IQ select W=%d R=%d IW=%d D=%d cycles=%u checks=%u fails=%u\n",W,R,IW,D,cycles,checks,fails);
+        std::printf("IQ select W=%d R=%d IW=%d D=%d ALU_ONLY=%d LOOKAHEAD=%d cycles=%u checks=%u fails=%u\n",W,R,IW,D,TB_ALU_ONLY,TB_LOOKAHEAD,cycles,checks,fails);
     }
 };
 int main(int argc,char** argv) {

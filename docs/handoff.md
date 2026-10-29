@@ -1,21 +1,228 @@
 # RISC-V CPU 2026 — 协作者交接（P2 功能完成，性能优化中）
 
-## main正确性修复合并（2026-10-26）
+## 当前候选正式opt已完成：417.62MHz /22,315.19µm²（2026-10-26）
 
-本次从原main f4a0555独立整理三项修复：3710dd1派发接收、ef5e2aex0组内旁路、81391caLSU FIFO槽复用。
-生产文件仅core_ooo.sv/rename.sv/lsu.sv三变；默认W2/ROB16/PRF48/IQ8/CDB2/LSQ16及I$容量不变，无D-cache或性能结构合入。
-原版定向复现：派发W1/W2各72检查6失败，x0 W2 529检查260失败，LSU两种槽复用共2失败；修复后全部零失败。
-完整rename参考200072/200074零失败，run_all ALLPASS。默认W1/W2及压力W2/ROB32/PRF48三组各19/19。
-新默认W2/W1 IPC .522150576060/.498844480672；压力W2仅作为正确性覆盖，IPC .584363386070，不提升为默认配置。
-24生产输入及三档实际容量/PRF存储48字核验。本轮无综合；原456.12MHz/19808.712µm²属于修复前f4a0555，不代表修复后main的PPA。
-性能候选标签cache32-zero-opt-20261026与feat/ipc-lsu-read-cache仍指向29e0fc8，24源码匹配其opt报告，未改写。
-候选正式opt仍为W2 IPC .659404/22315.189µm²/417.618MHz，生产源码04eee15；仅作独立候选保留。
-回滚点main-before-correctness-20261026保留f4a0555；验证归档build/main_correctness_merge_20261026/。
-详见[独立正确性修复](experiments/main-correctness-merge.md)。以下均为修复前历史测量，不能直接当作新main数据。
+生产04eee15，测量HEAD76e4f73；W2/ROB32/PRF64/IQ8/CDB2/LSQ16/D$32B。
+候选W2/W1 IPC .659404085311/.584500492456，opt22315.189220µm²/417.618271MHz。
+当前main f4a0555：W2 IPC .522108164153，opt19808.712260µm²/456.124722MHz。
+opt对opt较main：IPC+26.296%、面积+12.653%、频率−8.442%、IPC×频率+15.634%、单位面积吞吐+2.646%。
+候选diag→opt：面积−4.837%、频率+8.238%。性能分支保留，尚不自动合main；正式成绩仍未达到阶段2门槛。
+本轮用户只授权一次opt，15:57:12启动，耗时626.59秒，完成后已即时给同模式对比表。
+候选24生产输入与diag/七组正确性/完整单测逐hash一致，复用其验证结果；本轮不改RTL、不重复回归。
+main24归档源码已与git show当前main和快照逐项核验；7库/工具/SDC/ABC及六perf输入/答案/指令数匹配。
+实际综合容量32/64/8/16、缓存8word核验；归档build/synth/cache32_zero_opt_checkpoint/含verification/comparison/performance-comparability等JSON。
+综合全程持/tmp/riscv_cpu_synthesis.lock，内存保护未触发：最低MemAvailable3.552GiB、最低SwapFree3.499GiB。
+所有本轮后台任务已完成；默认配置及main不改，没有合并或推送，没有第二次综合。
+后续若优化时序，应重新定位opt扁平网表的_426523_/QN→_432976_/D（D端2.339ns），不直接沿用diag的层级关键链。
+详见docs/experiments/cache32-opt.md与docs/perf-log.md；Git自主授权持续，官方Makefile/config.mk/scripts/filelist/SRAM未改。
+以下为前置完成检查点。
 
-## 修复前main历史检查点：opt 456.12 MHz / 19,808.71 µm²
+## 当前候选：32B缓存＋x0组内旁路修复（2026-10-26，已完成核验）
 
-当前分支`main`，主线检查点`main-freq-age-matrix-20261025`。
+生产源码04eee15，当前分支feat/ipc-lsu-read-cache；默认cacheoff，main仍f4a0555。
+ROB32/PRF64/IQ8/CDB2/LSQ16，D$4set×2way×4B。
+W2/W1 IPC .659404085311/.584500492456；W2 diagnose23449.323680µm²/385.832705MHz。
+较原64B/faa8c87：面积−1.784%、吞吐+1.424%、单位面积吞吐+3.265%；
+较ba7f：吞吐+4.106%、单位面积吞吐+1.683%。保留组合候选与x0修复，仍需继续压面积。
+修复根因：前序写rd0跳转的完成tag不得覆盖后序x0源。旧W2黑盒529checks260fails，新W2零失败，W1 265零失败；完整随机参考200072/200074零失败。
+32B/64B/默认×W1/W2六组新跑各19/19，另ROB32/PRF48/64B W2恢复19/19，IPC .659214801。
+新run_all ALLPASS，普通/统计输入、答案、周期相同、计数守恒；24源码/7库/工具约束及实际容量/PRF存储核验。
+只有32B组合有新PPA；不得把修复后64B/默认/PRF48仿真数据与修复前PPA配成新实测行。
+本轮两次diagnose：原32B .659243/23459.209/383.952；组合修复 .659404/23449.324/385.833，均已即时给当前/前版/ba7f/main表。
+所有综合单实例持/tmp/riscv_cpu_synthesis.lock；第二次内存保护未触发，最低MemAvailable2.854GiB，最低SwapFree3.497GiB。
+归档build/synth/cache32_admission/和cache32_zero_fix/；docs/perf-log仅新增同时实测IPC/PPA的两行。
+所有本轮后台任务已完成；无opt/合main/推送。用户Git自主授权持续，官方Makefile/config.mk/scripts/filelist/SRAM均未修改。
+用户询问模板302f0cf：它已在HEAD祖先链，主要加入ABC驱动/负载约束，启用buffer与cell sizing；本轮沿用默认值，不改工具口径。
+下一方向按当前ROB→LSU→CDB→rename准入控制链与ROB/LSQ面积继续分析；不要盲目再缩PRF或只扫缓存容量。
+以下为前置历史记录。
+
+## 最新：派发接收已修复，PRF64继续保留（2026-10-26）
+
+生产源码faa8c87，当前分支feat/ipc-lsu-read-cache；默认cacheoff，main仍f4a0555。
+PRF64/W2 .668276，W1 .590333，diag23875.147µm²/375.37MHz；较ba7f吞吐+2.644%、面积效率−1.533%。
+PRF56两档19/19且hanoi恢复正常，但面积仅省99.844、F降367.29MHz，不采用。
+64四组各19/19、56复用同源默认两档，run_allALLPASS；plain/stats一致、24输入/7库/约束/实际存储尺寸核验。
+PRF52仅W2 .661974/19项PASS，无PPA；PRF48 statement_test失败（18/19），首控制流分歧在0xD4附近，尚未修复。
+32B缓存三smoke+六perf .659243，无完整19项/PPA；作为未来压缓存面积的候选，不升级。
+用户新规则：绝不并行综合，所有diagnose/opt持/tmp/riscv_cpu_synthesis.lock；其他任务可并行且监控内存。
+两次有效diag都已给用户三方表；无opt/合main/推送。详见experiments/admission-prf-hour.md。以下为历史状态。
+
+
+## 最新状态：缓存候选已测，发现派发握手缺陷（2026-10-26）
+
+当前feat/ipc-lsu-read-cache，生产源码521fcc7。ROB32/PRF64/IQ8/LSQ16+D$64B：
+W2/W1 IPC .668276/.590333，diagnose23875.147µm²/375.92MHz。
+较ba7f0a3 IPC+7.574%、F−4.442%、面积+4.242%、吞吐+2.795%、单位面积吞吐−1.388%。
+四组各19/19，run_allALLPASS，普通/统计输入答案周期一致，24源码/7库/约束/尺寸核验。仅保留独立候选，默认cacheoff，main仍f4a0555。
+LSQ8 W2 .588446（19/19），IPC下降11.95%，无PPA；PRF56 hanoi50M超时。
+PRF56暴露core_ooo的ren_fire仅用ren_ready、未限定rename_ready：tag不足时ROB/后端可能接收rename未接受的指令。
+新增test/core_admission_test独立fixture在未改生产RTL上72checks/6fails复现；尚未修复，不计入历史run_all通过结论，也未加入run_all。
+建议下一任务：以rename实际接收资格限定派发，先让该定向测试通过，再重跑默认/ROB32 W1/W2及PRF56完整回归与PPA。不要直接合main。
+新目标11:30未能连续执行：时钟从约11:07跳到12:36；中断原因未确认。发现截止已过后停止追加优化，仅记录交接。无opt/合main/推送。
+详见[查询优化](experiments/cache-query-bypass.md)与[派发接收缺陷](experiments/prf-pressure-admission.md)。以下为历史检查点。
+
+
+## 最新实验：64B读缓存暂不采用（2026-10-26）
+
+分支feat/ipc-lsu-read-cache，功能37e3b1d；默认缓存关闭，main仍f4a0555。
+ROB32+64B缓存：W2/W1 IPC0.654101/0.582267，diagnose23800.891µm²/329.47MHz；
+较ba7f0a3 IPC+5.292%，频率−16.248%，IPC×频率−11.816%，不升级默认。
+四配置各19/19、run_allALLPASS、plain/stats输入答案周期一致，24源码/7库/约束和实际尺寸已核验。
+128B/256B仅IPC0.664876/0.671951，ROB16+64B0.580314，均19/19，无PPA。
+首版W2 queens触发已有FIFO槽年龄残留bug，37e3b1d修复并有原版失败回归；默认关闭但含修复的RTL没有单独PPA，不能沿用旧频率。
+下一步应隔离store排空地址→LSU读结果→CDB/PRF长链，再评估查找/选择寄存化；尚未实现。
+本次连续执行授权到07:30未达成，约01:27后执行长间隔，09:52恢复检查，原因未确认；恢复后只做已有结果核验与记录。
+无opt/合main/推送；详见[缓存实验](experiments/lsu-read-cache.md)。以下为历史检查点。
+
+
+## 当前检查点：固定槽分支查找（393.39 MHz，保留IPC）
+
+固定物理槽匹配分支，保留最年轻同tag语义；预测payload先形成，最后限定有效恢复动作。
+ROB32/PRF64/IQ8/LSQ16：W2/W1 IPC0.621226/0.558328，diagnose22,903.492 µm²/393.39 MHz。
+较007bd09：频率+6.877%，面积+0.166%，全部正确性/perf周期与统计计数器不变；保留独立检查点。
+四组各19/19，新增ROB边界先在原版通过，再在候选141970/141968零失败；最终单任务run_all ALL PASS。
+两次Verilator编译线程池内部故障及统计等待超时日志均保留；单测CPU_UNIT_JOBS=1重跑通过，未改生产工具/约束。
+24输入仅ROB改变，7库/工具约束及实际容量核验，一次diag约9.92分钟；默认16不复用旧PPA。
+一小时相对ce32682累计W2 IPC+2.236%、W1+1.680%、Fmax+4.841%、面积+0.110%、W2 IPC×Fmax+7.185%。
+无opt/合main/推送；归档build/synth/rob_branch_match/，详见[ROB分支查找](experiments/rob-branch-match.md)。
+本次一小时迭代窗口已结束，工具故障的必要收尾验证已补齐；停止追加新实验。
+
+## 当前检查点：load响应直通（IPC改善，频率下降）
+
+空结果FIFO时，存活内存响应直通CDB；反压则入预留队列，旧队首优先，保留squash与前递语义。
+ROB32/PRF64/IQ8/LSQ16：W2/W1 IPC0.621226/0.558328，diagnose22,865.599 µm²/368.08 MHz。
+较ce32682：IPC+2.236%/+1.680%、频率-1.905%、面积-0.056%；W2 IPC×Fmax仅+0.288%，保留独立IPC候选，未升级默认。
+四组各19/19，普通/统计周期相同、全部守恒核验；最终run_all ALL PASS，LSU四档63803/63994/64274/64274通过。
+backend观测改沿前采样后，候选与原LSU均586/612通过；初次漏记失败日志保留，完整回归已从头重跑。
+24输入仅LSU改变、7库/工具约束与实际容量核对；一次diag，无opt/合main/推送，默认16不复用旧PPA。
+下一轮按当前关键链改写ROB分支查找/资格控制，争取减少旋转选择并保留本轮IPC。
+归档build/synth/load_response_bypass/，详见[load响应直通](experiments/load-response-bypass.md)。
+
+## 当前检查点：固定槽恢复网络（面积改善，频率略降）
+
+恢复掩码/LSQ指针/flush共用固定槽存活判定，分支feat/area-rob-recovery-masks，基于dca7d77。
+ROB32/PRF64/IQ8/LSQ16：W2/W1 IPC0.607639/0.549105，diagnose22,878.356 µm²/375.23 MHz。
+面积-402.802 µm²（-1.730%），频率-0.330%，单位面积吞吐+1.425%；频率不降目标未完全满足，接受小幅代价保留独立候选。
+四组各19/19且全部周期相同，run_all ALL PASS；新增恢复掩码边界先在原版通过，完整随机131698/131696零失败。
+普通/统计六项全部计数器同dca7d77，24输入/7库/工具约束与实际容量核验通过；一次diag约12.63分钟，无opt。
+恢复掩码独占806→602、LSQ指针123→27 µm²；ROB少423.841，全核净少402.802，逻辑锥不可相加。
+首条仍ROB→LSU/CDB→准入→前端I$，D端2.625 ns；默认参数与main不改，不复用默认16旧PPA。
+用户继续自主工作及Git授权保持；下一步按新统计分解load延迟，再选IPC改动；完成年龄矩阵压缩仍是面积候选。
+归档build/synth/rob_recovery_masks/，详见[恢复掩码实验](experiments/rob-recovery-masks.md)。
+
+## 当前检查点：恢复RAT选择树（面积小幅下降，继续推进）
+
+分支feat/area-rob-recovery-rat，基于9747662；宏ROB32/PRF64/IQ8/LSQ16，默认参数不改。
+面积23,281.158 µm²/376.47 MHz，较9747662减少148.483（-0.634%），频率和IPC不变；保留独立检查点area-rob-rat-tree-20261025。
+W2/W1 IPC0.607639/0.549105；四组（32/默认16 × W1/W2）各19/19，所有测试/perf周期同基线。
+新增完整recover_rat独立参考先在原版通过，W1/W2完整随机115666/115664零失败，run_all ALL PASS。
+普通/统计版全部计数器同基线，24候选输入（只ROB变）/7库/工具与约束核对；一次有效diagnose，无opt。
+RAT锥1839→1646、独占1322→1191 µm²；全核实际只降148，不把锥面积当可回收总量。
+首条仍为ROB取消→LSU/CDB→分支资格→ROB/rename准入→前端I$，D端2.616 ns。
+用户已授权连续后续优化及自主Git，不逐轮等待；接下来研究恢复掩码/存活判定固定槽位化，默认/main及旧报告保留。
+归档build/synth/rob_rat_tree/，详见[恢复RAT实验](experiments/rob-rat-tree.md)。
+
+## 最新完成：ROB32固定槽匹配trial（未全面达标）
+
+分支feat/freq-rob32-match，基于5394ea0，迁移52d7c72的完成搜索/one-hot更新，保留当前单槽准入。
+宏参数ROB32/PRF64/IQ8/LSQ16，默认配置文件仍ROB16/PRF48，main未改。
+W2/W1 IPC0.607639/0.549105；diagnose23,429.641 µm²/376.47 MHz。
+较原32：频率+7.243%、面积+23.007 µm²（+0.098%）；较旧16：IPC×Fmax+6.248%、面积+13.891%。
+面积不增和380 MHz目标均未完全达到，只保留独立trial，不升级默认或合main；不自动新RTL或opt。
+四组（32/默认16 × W1/W2）各19/19，全部正确性/perf周期同各自基线；完整run_all ALL PASS。
+ROB完整随机W1/W2检查108050/108048通过；普通/统计版全部计数器同原32基线。
+24个候选输入hash（仅ROB改变）、7库、工具及全部时序/ABC约束核对一致，实际容量确认32/64/8/16。
+当前首条为ROB取消→LSU→CDB ready→分支资格→ROB/rename准入→前端I$，D端2.616 ns，原恢复busy路径不再首位。
+下一步优先拆解ROB表项与恢复网络面积；若继续频率则应针对新前端准入链，不能重复旧瓶颈定位。
+默认参数本轮仅功能/IPC验证，没有本RTL的默认16项PPA，不能复用旧400 MHz；默认build/sim及main报告仍是旧main归档。
+一次diagnose，无opt/合main/推送；归档build/synth/rob32_fixed_match/，详见[ROB32固定匹配](experiments/rob32-fixed-match.md)。
+
+## 最新完成：三组窗口PPA对照（默认不改）
+
+功能RTL仍1d142db，分支feat/ipc-uncontended-wake；只新增参数覆盖工具、测试和文档。
+三组均完成W2 diagnose、W1/W2各19/19和两档perf，最终run_all ALL PASS（含LSQ32新矩阵）。
+W2普通/统计版周期一致；24个源码hash、显式宏配置、7个库hash、工具与时序/ABC约束已核对。
+
+| 配置 ROB/PRF/IQ/LSQ | W2 IPC | W1 IPC | diagnose面积 µm² | MHz | W2 IPC×Fmax变化 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 原参数16/48/8/16 | 0.538263 | 0.504223 | 20,571.946 | 400.00 | — |
+| 第一组：ROB32+PRF64（32/64/8/16） | 0.607639 | 0.549105 | 23,406.633 | 351.05 | -0.927% |
+| 第二组：再加LSQ32（32/64/8/32） | 0.620532 | 0.558531 | 27,459.844 | 356.67 | +2.796% |
+| 第三组：再加IQ16（32/64/16/32） | 0.639400 | 0.567505 | 29,817.241 | 347.71 | +3.260% |
+
+当前已测IPC×Fmax最好为第三组：再加IQ16，较400 MHz原参数候选+3.260%，面积+44.941%。
+第一组净吞吐未改善；扩大容量的IPC收益不能直接当作整核收益，三组均未设为默认。
+三组瓶颈是squash索引→LSU取消→CDB tag→ROB完成搜索/恢复busy掩码；下一步优先评估32项ROB的该控制链，
+旧固定槽位匹配52d7c72可作参考，但尚未移植或验证。不自动追加新RTL或opt。
+本轮3次完整有效diagnose，另有首组宏未生效时主动中止的尝试，无report，独立保留。
+默认build/sim与默认diagnose/opt仍为main归档；main仍f4a0555，未合并或推送。
+归档build/synth/ipc_{rob32_prf64,rob32_lsq32,window32}/，复现必须保留宏manifest及wrapper。
+详见[窗口PPA实验](experiments/ipc-window-ppa.md)和[前置容量测量](experiments/ipc-sensitivity.md)。
+
+## 当前工作分支：无争用计算结果提示（独立IPC候选）
+
+分支feat/ipc-uncontended-wake，标签ipc-uncontended-wake-20261025，基于6b341e3（功能同8cbb580）。
+只有一个compute结果且R>=2时直接提示其tag，保证compute+至多一个load均获准；不经过CDB仲裁或当拍取消。
+W2/W1 IPC **0.538263/0.504223**，较403.31版+1.032%/+0.877%。
+diagnose **20,571.946 µm² /400.00 MHz**，面积+0.078%、频率-0.820%、诊断IPC×Fmax **+0.204%**。
+仅作独立IPC组合候选，整体收益很小；403.31 MHz检查点继续保留，不据此合main或opt。
+两档19/19、run_all重跑ALL PASS，后端586/612、IQ新增四档1,245,917、CDB69,833项通过。
+普通/统计版答案和周期一致，24个源码及7个库hash核对一致，所有安全提示实际获准写回，missing_grant为0。
+首条路径为PRF→ALU0→结果寄存器2.444 ns；qsort/rsort实际提前接收23,210/40,983次。
+首次工具错误导致初次diag中断无report，保留interrupted目录；独立重启后完成一次diag。
+仿真器build/uncontended_wake_w{1,2}/sim，报告/源码/统计build/synth/uncontended_wake_candidate/。
+main仍f4a0555，默认main报告/仿真器及403.31版归档不改；本轮无opt、未合main、未推送。
+详见[无争用提示实验](experiments/uncontended-wake.md)。
+
+## 前一轮：ALU1提前唤醒试验（2026-10-25，不采纳）
+
+标签ipc-lane1-early-wake-trial-20261025保留试验；工作分支feat/ipc-lane1-early-wake恢复8cbb580功能RTL。
+W2 IPC0.532763→0.543730（+2.058%），W1 .499840→.507784（+1.589%）。
+一次diagnose20,569.059 µm² /383.38 MHz，较403.31版面积+0.064%、频率-4.942%，W2 IPC×Fmax-2.985%，因此回退。
+W1/W2各19/19、run_all ALL PASS，新增四档IQ参考1,245,951项通过，后端580/606项通过；
+普通/统计版答案和周期一致，24个源码hash及7个库hash匹配。qsort/rsort实际提前接收25,602/82,375次。
+新瓶颈ROB取消→LSU结果valid→CDB→IQ提前wake/选择→后端寄存器，D端2.553 ns。
+试验源码、仿真器、报告和统计归档build/synth/lane1_early_candidate/，不覆盖默认main或403.31版报告。
+恢复后仍采用W2/W1 IPC0.532763/0.499840、diagnose20,555.952 µm² /403.31 MHz的候选；main仍f4a0555。
+恢复后24个输入hash与403.31报告匹配，新增后端回归580/606项通过；完整测试沿用同源8cbb580记录。
+本轮无opt、未合main、未推送。详见[提前唤醒试验](experiments/lane1-early-wake.md)。
+
+## 选定候选：ALU1候选选择（未合main）
+
+分支feat/ipc-lane1-select，标签ipc-lane1-select-20261025，基于f21ac1f的ROB单槽接收候选。
+lane0保持原年龄优先；lane1在剩余的普通ALU候选中选最老项，资格入队时寄存。
+两档正确性各19/19、run_all ALL PASS，新增四档IQ独立参考1,245,047项零失败。
+
+| 指标 | 上轮单槽候选 | 本轮候选 | 变化 |
+| --- | ---: | ---: | ---: |
+| W2 IPC | 0.528463 | 0.532763 | +0.814% |
+| W1 IPC | 0.498844 | 0.499840 | +0.200% |
+| diagnose面积 µm² | 20,535.904 | 20,555.952 | +0.098% |
+| diagnose频率 MHz | 401.25 | 403.31 | +0.512% |
+
+诊断IPC×Fmax+1.330%，保留独立候选。相对main累计W2 IPC+2.041%、诊断IPC×Fmax+2.282%。
+普通/统计版六项答案、周期一致，24个源码hash匹配；qsort实际绕过不支持项发射17,499次。
+首条时序已转为a0源tag→PRF→ALU0→结果寄存器，D端2.419 ns，ROB控制链仍相邻。
+候选仿真器build/lane1_select_w{1,2}/sim，报告和统计build/synth/lane1_select_candidate/。
+本轮仅一次diagnose，无opt、未合main、未推送；main的456.12 MHz opt仍适用于原主线。
+详见[ALU1候选选择实验](experiments/lane1-select.md)。
+
+## 前一候选：ROB单槽接收（未合main）
+
+分支`feat/ipc-rob-single-slot`，标签`ipc-rob-single-slot-20261025`，基于f4a0555。
+候选W2 IPC **0.5285**（主线0.5221，+1.217%），W1 **0.4988**且19项正确性/6项perf周期逐项相同。
+候选diagnose **20,535.904 µm² / 401.25 MHz**；同模式主线20,505.024 /402.36，面积+0.151%、频率-0.274%。
+诊断IPC×Fmax+0.939%，作为独立IPC候选保留；W1/W2各19/19、run_all ALL PASS、24个输入hash匹配。
+ROB边界28,094/28,038、前端非零预测快照专项293/325项通过，配置及LOCAL_STATS lint通过。
+ROB按寄存count给出in_capacity前缀，前端按容量输出/弹出前缀并保留后缀；不借当拍commit空间，无新增流水拍数。
+候选普通/统计版六项周期相同，单槽实际接收qsort28,061/rsort23,026次，其中无同拍提交13,185/17,416次。
+main仍保留f4a0555的功能RTL（同ba7ceb6），默认build/sim及diagnose/opt是主线基线，不对应候选。
+候选仿真器build/rob_single_slot_w{1,2}/sim，报告/源码/统计在build/synth/rob_single_slot_candidate/。
+本轮无opt、未合main、未推送。详见[ROB单槽实验](experiments/rob-single-slot.md)。
+
+## main基线检查点：opt 456.12 MHz / 19,808.71 µm²
+
+main基线检查点`main-freq-age-matrix-20261025`。
 测量检查点仍为`freq-age-matrix-opt-20261024`，源码与ba7ceb6相同。
 本次用户授权的一次opt已完成；RTL与ba7ceb6完全一致，ROB固定槽位匹配trial仍回退。
 

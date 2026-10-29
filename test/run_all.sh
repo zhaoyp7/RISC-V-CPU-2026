@@ -53,11 +53,14 @@ printf 'run_all: root=%s full=%d seed=%s\n' "$root" "$full" "$seed"
 run "config check" python3 tools/config_gen.py --check
 run "core dispatch / rename admission W1/W2" sh test/core_admission_test/run.sh
 run "alu arithmetic" sh test/alu_test/run.sh
+run "CDB arbitration/lookahead guarantee" sh test/cdb_test/run.sh
+run "CDB guaranteed hints / exhaustive optional source" sh test/cdb_guarantee_test/run.sh
 run "issue queue W1/W2 R1/R2" sh test/issue_queue_test/run.sh
 run "pc_unit" sh test/pc_unit_test/run.sh $quick --seed "$seed"
 run "bpu default" sh test/bpu_test/run.sh $quick --seed "$seed"
 run "bpu 4/6 bits" env BPU_BTB_INDEX_BITS=4 BPU_BHT_INDEX_BITS=6 \
     sh test/bpu_test/run.sh $quick --seed "$seed"
+run "bpu local history 1/3 / independent reference" sh test/bpu_local_test/run.sh
 run "bpu gshare 8-bit" sh test/bpu_gshare_test/run.sh $quick --seed "$seed"
 run "bpu gshare 4-bit" env GHIST_BITS=4 \
     sh test/bpu_gshare_test/run.sh $quick --cycles 5000 --seed "$seed"
@@ -69,17 +72,27 @@ run "icache index=4" env ICACHE_INDEX_BITS=4 \
     sh test/icache_pipe_test/run.sh $quick --seed "$seed"
 run "icache index=10" env ICACHE_INDEX_BITS=10 \
     sh test/icache_pipe_test/run.sh $quick --cycles 5000 --seed "$seed"
+run "word-banked I-cache / physical routing and refill parity" sh test/icache_bank_test/run.sh
+run "I-cache early hit / one-cycle latency and backpressure" sh test/icache_hit_bypass_test/run.sh
 run "rename W=1" env RENAME_W=1 sh test/rename_test/run.sh $quick --seed "$seed"
 run "rename W=2" env RENAME_W=2 sh test/rename_test/run.sh $quick --seed "$seed"
 run "rename constant x0 sources W1/W2" sh test/rename_zero_test/run.sh
 run "rob W=1" env ROB_W=1 sh test/rob_test/run.sh $quick --seed "$seed"
 run "rob W=2" env ROB_W=2 sh test/rob_test/run.sh $quick --seed "$seed"
+run "rob update PC W=1" env ROB_W=1 ROB_UPDATE_PC=1 sh test/rob_test/run.sh $quick --seed "$seed"
+run "rob update PC W=2" env ROB_W=2 ROB_UPDATE_PC=1 sh test/rob_test/run.sh $quick --seed "$seed"
 run "frontend W=1" env FRONTEND_W=1 sh test/frontend_test/run.sh
 run "frontend W=2" env FRONTEND_W=2 sh test/frontend_test/run.sh
 run "BPU training / frontend response queues W1/W2" sh test/bpu_training_test/run.sh
-run "LSQ query snapshot depth8/depth16" sh test/lsq_query_test/run.sh
+run "LSQ query snapshot depth8/depth16/depth32" sh test/lsq_query_test/run.sh
+run "decoupled store source / ordering and CDB capture" sh test/store_capture_test/run.sh
+run "buffered execution lookahead / mixed dependency chains W1/W2" sh test/execution_lookahead_test/run.sh
 run "lsu v2" sh test/lsu_test/run.sh
+run "LSU 64B read cache / ordering and invalidation" sh test/lsu_cache_test/run.sh
 run "mem_subsystem v2" sh test/mem_subsystem_test/run.sh
+run "shared instruction line buffer / response ownership" sh test/if_line_buffer_test/run.sh
+run "nonblocking line cache / order and write races" sh test/line_cache_test/run.sh
+run "expanded refill flight / read16 write8 ownership" sh test/refill_flight_test/run.sh
 run "backend W=1/W=2" sh test/backend_test/run.sh
 run "core_ooo lint/check" sh test/core_skeleton_test/run.sh
 

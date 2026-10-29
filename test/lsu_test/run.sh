@@ -1,5 +1,5 @@
 #!/bin/sh
-# LSU/LSQ query-pipeline regression: W1/LSQ8 and W2/LSQ16.
+# LSU/LSQ query-pipeline regression: W1/LSQ8, W2/LSQ16 and W1/W2/LSQ32.
 set -eu
 
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -23,3 +23,5 @@ run_one() {
 
 run_one 1 8 "$@"
 run_one 2 16 "$@"
+run_one 1 32 "$@"
+run_one 2 32 "$@"

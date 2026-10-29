@@ -6,7 +6,12 @@
 // backpressure, and W=2 dispatch absorption (IW stays 1 in P1).
 // -----------------------------------------------------------------------------
 
+#ifdef TB_STORE_CAPTURE
+#include "Vstore_capture_backend_top.h"
+using Vbackend_ooo=Vstore_capture_backend_top;
+#else
 #include "Vbackend_ooo.h"
+#endif
 #include "verilated.h"
 
 #include <cstdint>
@@ -115,6 +120,7 @@ struct Harness {
     Vbackend_ooo* dut = nullptr;
     uint8_t mem[1 << 16] = {};
     bool auto_respond = true;
+    uint64_t cycle_count=0;
     long checks = 0;
     long fails = 0;
     bool br_seen = false;
@@ -147,6 +153,7 @@ struct Harness {
     }
 
     void tick() {
+        cycle_count++;
         dut->clk = 0;
         dut->eval();
 
@@ -166,9 +173,12 @@ struct Harness {
         const uint32_t st_data = dut->st_req_wdata;
         const uint8_t st_strb = (uint8_t)dut->st_req_wstrb;
 
+        // CDB/complete/branch outputs are combinational transactions sampled
+        // by their consumers at this edge. A response bypass can disappear
+        // immediately after the edge and must be captured before state moves.
+        capture_events();
         dut->clk = 1;
         dut->eval();
-        capture_events();
 
         if (ld_fire) ld_pending.push_back(ld_addr);
         if (st_fire) {
@@ -749,6 +759,320 @@ int main(int argc, char** argv) {
         }
     }
 
+    // A load wakes an ordinary ALU while no registered-ready candidate is
+    // available. The guaranteed load hint must read new PRF data after the write edge.
+    for(int both=0;both<2;++both) {
+        h.auto_respond=true;h.reset();h.auto_respond=false;
+        const uint32_t seed=0x12345678;
+        h.write_word(0x7500,seed,15);
+        Uop producer;
+        producer.dest=40;producer.rob=1;producer.reg_we=1;
+        producer.is_load=1;producer.wb_sel=WB_MEM;producer.imm=0x7500;
+        h.expect(h.dispatch_one(producer),"load dependency load accepted");
+        for(int n=0;n<32&&h.ld_pending.empty();++n)h.tick();
+        h.expect(h.ld_pending.size()==1,"load dependency producer waits for memory");
+        Uop consumer;
+        consumer.dest=41;consumer.rob=2;consumer.reg_we=1;
+        consumer.src1=40;consumer.src1_ready=0;
+        consumer.b_sel=both?B_REG:B_IMM;consumer.imm=7;
+        if(both) {consumer.src2=40;consumer.src2_ready=0;}
+        h.expect(h.dispatch_one(consumer),"load dependency consumer accepted");
+        Uop follower;
+        follower.dest=42;follower.rob=3;follower.reg_we=1;
+        follower.src1=41;follower.src1_ready=0;
+        follower.b_sel=both?B_REG:B_IMM;follower.imm=3;
+        if(both) {follower.src2=41;follower.src2_ready=0;}
+        h.expect(h.dispatch_one(follower),"compute dependency follower accepted");
+        for(int n=0;n<8;++n)h.tick();
+        h.expect(h.cdb_q.empty(),"consumer does not execute before producer");
+        h.auto_respond=true;
+        int producer_cycle=-1,consumer_cycle=-1,follower_cycle=-1;
+        for(int n=0;n<20;++n) {
+            h.tick();
+            while(!h.cdb_q.empty()) {
+                auto event=h.cdb_q.front();h.cdb_q.pop_front();
+                if(event.first==40) {
+                    h.expect(producer_cycle<0&&event.second==seed,"load dependency producer returns once");
+                    producer_cycle=n;
+                } else if(event.first==41) {
+                    h.expect(consumer_cycle<0&&event.second==(both?seed+seed:seed+7),
+                             "load dependency consumer reads new PRF data exactly once");
+                    consumer_cycle=n;
+                } else {
+                    const uint32_t expected=both?(seed+seed+seed+seed):(seed+10);
+                    h.expect(event.first==42&&follower_cycle<0&&event.second==expected,
+                             "lookahead follower reads new PRF data exactly once");
+                    follower_cycle=n;
+                }
+            }
+        }
+        h.expect(producer_cycle>=0&&consumer_cycle==producer_cycle+2,
+                 "load-hinted consumer returns two edges after producer");
+#ifdef TB_EXECUTION_HINT
+        h.expect(follower_cycle==consumer_cycle+1,
+                 "executing producer removes one dependent scheduling edge");
+#else
+        h.expect(follower_cycle==consumer_cycle+2,
+                 "uncontended compute follower returns two edges after consumer");
+#endif
+    }
+
+    // A held load writes a previously zero PRF slot. A dependent branch
+    // must use the new word, including two equal hinted sources and JALR LSB.
+    for(int kind=0;kind<5;kind++) {
+        h.auto_respond=true;h.reset();h.auto_respond=false;
+        const uint32_t seed=kind==2?0x80000123u:0x12345u;
+        h.write_word(0x7600,seed,15);
+        Uop producer;producer.dest=40;producer.rob=1;producer.reg_we=1;
+        producer.is_load=1;producer.wb_sel=WB_MEM;producer.imm=0x7600;
+        h.expect(h.dispatch_one(producer),"control hint producer dispatch");
+        for(int n=0;n<32&&h.ld_pending.empty();n++)h.tick();
+        h.expect(h.ld_pending.size()==1,"control hint held load");
+        Uop control;control.pc=0x900;control.dest=41;control.rob=2;
+        control.src1=40;control.src1_ready=0;control.imm=0x20;
+        if(kind==4){control.is_jalr=1;control.reg_we=1;control.wb_sel=WB_PC4;control.imm=6;}
+        else {control.is_branch=1;control.inst=0x63u|((kind==1?1u:kind==2?4u:0u)<<12);}
+        if(kind==3){control.src2=40;control.src2_ready=0;}
+        h.expect(h.dispatch_one(control),"control hint consumer dispatch");
+        for(int n=0;n<8;n++)h.tick();
+        h.expect(!h.br_seen&&h.cdb_q.empty()&&h.complete_q.empty(),"control waits before producer writeback");
+        h.auto_respond=true;int producer_cycle=-1,branch_cycle=-1,branch_count=0,complete_count=0,links=0;
+        for(int n=0;n<24;n++) {
+            h.tick();
+            while(!h.cdb_q.empty()) {
+                auto e=h.cdb_q.front();h.cdb_q.pop_front();
+                if(e.first==40){h.expect(producer_cycle<0&&e.second==seed,"control producer word once");producer_cycle=n;}
+                else {h.expect(kind==4&&e.first==41&&e.second==0x904,"JALR link word");links++;}
+            }
+            if(h.br_seen) {
+                h.expect(h.br_tag_seen==41,"control update tag");
+                h.expect(h.br_taken_seen==unsigned(kind!=0),"control uses new source for direction");
+                const uint32_t target=kind==4?((seed+6)&~1u):0x920u;
+                h.expect(h.br_target_seen==target,"control target and JALR alignment");
+                branch_cycle=n;branch_count++;h.br_seen=false;
+            }
+            while(!h.complete_q.empty()) {
+                h.expect(h.complete_q.front()==41,"control completion tag");
+                h.complete_q.pop_front();complete_count++;
+            }
+        }
+        h.expect(producer_cycle>=0&&branch_cycle>producer_cycle&&branch_count==1,"one branch after producer");
+        h.expect(kind==4?(links==1&&complete_count==0):(links==0&&complete_count==1),"control finishes exactly once");
+    }
+
+
+#ifdef TB_STORE_CAPTURE
+    // The address can finish before an older load supplies store data.
+    // Even an early synthetic commit must not write until that data arrives.
+    for(unsigned seed:{0x12345678u,0x89abcdefu,0u}) {
+        h.auto_respond=true;h.reset();h.auto_respond=false;
+        h.write_word(0x7600,seed,15);h.write_word(0x7700,0xfeedbeef,15);
+        Uop producer;producer.dest=40;producer.rob=1;producer.reg_we=1;
+        producer.is_load=1;producer.wb_sel=WB_MEM;producer.imm=0x7600;
+        h.expect(h.dispatch_one(producer),"captured store producer dispatch");
+        for(unsigned n=0;n<32&&h.ld_pending.empty();n++)h.tick();
+        Uop store;store.dest=41;store.rob=2;store.is_store=1;store.lsq=1;
+        store.src2=40;store.src2_ready=0;store.imm=0x7700;
+        h.expect(h.dispatch_one(store),"captured store address dispatch");
+        for(unsigned n=0;n<8;n++)h.tick();
+        unsigned completions=0;
+        while(!h.complete_q.empty()){h.expect(h.complete_q.front()==41,"early store completion tag");h.complete_q.pop_front();completions++;}
+        h.expect(completions==1&&h.cdb_q.empty(),"store completes once before source load returns");
+        h.expect(!dut.st_req_valid&&h.read_word(0x7700)==0xfeedbeef,"uncommitted pending data never writes");
+        h.commit_one(1,true,false);
+        for(unsigned n=0;n<4;n++)h.tick();
+        h.expect(!dut.st_req_valid&&h.read_word(0x7700)==0xfeedbeef,"early commit waits for source data");
+        h.auto_respond=true;unsigned writes=0,produced=0;
+        for(unsigned n=0;n<32;n++){
+            dut.clk=0;dut.eval();if(dut.st_req_valid)writes++;
+            h.tick();
+            while(!h.cdb_q.empty()){auto e=h.cdb_q.front();h.cdb_q.pop_front();h.expect(e.first==40&&e.second==seed,"pending store receives producer value");produced++;}
+            while(!h.complete_q.empty()){h.complete_q.pop_front();completions++;}
+        }
+        h.expect(writes==1&&produced==1&&completions==1,"one producer, completion and memory write");
+        h.expect(h.read_word(0x7700)==seed,"captured store writes its new source word");
+    }
+
+#endif
+
+
+#ifdef TB_DISPATCH_BYPASS
+    for(int occupied=0;occupied<2;occupied++){
+        h.auto_respond=true;h.reset();
+        if(occupied){
+            h.auto_respond=false;h.write_word(0x7600,100,15);
+            Uop p;p.dest=40;p.rob=1;p.reg_we=1;p.is_load=1;p.wb_sel=WB_MEM;p.imm=0x7600;
+            h.expect(h.dispatch_one(p),"direct ALU older load accepted");
+            for(int n=0;n<32&&h.ld_pending.empty();n++)h.tick();
+            for(int n=0;n<3;n++){Uop q;q.dest=10+n;q.rob=2+n;q.reg_we=1;q.src1=40;q.src1_ready=0;q.b_sel=B_IMM;q.imm=n;h.expect(h.dispatch_one(q),"blocked IQ owner accepted");}
+            for(int n=0;n<4;n++)h.tick();
+        }
+        Uop a;a.dest=50;a.rob=20;a.reg_we=1;a.b_sel=B_IMM;a.imm=123;
+        uint64_t start=h.cycle_count;h.expect(h.dispatch_one(a),"ready ALU accepted for direct execution");
+        uint32_t tag=0,value=0;bool done=h.wait_cdb(tag,value,24);
+        h.expect(done&&tag==50&&value==123,"direct ALU returns correct value exactly once");
+        h.expect(h.cycle_count-start==4,"direct ALU saves IQ allocation and selection cycle");
+        std::printf("DIRECT_ALU W=%d occupied=%d latency=%llu\n",W,occupied,(unsigned long long)(h.cycle_count-start));
+        if(occupied){
+            a.dest=51;a.rob=21;a.imm=124;h.expect(h.dispatch_one(a),"ready ALU accepted before squash");
+            h.squash_one(1);h.auto_respond=true;unsigned source=0;
+            for(int n=0;n<40;n++){h.tick();while(!h.cdb_q.empty()){auto e=h.cdb_q.front();h.cdb_q.pop_front();h.expect(e.first==40&&e.second==100,"squash drops queued and direct younger owners");source++;}}
+            h.expect(source==1,"older load survives direct ALU squash");
+        }
+    }
+#endif
+
+#ifdef TB_DISPATCH_COMPUTE_HINT
+    for(int both=0;both<2;both++){
+        h.auto_respond=true;h.reset();
+        Uop producer;producer.dest=40;producer.rob=1;producer.reg_we=1;producer.b_sel=B_IMM;producer.imm=100;
+        h.expect(h.dispatch_one(producer),"dispatch hint producer accepted");h.tick();
+        Uop consumer;consumer.dest=41;consumer.rob=2;consumer.reg_we=1;consumer.src1=40;consumer.src1_ready=0;
+        if(both){consumer.src2=40;consumer.src2_ready=0;consumer.b_sel=B_REG;}else{consumer.b_sel=B_IMM;consumer.imm=3;}
+        h.expect(h.dispatch_one(consumer),"dispatch hint consumer accepted before source writeback");
+        int first=-1,last=-1;unsigned a=0,b=0;
+        for(int n=0;n<24;n++){h.tick();while(!h.cdb_q.empty()){auto e=h.cdb_q.front();h.cdb_q.pop_front();
+            if(e.first==40){h.expect(a++==0&&e.second==100,"dispatch hint source writes once");first=n;}
+            else {h.expect(e.first==41&&b++==0&&e.second==uint32_t(both?200:103),"dispatch hint uses written operand values");last=n;}
+        }}
+        h.expect(a==1&&b==1&&last-first==2,"dispatch hint removes one compute dependency cycle");
+        std::printf("DISPATCH_HINT W=%d both=%d delta=%d\n",W,both,last-first);
+    }
+#endif
+#ifdef TB_CONTROL_BYPASS
+    for(int kind=0;kind<9;++kind){
+        h.auto_respond=true;h.reset();Uop q;q.dest=50;q.rob=20;q.pc=0x400+kind*4;q.imm=0x20;
+        bool link=kind==6||kind==7;bool taken=kind<6?(kind==0||kind==3||kind==5):true;
+        if(kind<6){unsigned f[]={0,1,4,5,6,7};q.is_branch=1;q.inst=0x63|(f[kind]<<12);}
+        else if(kind==6){q.is_jal=1;q.reg_we=1;q.wb_sel=WB_PC4;}
+        else {q.is_jalr=1;q.reg_we=link;q.wb_sel=WB_PC4;q.imm=0x21;}
+        uint64_t start=h.cycle_count;h.expect(h.dispatch_one(q),"control direct admission");
+        for(int n=0;n<16&&!h.br_seen;++n)h.tick();
+        h.expect(h.br_seen&&h.br_tag_seen==50&&h.br_taken_seen==unsigned(taken),"control direct resolution");
+        h.expect(h.br_target_seen==(kind>=7?0x20:q.pc+0x20),"control direct target/alignment");
+        h.expect(h.cycle_count-start==3,"control direct saves IQ stage");
+        unsigned events=0,completions=0;
+        for(int n=0;n<12;++n){
+          while(!h.cdb_q.empty()){auto x=h.cdb_q.front();h.cdb_q.pop_front();++events;h.expect(link&&x.first==50&&x.second==q.pc+4,"control link writeback");}
+          while(!h.complete_q.empty()){auto x=h.complete_q.front();h.complete_q.pop_front();++completions;h.expect(!link&&x==50,"control no-value completion");}
+          h.br_seen=false;h.tick();h.expect(!h.br_seen,"control must resolve once");
+        }
+        h.expect(events==unsigned(link)&&completions==unsigned(!link),"control exact completion ownership");
+        std::printf("DIRECT_CONTROL W=%d kind=%d latency=3\n",W,kind);
+    }
+    // Highest-lane control bypass must leave the older packet prefix in IQ.
+    if(W==2)for(int prefix_control=0;prefix_control<2;++prefix_control){
+      h.reset();Uop a,q;a.dest=40;a.rob=1;a.pc=0x600;a.imm=7;a.b_sel=B_IMM;a.reg_we=1;
+      if(prefix_control){a.reg_we=0;a.is_branch=1;a.inst=0x63;a.imm=0x20;}
+      q.dest=50;q.rob=2;q.pc=0x604;q.imm=0x20;q.is_branch=1;q.inst=0x63;
+      Uop packet[2]={a,q};h.expect(h.dispatch_group(packet),"mixed control packet accepted");
+      unsigned branches=0,completes=0,writes=0;bool older_branch=false,younger_branch=false;
+      for(int n=0;n<24;++n){
+        h.tick();if(h.br_seen){++branches;h.expect((h.br_tag_seen==40&&prefix_control)||h.br_tag_seen==50,"mixed branch identity");older_branch|=h.br_tag_seen==40;younger_branch|=h.br_tag_seen==50;h.expect(h.br_taken_seen&&h.br_target_seen==(h.br_tag_seen==40?0x620:0x624),"mixed branch result");h.br_seen=false;}
+        while(!h.cdb_q.empty()){auto x=h.cdb_q.front();h.cdb_q.pop_front();++writes;h.expect(!prefix_control&&x.first==40&&x.second==7,"mixed ALU older prefix");}
+        while(!h.complete_q.empty()){auto x=h.complete_q.front();h.complete_q.pop_front();++completes;h.expect(x==50||(prefix_control&&x==40),"mixed branch completion identity");}
+      }
+      h.expect(branches==unsigned(1+prefix_control)&&younger_branch&&older_branch==bool(prefix_control),"both mixed packet owners resolve once");
+      h.expect(completes==unsigned(1+prefix_control)&&writes==unsigned(!prefix_control),"mixed packet completion conservation");
+    }
+    // Squash after the direct owner entered the execution buffer.
+    h.reset();Uop older;older.dest=40;older.rob=1;older.reg_we=1;older.b_sel=B_IMM;older.imm=9;
+    h.expect(h.dispatch_one(older),"control squash older owner");uint32_t ot=0,ov=0;h.expect(h.wait_cdb(ot,ov),"control squash older completes");
+    Uop younger;younger.dest=50;younger.rob=20;younger.pc=0x500;younger.imm=0x20;younger.is_branch=1;younger.inst=0x63;
+    h.expect(h.dispatch_one(younger),"control squash younger accepted");h.tick();h.squash_one(1);
+    h.expect(!h.br_seen&&h.complete_q.empty()&&h.cdb_q.empty(),"control cancelled on squash edge");
+    for(int n=0;n<12;++n){h.tick();h.expect(!h.br_seen&&h.complete_q.empty()&&h.cdb_q.empty(),"cancelled control stays discarded");}
+#endif
+#ifdef TB_MEMORY_HINT
+    // An unwritten base has a distinct old PRF value (zero). Check load
+    // addresses, stores with ready data, and same-edge base/data capture.
+    for(int kind=0;kind<3;kind++){
+        h.auto_respond=true;h.reset();
+        const uint32_t base=0x7800+kind*0x20, address=base+4, seed=0x91827364+kind;
+        h.write_word(address,seed,15);
+        Uop p;p.dest=40;p.rob=1;p.reg_we=1;p.b_sel=B_IMM;p.imm=base;
+        h.expect(h.dispatch_one(p),"memory base producer dispatch");
+        Uop q;q.dest=41;q.rob=2;q.lsq=1;q.src1=40;q.src1_ready=0;q.imm=4;q.mem_size=2;
+        if(kind==0){q.is_load=1;q.reg_we=1;q.wb_sel=WB_MEM;}
+        else {q.is_store=1;if(kind==2){q.src2=40;q.src2_ready=0;}}
+        h.expect(h.dispatch_one(q),"dependent memory dispatch before base writeback");
+        unsigned bases=0,loads=0,completions=0;
+        for(int n=0;n<32;n++){
+            h.tick();
+            while(!h.cdb_q.empty()){
+                auto x=h.cdb_q.front();h.cdb_q.pop_front();
+                if(x.first==40){++bases;h.expect(x.second==base,"base producer value");}
+                else {++loads;h.expect(kind==0&&x.first==41&&x.second==seed,"early load reads computed address");}
+            }
+            while(!h.complete_q.empty()){auto x=h.complete_q.front();h.complete_q.pop_front();++completions;h.expect(kind!=0&&x==41,"early store completes once");}
+        }
+        h.expect(bases==1&&loads==unsigned(kind==0)&&completions==unsigned(kind!=0),"early memory exact completion ownership");
+        h.expect(dut.early_base_events==1,"memory really issues before registered base-ready");
+        if(kind!=0){
+            h.expect(h.read_word(address)==seed,"early store cannot write before commit");
+            h.commit_one(1,true,false);for(int n=0;n<24;n++)h.tick();
+            h.expect(h.read_word(address)==(kind==2?base:0),"early store address and captured data");
+        }
+    }
+    // Cancel at several stages of the dependent load's lifetime. Responses
+    // may still return, but the cancelled physical destination cannot write.
+    for(int delay=0;delay<4;delay++){
+        h.auto_respond=false;h.reset();h.write_word(0x7904,0x10203040,15);
+        Uop p;p.dest=40;p.rob=1;p.reg_we=1;p.b_sel=B_IMM;p.imm=0x7900;
+        h.expect(h.dispatch_one(p),"cancelled early base producer");
+        Uop q;q.dest=41;q.rob=20;q.lsq=1;q.src1=40;q.src1_ready=0;q.imm=4;q.mem_size=2;q.is_load=1;q.reg_we=1;q.wb_sel=WB_MEM;
+        h.expect(h.dispatch_one(q),"cancelled early load dispatch");
+        for(int n=0;n<delay;n++)h.tick();
+        h.squash_one(1);h.auto_respond=true;
+        for(int n=0;n<32;n++)h.tick();
+        unsigned producers=0;
+        while(!h.cdb_q.empty()){auto x=h.cdb_q.front();h.cdb_q.pop_front();++producers;h.expect(x.first==40&&x.second==0x7900,"cancelled load never writes reused destination");}
+        h.expect(producers==1&&h.complete_q.empty(),"cancellation keeps only older base producer");
+    }
+#endif
+#ifdef TB_EXECUTION_HINT
+    // A pending load keeps the whole dependence chain in IQ. Once it
+    // returns, ALU0 and ALU1 both schedule their next consumer before WB.
+    unsigned negative_sra_cases=0;
+    for(unsigned trial=0;trial<512;trial++){
+      h.auto_respond=true;h.reset();h.auto_respond=false;
+      uint32_t seed=trial*0x91827365u+0x80000000u;h.write_word(0x7600,seed,15);
+      Uop load;load.reg_we=1;load.dest=40;load.rob=1;load.is_load=1;load.wb_sel=WB_MEM;load.imm=0x7600;
+      h.expect(h.dispatch_one(load),"future source load accepted");
+      for(unsigned n=0;n<24&&h.ld_pending.empty();n++)h.tick();
+      uint32_t expected[5]={seed,0,0,0,0};
+      for(unsigned k=0;k<4;k++){
+       Uop q;q.reg_we=1;q.dest=41+k;q.rob=2+k;q.src1=40+k;q.src1_ready=0;q.b_sel=B_IMM;q.imm=(trial^(k*71))+1;
+       static const unsigned operations[]={0,5,2,6,7,3,4,8,9,1};
+       q.alu=operations[(trial+k)%10];uint32_t a=expected[k],b=q.imm;
+       switch(q.alu){
+        case 0:expected[k+1]=a+b;break;
+        case 1:q.b_sel=B_REG;q.src2=q.src1;q.src2_ready=0;expected[k+1]=a-a;break;
+        case 2:expected[k+1]=a<<(b&31);break;
+        case 3:expected[k+1]=int32_t(a)<int32_t(b);break;
+        case 4:expected[k+1]=a<b;break;
+        case 5:expected[k+1]=a^b;break;
+        case 6:expected[k+1]=a>>(b&31);break;
+        case 7:expected[k+1]=uint32_t(int32_t(a)>>(b&31));negative_sra_cases+=int32_t(a)<0;break;
+        case 8:expected[k+1]=a|b;break;
+        case 9:expected[k+1]=a&b;break;
+       }
+       h.expect(h.dispatch_one(q),"future dependent chain owner accepted");
+      }
+      for(unsigned n=0;n<6;n++)h.tick();h.auto_respond=true;unsigned seen[5]={};
+      for(unsigned n=0;n<64;n++){
+       h.tick();while(!h.cdb_q.empty()){
+        auto e=h.cdb_q.front();h.cdb_q.pop_front();bool tag_ok=e.first>=40&&e.first<=44;
+        h.expect(tag_ok,"future chain exact destination owner");
+        if(tag_ok){unsigned k=e.first-40;h.expect(seen[k]++==0&&e.second==expected[k],"future chain exact value, no duplicate");}
+       }
+      }
+      for(unsigned k=0;k<5;k++)h.expect(seen[k]==1,"each future chain instruction completes");
+      h.expect(dut.future0_events>0&&dut.future1_events>0,"both executing producers actually schedule early consumers");
+    }
+    h.expect(negative_sra_cases>0,"forwarded arithmetic covers negative signed shifts");
+    std::printf("FORWARD_ARITHMETIC W=%d chains=512 negative_sra=%u\n",W,negative_sra_cases);
+#endif
     printf("\nW=%d checked=%ld fails=%ld\n", W, h.checks, h.fails);
     bool pass = (h.fails == 0);
     printf(pass ? "PASS\n" : "FAIL\n");

@@ -275,6 +275,10 @@ P2 把 LSU 与 mem_subsystem 之间的单事务 `data_mem` 口拆成三个流水
 
 LSU 内部最多 8 笔在途 load；响应按发请求顺序返回，LSU 用元数据 FIFO 配对。
 
+`feat/ipc-load-response-bypass`中，空结果FIFO允许存活内存响应当拍送CDB；
+握手成功不重复入队，CDB反压则捕获至预留结果槽，后续保持数据直到接收或squash。
+队列非空时旧队首优先，新响应入队；前递和非法load仍走原队列，外部接口不变。
+
 ### store 流（LSU → mem_subsystem）
 
 | 字段 | 位宽 | 说明 |
@@ -330,6 +334,12 @@ load提交释放、store提交后排空及写响应释放的状态更新规则�
 
 ### IQ 末端取消的无效载荷约定（频率实验）
 
+后端IW2实例启用LANE1_ALU_ONLY：lane0选择最老完整就绪项或store地址预填，
+lane1排除lane0预选槽后，只在普通写回ALU候选中按年龄选择。类型资格入队时寄存，
+要求reg_we且非访存/分支/跳转/DIV/REM/illegal，与后端j_lane_ok一致。
+lane0即使被反压也保留其槽；两通道分别握手，未被接收的项继续留在IQ。
+通用IQ默认关闭该参数；registered wake和store预填语义不变。
+
 `feat/freq-iq-late-squash` 先预选最老候选，再按squash过滤独立out_valid。
 当out_valid=0时out_uop/out_seq允许保留预选数据；backend必须用out_valid控制
 接收、LSU握手及complete入队，不能依据uop内原dispatch valid位写状态。
@@ -381,3 +391,25 @@ REFILL提前选refill_index，写入仍受原响应与flush条件控制；没有
 redirect/reset保持原清理优先级，响应缓冲不能覆盖未消费的decode数据。
 ROB分支解析、redirect/squash的对外时序不变；请求FIFO保存发请求当拍的预测快照，
 后续训练不得改写在途指令的预测metadata。
+
+### ROB按寄存容量限制前端出队（IPC单槽实验）
+
+ROB的in_capacity[W]是由寄存count计算的低位连续容量掩码，不借用当拍commit释放。
+in_ready表示非恢复/redirect且至少有一个空槽；每lane实际接收条件是in_valid && in_ready && in_capacity。
+core将容量传给frontend.decode_capacity，前端只提供并弹出该容量内的队首前缀，其余指令及预测快照留在FIFO。
+rename仍整组处理当前提供的前缀，ROB/dispatch/rename共享实际接收mask；单槽时不会分配第二条的tag/LSQ id。
+取消仍由既有ready/redirect门控生效，不增加流水拍数。外部student_top接口和总线布局不变。
+
+### 无争用计算结果的ALU1提示（独立IPC候选）
+
+IQ的lookahead_valid/tag只供LANE1_ALU_ONLY且LANE1_LOOKAHEAD通道形成提前候选，
+不写持久ready，不参与lane0/访存/store预填；通用IQ默认关闭此功能。
+后端R>=2且ALU0/ALU1/divider结果valid恰好one-hot时提示其tag；CDB至多再有一项LSU结果，
+因此该compute必获准并在接收沿写PRF。a1同沿捕获消费者uop，下一拍才读PRF，无需同拍数据旁路。
+存在多个compute结果或R<2时关闭提示。真实CDB继续更新ready；独立通道反压及seq取消保持原语义。
+这项保证依赖当前四源布局；若增加结果源或改变仲裁吞吐，须重新验证资格与实际PRF写回一致。
+
+### ROB固定槽分支解析候选
+
+feat/freq-rob-branch-match以固定槽tag/control匹配并选程序序最年轻项，包含重复tag接口输入的既有语义。
+预测PC/方向/目标/uncond独立于晚到br_update_valid形成，恢复/训练资格仍由valid和found限定；不改变周期或端口。

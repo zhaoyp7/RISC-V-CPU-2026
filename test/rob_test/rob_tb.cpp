@@ -23,6 +23,9 @@
 #ifndef TB_W
 #define TB_W 1
 #endif
+#ifndef TB_BRANCH_PC_FROM_UPDATE
+#define TB_BRANCH_PC_FROM_UPDATE 0
+#endif
 
 namespace {
 
@@ -106,7 +109,7 @@ struct Entry {
     uint32_t idx = 0, pc = 0, inst = 0, dest = 0, old_tag = 0;
     uint8_t  rd = 0, lsq_id = 0;
     bool     reg_we = false, is_store = false, is_load = false;
-    bool     control = false, illegal = false;
+    bool     control = false, uncond = false, illegal = false;
     bool     pred_taken = false;
     uint32_t pred_target = 0;
     bool     done = false, exception = false, resolved = false;
@@ -120,6 +123,7 @@ struct ExpComb {
     uint32_t commit_rd[W] = {}, commit_dest[W] = {}, commit_free[W] = {};
     bool commit_free_valid[W] = {};
     bool halt = false, flush = false;
+    bool br_uncond = false;
     int  br_pos = -1;
     bool br_mispredict = false;
     int  n_commit = 0;
@@ -131,6 +135,7 @@ struct ExpReg {
     uint32_t redirect_pc = 0, squash_idx = 0;
     uint64_t free_mask = 0, busy_mask = 0;
     uint8_t lsq_ptr = 0;
+    uint32_t rat[32] = {};
 };
 
 struct RefRob {
@@ -159,14 +164,17 @@ struct RefRob {
 
         e.br_pos = -1;
         if (in.br_valid) {
-            for (size_t i = 0; i < q.size(); ++i) {
-                if (q[i].control && q[i].dest == in.br_tag) {
-                    e.br_pos = (int)i;
+            // The original RTL overwrites each match in program order,
+            // selecting the youngest control uop for duplicate interface tags.
+            for (int i = (int)q.size() - 1; i >= 0; --i) {
+                if (q[(size_t)i].control && q[(size_t)i].dest == in.br_tag) {
+                    e.br_pos = i;
                     break;
                 }
             }
             if (e.br_pos >= 0) {
                 const Entry& b = q[(size_t)e.br_pos];
+                e.br_uncond = b.uncond;
                 e.br_mispredict = (in.br_taken != b.pred_taken) ||
                                   (in.br_taken && in.br_target != b.pred_target);
             }
@@ -174,7 +182,7 @@ struct RefRob {
         e.flush = e.br_pos >= 0 && e.br_mispredict;
 
         e.in_ready = !e.flush && !cur_recover && !cur_redirect &&
-                     (q.size() + (size_t)W <= (size_t)DEPTH);
+                     (q.size() < (size_t)DEPTH);
 
         e.n_commit = 0;
         // rename 在 recover_valid 拍装载恢复快照并忽略 commit 反馈，
@@ -237,6 +245,13 @@ struct RefRob {
                 r.squash_idx = b.idx;
                 r.recover_valid = true;
 
+                // Independent program-order replay, including the branch's
+                // own destination; younger writers do not survive recovery.
+                for (int rg = 0; rg < 32; ++rg) r.rat[rg] = crat[rg];
+                for (int i = 0; i <= e.br_pos; ++i)
+                    if (q[(size_t)i].reg_we)
+                        r.rat[q[(size_t)i].rd] = q[(size_t)i].dest;
+
                 r.free_mask = ~0ull;
                 r.free_mask &= ~1ull;
                 for (int rg = 0; rg < 32; ++rg)
@@ -273,7 +288,7 @@ struct RefRob {
         if (e.in_ready) {
             uint32_t base = (old_head + (uint32_t)old_size) & (DEPTH - 1);
             for (int l = 0; l < W; ++l) {
-                if (in.u[l].dest == 0) continue;
+                if (in.u[l].dest == 0 || (size_t)l >= (size_t)DEPTH-old_size) continue;
                 Entry x;
                 x.idx = (base + (uint32_t)l) & (DEPTH - 1);
                 x.pc = in.u[l].pc;
@@ -286,6 +301,7 @@ struct RefRob {
                 x.is_load = in.u[l].is_load;
                 x.lsq_id = in.u[l].lsq_id;
                 x.control = in.u[l].is_branch || in.u[l].is_jal || in.u[l].is_jalr;
+                x.uncond = in.u[l].is_jal || in.u[l].is_jalr;
                 x.illegal = in.u[l].illegal;
                 x.pred_taken = in.u[l].pred_taken;
                 x.pred_target = in.u[l].pred_target;
@@ -370,6 +386,16 @@ struct Harness {
         dut->complete_exception = ce;
         dut->br_update_valid = in.br_valid;
         dut->br_update_pc = in.br_pc;
+#if TB_BRANCH_PC_FROM_UPDATE
+        // This mode models the executing instruction supplying its own PC.
+        // Keep the independent ordered-queue reference unchanged.
+        for (auto it = ref.q.rbegin(); it != ref.q.rend(); ++it) {
+            if (it->control && it->dest == in.br_tag) {
+                dut->br_update_pc = it->pc;
+                break;
+            }
+        }
+#endif
         dut->br_update_taken = in.br_taken;
         dut->br_update_target = in.br_target;
         dut->br_update_is_jalr = in.br_jalr;
@@ -381,12 +407,18 @@ struct Harness {
 
     void check_comb(const ExpComb& e, const char* tag) {
         ++checked;
+        unsigned capacity=0;
+        for(int l=0;l<W;++l) if(ref.q.size()+l<DEPTH) capacity|=1u<<l;
+        if((unsigned)dut->in_capacity!=capacity)
+            report(tag,"input prefix capacity",-1,dut->in_capacity,capacity);
         if ((bool)dut->in_ready != e.in_ready) {
             report(tag, "in_ready", -1, dut->in_ready, e.in_ready);
         }
         if ((bool)dut->commit_halt != e.halt) {
             report(tag, "commit_halt", -1, dut->commit_halt, e.halt);
         }
+        if ((bool)dut->br_update_uncond != e.br_uncond)
+            report(tag, "branch uncond", -1, dut->br_update_uncond, e.br_uncond);
         uint32_t cv = (uint32_t)dut->commit_valid;
         for (int l = 0; l < W; ++l) {
             bool want = e.commit_valid[l];
@@ -424,6 +456,11 @@ struct Harness {
         if ((bool)dut->recover_valid != r.recover_valid)
             report(tag, "recover_valid", -1, dut->recover_valid, r.recover_valid);
         if (r.recover_valid) {
+            for (int rg = 0; rg < 32; ++rg) {
+                uint32_t actual = get_bits(dut->recover_rat, rg * PW, PW);
+                if (actual != r.rat[rg])
+                    report(tag, "recover_rat", rg, actual, r.rat[rg]);
+            }
             uint64_t fm = (uint64_t)dut->recover_free_mask;
             uint64_t bm = (uint64_t)dut->recover_busy_mask;
             if (fm != r.free_mask) {
@@ -663,6 +700,25 @@ bool run_directed(Harness& h) {
     return ok;
 }
 
+void run_capacity_boundaries(Harness& h) {
+    h.reset();
+    for(int i=0;i<DEPTH-1;++i) {
+        Inputs in;in.u[0]=make_uop(0xb000+4*i,i+1,0,false);
+        h.step(in,"fill-to-one-free-slot");
+    }
+    Inputs in;
+    for(int l=0;l<W;++l)in.u[l]=make_uop(0xc000+4*l,40+l,0,false);
+    h.step(in,"accept-only-capacity-prefix");
+    if(h.ref.q.size()!=DEPTH)h.report("capacity","last slot",-1,h.ref.q.size(),DEPTH);
+    in={};in.cdb_valid=true;in.cdb_tag=1;h.step(in,"complete-head-while-full");
+    in={};for(int l=0;l<W;++l)in.u[l]=make_uop(0xd000+4*l,45+l,0,false);
+    h.step(in,"full-does-not-borrow-same-cycle-commit");
+    if(h.ref.q.size()!=DEPTH-1)h.report("capacity","full commit only",-1,h.ref.q.size(),DEPTH-1);
+    h.step(in,"reuse-single-slot-after-commit-edge");
+    if(h.ref.q.size()!=DEPTH)h.report("capacity","wrapped last slot",-1,h.ref.q.size(),DEPTH);
+    h.reset();
+}
+
 // Cover every circular head position, including duplicate tags straddling wrap.
 // Observe only external commit/recovery signals through the ordered-queue model.
 void run_completion_boundaries(Harness& h) {
@@ -691,6 +747,113 @@ void run_completion_boundaries(Harness& h) {
         in={};in.cdb_valid=true;in.cdb_tag=21;h.step(in,"complete-surviving-older");
         for(int n=0;n<4;++n) h.step(Inputs{},"drain-duplicate-boundary");
         if(!h.ref.q.empty())h.report("boundary","duplicate drain",-1,h.ref.q.size(),0);
+    }
+}
+
+void run_recovery_rat_boundaries(Harness& h) {
+    for (int branch_writes = 0; branch_writes < 2; ++branch_writes)
+        for (int target = 0; target < DEPTH; ++target) {
+            h.reset();
+            Inputs in;
+            in.u[0] = make_uop(0xb000, 5, 27, true);
+            h.step(in, "seed-committed-rat");
+            in = {}; in.comp_valid[0] = true; in.comp_tag[0] = 5;
+            h.step(in, "seed-rat-complete");
+            h.step(Inputs{}, "seed-rat-commit");
+            while (h.ref.head != (uint32_t)target) {
+                in = {}; in.u[0] = make_uop(0xb004, 6, 0, false);
+                h.step(in, "rat-wrap-allocate");
+                in = {}; in.comp_valid[0] = true; in.comp_tag[0] = 6;
+                h.step(in, "rat-wrap-complete");
+                h.step(Inputs{}, "rat-wrap-commit");
+            }
+            const int rd[] = {0, 5, 5, 5, 31, 5, 5, 27};
+            for (int i = 0; i < 8; ++i) {
+                in = {};
+                bool writes = i != 3 && (i != 5 || branch_writes);
+                in.u[0] = make_uop(0xb100 + 4*i, 18+i, rd[i], writes);
+                if (i == 5) {
+                    in.u[0].is_jalr = branch_writes;
+                    in.u[0].is_branch = !branch_writes;
+                }
+                h.step(in, "rat-live-prefix-writers");
+            }
+            in = {}; in.br_valid = true; in.br_tag = 23;
+            in.br_taken = true; in.br_target = 0xc000;
+            in.cdb_valid = true; in.cdb_tag = 20;
+            h.step(in, "rat-branch-prefix-recovery");
+            h.step(Inputs{}, "rat-recovery-pulse");
+        }
+}
+
+// Recover from a full queue at each circular head and at both age extremes.
+// The reference remains an ordered deque: no physical-slot mask/tree model.
+void run_recovery_mask_boundaries(Harness& h) {
+    for (int target = 0; target < DEPTH; ++target)
+        for (int branch_pos : {0, DEPTH / 2 - 1, DEPTH - 1}) {
+            h.reset();
+            Inputs in;
+            in.u[0] = make_uop(0xd000, 63, 27, true);
+            h.step(in, "mask-seed-high-committed-tag");
+            in = {}; in.comp_valid[0] = true; in.comp_tag[0] = 63;
+            h.step(in, "mask-seed-complete");
+            h.step(Inputs{}, "mask-seed-commit");
+            while (h.ref.head != (uint32_t)target) {
+                in = {}; in.u[0] = make_uop(0xd004, 62, 0, false);
+                h.step(in, "mask-wrap-allocate");
+                in = {}; in.comp_valid[0] = true; in.comp_tag[0] = 62;
+                h.step(in, "mask-wrap-complete");
+                h.step(Inputs{}, "mask-wrap-commit");
+            }
+            for (int i = 0; i < DEPTH; ++i) {
+                in = {};
+                // Non-writing uops still reserve their completion tags. The
+                // branch itself has no memory operation, testing empty prefix.
+                in.u[0] = make_uop(0xd100 + 4*i, i + 1, i % 32,
+                                    (i % 3) == 0, 0,
+                                    i != branch_pos && (i % 3) == 1,
+                                    i != branch_pos && (i % 3) == 2,
+                                    (i + 1) % LSQ, i == branch_pos);
+                h.step(in, "mask-fill-full-window");
+            }
+            // Complete older, branch and younger tags at the recovery edge;
+            // branch in the middle also makes the LSQ pointer wrap to zero.
+            in = {}; in.br_valid = true; in.br_tag = branch_pos + 1;
+            in.br_taken = true; in.br_target = 0xe000;
+            in.cdb_valid = true; in.cdb_tag = 1;
+            in.comp_valid[0] = true; in.comp_tag[0] = branch_pos + 1;
+            if constexpr (W > 1) {
+                in.comp_valid[1] = true; in.comp_tag[1] = DEPTH;
+            }
+            h.step(in, "mask-full-window-recovery");
+            h.step(Inputs{}, "mask-full-window-pulse");
+        }
+}
+
+void run_branch_lookup_boundaries(Harness& h) {
+    for(int target=0;target<DEPTH;++target)for(int mode=0;mode<3;++mode) {
+        h.reset();
+        for(int n=0;n<target;++n) {
+            Inputs in;in.u[0]=make_uop(0x10000,6,0,false);h.step(in,"branch-head-allocate");
+            in={};in.comp_valid[0]=true;in.comp_tag[0]=6;h.step(in,"branch-head-complete");
+            h.step(Inputs{},"branch-head-commit");
+        }
+        Inputs in;in.u[0]=make_uop(0x11000,22,0,false);
+        in.u[0].is_jal=mode!=2;in.u[0].is_branch=mode==2;
+        in.u[0].pred_taken=mode==1;in.u[0].pred_target=0x20000;
+        h.step(in,"branch-older-duplicate");
+        in={};in.u[0]=make_uop(0x11004,23,0,false);h.step(in,"branch-gap");
+        in={};in.u[0]=make_uop(0x11008,22,0,false);
+        in.u[0].is_jalr=mode==2;in.u[0].is_branch=mode!=2;
+        in.u[0].pred_taken=true;in.u[0].pred_target=0x21000;
+        h.step(in,"branch-younger-duplicate");
+        in={};in.u[0]=make_uop(0x1100c,24,0,false);h.step(in,"branch-youngest-tail");
+        in={};in.br_tag=22;in.br_taken=mode!=0;
+        in.br_target=mode==2?0x21000:0x20000;
+        h.step(in,"invalid-branch-update-does-not-qualify");
+        in.br_valid=true;in.br_pc=0x11000;
+        h.step(in,"youngest-control-tag-determines-prediction-pc-and-kind");
+        h.step(Inputs{},"branch-duplicate-recovery-pulse");
     }
 }
 
@@ -793,7 +956,11 @@ int main(int argc, char** argv) {
     h.dut = &dut;
 
     run_directed(h);
+    run_capacity_boundaries(h);
     run_completion_boundaries(h);
+    run_recovery_rat_boundaries(h);
+    run_recovery_mask_boundaries(h);
+    run_branch_lookup_boundaries(h);
     run_random(h, random_iters);
 
     printf("rob_tb: W=%d checked=%ld fails=%ld\n", W, h.checked, h.fails);

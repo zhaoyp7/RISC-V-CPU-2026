@@ -17,3 +17,5 @@ run_one() {
 run_one 1 8 "$@"
 run_one 1 16 "$@"
 run_one 2 16 "$@"
+run_one 1 32 "$@"
+run_one 2 32 "$@"

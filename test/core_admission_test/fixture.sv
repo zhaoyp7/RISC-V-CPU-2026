@@ -2,12 +2,15 @@ package core_admission_controls; logic free_ready, rob_ready; endpackage
 
 module frontend_ooo #(
   parameter integer W      = `CPU_ISSUE_WIDTH,
-  parameter integer FDEPTH = 8
+  parameter integer FDEPTH = 8,
+  parameter integer LOCAL_HISTORY_BITS=0,
+  parameter integer WORD_BANKING = 0
 ) (
   input  logic        clk,
   input  logic        reset,
 
   input  logic        backend_ready,
+  input  logic [W-1:0] decode_capacity,
 
   input  logic        redirect_valid,
   input  logic [31:0] redirect_pc,
@@ -92,7 +95,8 @@ endmodule
 
 module rob #(
   parameter integer W     = `CPU_ISSUE_WIDTH,
-  parameter integer DEPTH = `CPU_ROB_DEPTH
+  parameter integer DEPTH = `CPU_ROB_DEPTH,
+  parameter integer BRANCH_PC_FROM_UPDATE = 0
 ) (
   input  logic        clk,
   input  logic        reset,
@@ -104,6 +108,7 @@ module rob #(
   input  logic [W-1:0]                 in_pred_taken,
   input  logic [W*32-1:0]              in_pred_target,
   output logic                         in_ready,
+  output logic [W-1:0]                 in_capacity,
   output logic [W*`CPU_ROB_TAG_W-1:0]  alloc_rob_idx,
 
   // 完成口（R 条 CDB）
@@ -154,6 +159,7 @@ module rob #(
   output logic                         br_update_uncond
 );
   assign in_ready = core_admission_controls::rob_ready && !reset;
+  assign in_capacity = W;
   assign alloc_rob_idx = '0;
   assign commit_valid = '0;
   assign commit_tag = '0;
