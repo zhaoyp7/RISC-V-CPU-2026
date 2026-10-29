@@ -22,6 +22,20 @@ opt较同源diagnose：频率 **+9.401%**、面积 **-3.310%**、吞吐 **+9.401
 合并前main5a1d8d6保存在 `main-pre-tier3-merge-20261029`；`ipc-tier3-opt-20261029` 与旧opt标签cache32-zero-opt-20261026 /29e0fc8均保留。未推送。
 合并核查：[源码与正确性保留](../build/main_tier3_merge_20261029/source-check.json)、[新跑测试](../build/main_tier3_merge_20261029/checks.json)。以下历史对照中的main5a1d8d6均为合并前基线，不作为当前main的PPA。
 
+## 2026-10-29 第二个两小时提频窗口（进行中）
+
+授权时段13:52:37至15:52:37，以v115/e836157为保留基线；默认配置和main不变。只跑diagnose、综合严格串行，opt继续等待用户新的明确指令。面积36k上限最终按opt判断。
+
+| 同模式diagnose | IPC | MHz | 面积 µm² |
+| --- | ---: | ---: | ---: |
+| v118取消过滤复用 | 1.105023 | 383.664 | 35,472.822 |
+| v120快照元数据预采样 | 1.105023 | 384.962 | 35,398.230 |
+| 窗口保留基线v115 | 1.105023 | 394.605 | 35,380.763 |
+| main e16f5b1＋同高性能配置 | 1.105023 | 384.240 | 35,412.183 |
+
+v118取消过滤复用：高W2完整19/19，六perf实测；[同源PPA核验](../build/three_hour_20261027/freq_qualified_lsu_issue_v118/verification.json)。
+v120快照元数据预采样：高W2完整19/19，六perf实测；[同源PPA核验](../build/three_hour_20261027/freq_snapshot_metadata_ready_v120/verification.json)。
+
 ## 2026-10-29 两小时提频窗口（已完成）
 
 授权时段11:46:28至13:46:28，从main e16f5b1建立 `feat/freq-tier3-20261029`，默认配置保持不变。
@@ -660,6 +674,8 @@ load/store 放入旧的 a0/a1 缓冲。优先做分析和方案设计，单次�
 | 2026-10-29 | [冻结v114寄存提示加恢复树](../build/three_hour_20261027/freq_owner_and_recovery_tree_v114/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 35,388.841 (diag) | 368.478 (diag) | 两小时提频对照；高W219/19；最终以opt判断 |
 | 2026-10-29 | [冻结v115恢复树加快照使能](../build/three_hour_20261027/freq_recovery_tree_snapshot_v115/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 35,380.763 (diag) | 394.605 (diag) | 两小时提频对照；高W219/19；最终以opt判断 |
 | 2026-10-29 | [冻结v117控制旁路独立提示](../build/three_hour_20261027/freq_uncancelled_control_hint_v117/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 35,332.999 (diag) | 383.234 (diag) | 两小时提频对照；高W2 19/19；最终以opt判断 |
+| 2026-10-29 | [冻结v118取消过滤复用](../build/three_hour_20261027/freq_qualified_lsu_issue_v118/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 35,472.822 (diag) | 383.664 (diag) | 第二窗口提频对照；高W2 19/19；最终以opt判断 |
+| 2026-10-29 | [冻结v120快照元数据预采样](../build/three_hour_20261027/freq_snapshot_metadata_ready_v120/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 35,398.230 (diag) | 384.962 (diag) | 第二窗口提频对照；高W2 19/19；最终以opt判断 |
 
 P2 基线 opt 综合：comb 16,361.326、seq 5,648.117、SRAM 2,278.903 µm²，
 min period 17.8320 ns（目标 2 ns，WNS −15.8320 ns）。diagnose 为 25,025.438 µm²、
@@ -858,6 +874,8 @@ ALU，必须先确认 IPC 不低于 0.60。
 | v114寄存提示加恢复树；提频对照 | [冻结v114寄存提示加恢复树](../build/three_hour_20261027/freq_owner_and_recovery_tree_v114/verification.json) | 1.105023 | 0.836251 | 35,388.841 | 368.478 | — | — |
 | v115恢复树加快照使能；提频对照 | [冻结v115恢复树加快照使能](../build/three_hour_20261027/freq_recovery_tree_snapshot_v115/verification.json) | 1.105023 | 0.836251 | 35,380.763 | 394.605 | — | — |
 | v117控制旁路独立提示；提频对照 | [冻结v117控制旁路独立提示](../build/three_hour_20261027/freq_uncancelled_control_hint_v117/verification.json) | 1.105023 | 0.836251 | 35,332.999 | 383.234 | — | — |
+| v118取消过滤复用；第二窗口提频 | [冻结v118取消过滤复用](../build/three_hour_20261027/freq_qualified_lsu_issue_v118/verification.json) | 1.105023 | 0.836251 | 35,472.822 | 383.664 | — | — |
+| v120快照元数据预采样；第二窗口提频 | [冻结v120快照元数据预采样](../build/three_hour_20261027/freq_snapshot_metadata_ready_v120/verification.json) | 1.105023 | 0.836251 | 35,398.230 | 384.962 | — | — |
 
 新增行的“—”表示没有对应同源 opt 数据；不复用历史 main 或其他候选的 opt。
 
