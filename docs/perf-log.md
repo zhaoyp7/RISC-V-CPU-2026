@@ -2,6 +2,24 @@
 
 > 本轮最新评分目标：IPC **>1.0985**、面积 **<36,000µm²**、频率至少300MHz；满足后优先提高频率（400MHz加2分、500MHz加4分）。当前最终综合口径为同源opt，diagnose保留作趋势对照。
 
+## 2026-10-29 夜间三小时控制链提频（进行中）
+
+授权时段23:43:45至10月30日02:43:45；以Booth v126/40ec8b8为实验起点，main e16f5b1保留。根据已完成opt的关键路径优化调度／访存控制；本窗口仅串行diagnose，不新增opt。IPC保持>1.0985，最终面积上限36k按opt判断；默认配置不改。编译完成即清理PCH，宿主C盘保护线30GiB，build保留上限64GiB。
+
+| 同模式diagnose | IPC | MHz | 面积 µm² |
+| --- | ---: | ---: | ---: |
+| 仲裁相位独热寄存 | 1.105023 | 388.910 | 34,462.384 |
+| LSQ年龄关系快照 | 1.105023 | 413.070 | 34,534.292 |
+| 相位无关访存提示 | 1.105023 | 409.273 | 34,468.493 |
+| 窗口起点Booth v126 | 1.105023 | 407.319 | 34,468.770 |
+| main e16f5b1同高性能配置 | 1.105023 | 384.240 | 35,412.183 |
+
+仲裁相位独热寄存：三项冒烟和六perf通过；高W2 19/19；[同源PPA核验](../build/three_hour_20261027/freq_onehot_phase_hint_v128/verification.json)、[当轮三方对照](../build/three_hour_20261027/freq_onehot_phase_hint_v128/window3-comparison.json)。
+LSQ年龄关系快照：三项冒烟和六perf通过；高W2 19/19；[同源PPA核验](../build/three_hour_20261027/freq_lsq_age_snapshot_v130/verification.json)、[当轮三方对照](../build/three_hour_20261027/freq_lsq_age_snapshot_v130/window3-comparison.json)。
+相位无关访存提示：三套配置各19/19，六perf与统计版同周期；改动模块专项通过，未改模块复用已记录全套结果；[同源PPA核验](../build/three_hour_20261027/freq_phase_free_memory_hint_v129/verification.json)、[当轮三方对照](../build/three_hour_20261027/freq_phase_free_memory_hint_v129/window3-comparison.json)。
+
+当前保留实验源：`freq_phase_free_memory_hint_v129`；没有以diagnose替代最终opt判断。
+
 ## 2026-10-29 C盘空间事件（已恢复）
 
 用户再次报告C盘约50GB空间下降后，已禁止本地助手启动新的编译、仿真或综合；v126的opt尚未启动，main仍为e16f5b1。此前反复保留各配置的编译缓存和综合中间网表，使构建目录再次累计增长；没有完整的宿主VHD逐时大小记录，不能把全部50GB归因于某一类文件。
@@ -728,6 +746,10 @@ load/store 放入旧的 a0/a1 缓冲。优先做分析和方案设计，单次�
 | 2026-10-29 | [冻结v125无符号Booth加伪Wallace](../build/three_hour_20261027/freq_booth_wallace_multiplier_v125/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,561.630 (diag) | 393.543 (diag) | 第二窗口提频对照；高W2 19/19；最终以opt判断 |
 | 2026-10-29 | `freq-booth-wallace-opt-20261029` | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 33,292.528 (opt) | 413.570 (opt) | Booth最终综合候选；来源40ec8b8；三套19/19；未改模块复用v121完整单测 |
 | 2026-10-29 | [冻结v127两位分组地址加法](../build/three_hour_20261027/freq_booth_agu2_v127/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,466.437 (diag) | 350.685 (diag) | 第二窗口提频对照；三项冒烟与六perf；高W2/W1各14项、默认19项通过；频率负收益停止余项，不采用 |
+| 2026-10-30 | [冻结v128 仲裁相位独热寄存](../build/three_hour_20261027/freq_onehot_phase_hint_v128/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,462.384 (diag) | 388.910 (diag) | 三项冒烟和六perf通过；高W2 19/19；三小时控制链试验，保留决定见窗口记录 |
+| 2026-10-30 | [冻结v129 访存提示去相位依赖](../build/three_hour_20261027/freq_phase_free_memory_hint_v129/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,468.493 (diag) | 409.273 (diag) | 三项冒烟和六perf通过；高W2 19/19；三小时控制链试验，保留决定见窗口记录 |
+| 2026-10-30 | [冻结v129 相位无关访存提示](../build/three_hour_20261027/freq_phase_free_memory_hint_v129/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,468.493 (diag) | 409.273 (diag) | 三套配置各19/19，六perf与统计版同周期；改动模块专项通过，未改模块复用已记录全套结果；三小时控制链试验，保留决定见窗口记录 |
+| 2026-10-30 | [冻结v130 LSQ年龄关系快照](../build/three_hour_20261027/freq_lsq_age_snapshot_v130/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,534.292 (diag) | 413.070 (diag) | 三项冒烟和六perf通过；高W2 19/19；三小时控制链试验，保留决定见窗口记录 |
 
 P2 基线 opt 综合：comb 16,361.326、seq 5,648.117、SRAM 2,278.903 µm²，
 min period 17.8320 ns（目标 2 ns，WNS −15.8320 ns）。diagnose 为 25,025.438 µm²、
@@ -933,6 +955,10 @@ ALU，必须先确认 IPC 不低于 0.60。
 | v125无符号Booth加伪Wallace；第二窗口提频 | [冻结v125无符号Booth加伪Wallace](../build/three_hour_20261027/freq_booth_wallace_multiplier_v125/verification.json) | 1.105023 | 0.836251 | 34,561.630 | 393.543 | — | — |
 | v126带符号Booth加伪Wallace；opt已完成 | [opt同源核验](../build/three_hour_20261027/freq_signed_booth_wallace_v126/opt-verification.json) | 1.105023 | 0.836251 | 34,468.770 | 407.319 | 33,292.528 | 413.570 |
 | v127两位分组地址加法；第二窗口提频 | [冻结v127两位分组地址加法](../build/three_hour_20261027/freq_booth_agu2_v127/verification.json) | 1.105023 | — | 34,466.437 | 350.685 | — | — |
+| v128 仲裁相位独热寄存；三小时控制链 | [冻结v128 仲裁相位独热寄存](../build/three_hour_20261027/freq_onehot_phase_hint_v128/verification.json) | 1.105023 | — | 34,462.384 | 388.910 | — | — |
+| v129 访存提示去相位依赖；三小时控制链 | [冻结v129 访存提示去相位依赖](../build/three_hour_20261027/freq_phase_free_memory_hint_v129/verification.json) | 1.105023 | — | 34,468.493 | 409.273 | — | — |
+| v129 相位无关访存提示；三小时控制链 | [冻结v129 相位无关访存提示](../build/three_hour_20261027/freq_phase_free_memory_hint_v129/verification.json) | 1.105023 | — | 34,468.493 | 409.273 | — | — |
+| v130 LSQ年龄关系快照；三小时控制链 | [冻结v130 LSQ年龄关系快照](../build/three_hour_20261027/freq_lsq_age_snapshot_v130/verification.json) | 1.105023 | — | 34,534.292 | 413.070 | — | — |
 
 新增行的“—”表示没有对应同源 opt 数据；不复用历史 main 或其他候选的 opt。
 

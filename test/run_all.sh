@@ -56,6 +56,7 @@ run "alu arithmetic" sh test/alu_test/run.sh
 run "Booth / pseudo-Wallace independent 32x32 product reference" sh test/booth_multiplier_test/run.sh
 run "CDB arbitration/lookahead guarantee" sh test/cdb_test/run.sh
 run "CDB guaranteed hints / exhaustive optional source" sh test/cdb_guarantee_test/run.sh
+run "CDB phase-independent memory hints / cancellation subsets" sh test/cdb_memory_hint_test/run.sh
 run "issue queue W1/W2 R1/R2" sh test/issue_queue_test/run.sh
 run "pc_unit" sh test/pc_unit_test/run.sh $quick --seed "$seed"
 run "bpu default" sh test/bpu_test/run.sh $quick --seed "$seed"

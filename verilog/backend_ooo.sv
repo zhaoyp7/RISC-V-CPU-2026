@@ -845,7 +845,10 @@ module backend_ooo #(
   wire[N-1:0]memory_hint_mask=RAW_MEMORY_HINT ? raw_memory_hint_mask : cdb_hint_ready;
   wire memory_hint_valid=|memory_hint_mask;
   wire[PW-1:0]memory_hint_tag=memory_hint_mask[0]?alu_tag_q:(memory_hint_mask[1]?alu1_tag_q:div_tag_q);
-  generate if(R>=2)begin:gen_raw_memory_guarantee
+  generate if(R==2)begin:gen_raw_memory_guarantee_universal
+  cdb_memory_hint_universal u_raw_memory_hint(
+    .compute_valid(compute_pending),.hint_mask(raw_memory_hint_mask));
+  end else if(R>=2)begin:gen_raw_memory_guarantee
   (* keep_hierarchy="yes" *)cdb_compute_hint #(.N(4),.R(R),.PRIORITY_ALU0(1),.OPTIONAL(2)) u_raw_memory_hint(
     .last(cdb_phase),.compute_valid(compute_pending),.hint_mask(raw_memory_hint_mask));
   end else begin:gen_no_raw_memory_guarantee
@@ -1350,5 +1353,17 @@ module backend_ooo #(
       st_skid_cycles, st_iq_full_stall, st_backend_bubble);
 `endif
 
+endmodule
+
+// Intersection of compute grants over every phase and optional-load state.
+// Consumers only receive hints which cannot depend on arbiter rotation.
+module cdb_memory_hint_universal(
+ input logic [2:0] compute_valid,output logic [3:0] hint_mask
+);
+ wire v0=compute_valid[0],v1=compute_valid[1],v3=compute_valid[2];
+ assign hint_mask[0]=v0;
+ assign hint_mask[1]=v1 && !v0 && !v3;
+ assign hint_mask[2]=1'b0;
+ assign hint_mask[3]=v3 && !v0 && !v1;
 endmodule
 
