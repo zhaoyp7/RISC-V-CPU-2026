@@ -2,6 +2,16 @@
 
 > 本轮最新评分目标：IPC **>1.0985**、面积 **<36,000µm²**、频率至少300MHz；满足后优先提高频率（400MHz加2分、500MHz加4分）。当前最终综合口径为同源opt，diagnose保留作趋势对照。
 
+## 2026-10-29 C盘空间事件（重型任务停止）
+
+用户再次报告C盘约50GB空间下降后，已禁止本地助手启动新的编译、仿真或综合；v126的opt尚未启动，main仍为e16f5b1。此前反复保留各配置的编译缓存和综合中间网表，使构建目录再次累计增长；没有完整的宿主VHD逐时大小记录，不能把全部50GB归因于某一类文件。
+
+清理前build约84.8GiB，其中350个当天生成的预编译头缓存约23.104GiB、393个综合中间JSON网表约34.245GiB。19:11仅删除清单内的350个缓存文件，保留全部源码、仿真器、目标文件、冻结输入、网表、日志和综合报告；Linux客体释放约23.104GiB，但Windows C盘没有即时增加空闲空间。20:33复查build约61.721GiB，C盘约27.530GiB可用；Windows侧Ubuntu ext4.vhdx文件长度约138.688GiB。虚拟磁盘文件长度与Linux已用空间、宿主实际分配空间分别统计，不能混为同一指标。
+
+已给单测构建及本地整核构建助手补上完成后的预编译头清理；仅删除该构建对象目录内符合Verilator命名的普通PCH文件，不递归、不跟随符号链接。临时文件检查16项通过，未启动新的RTL编译或综合。助手C盘启动保护线由20提高至30GiB，新增build 64GiB保留上限；达到上限须先归档已结束的实验，不能继续累计。当前重任务禁启标记继续生效，等待宿主空间回收；不自动关闭WSL或压缩正在挂载的虚拟磁盘。
+
+证据：[删除清单](../build/gch-cleanup-20261029-disk-incident-manifest.json)、[清理前后空间](../build/gch-cleanup-20261029-disk-incident-result.json)、[清理后分类统计](../build/disk-incident-inventory-after-20261029.json)、[缓存保留边界检查](../build/gch-retention-check-20261029.json)。本节没有新增性能测量，原有完整核心表和PPA数字保持有效。
+
 ## 当前 opt 检查点：a5835fe（2026-10-29）
 
 最终综合标签 `ipc-tier3-opt-20261029`；生产源码标签 `ipc-tier3-class-priority-20261029`；已从 `feat/ipc-frontend-recovery-20261027` 合入本地 `main`。
@@ -22,7 +32,7 @@ opt较同源diagnose：频率 **+9.401%**、面积 **-3.310%**、吞吐 **+9.401
 合并前main5a1d8d6保存在 `main-pre-tier3-merge-20261029`；`ipc-tier3-opt-20261029` 与旧opt标签cache32-zero-opt-20261026 /29e0fc8均保留。未推送。
 合并核查：[源码与正确性保留](../build/main_tier3_merge_20261029/source-check.json)、[新跑测试](../build/main_tier3_merge_20261029/checks.json)。以下历史对照中的main5a1d8d6均为合并前基线，不作为当前main的PPA。
 
-## 2026-10-29 第二个两小时提频窗口（进行中）
+## 2026-10-29 第二个两小时提频窗口（已收束，接续opt任务）
 
 授权时段13:52:37至15:52:37，以v115/e836157为窗口起点；默认配置和main不变。只跑diagnose、综合严格串行，opt继续等待用户新的明确指令。面积36k上限最终按opt判断。
 
@@ -34,6 +44,7 @@ opt较同源diagnose：频率 **+9.401%**、面积 **-3.310%**、吞吐 **+9.401
 | v122并行生产者标签比较 | 1.105023 | 390.244 | 35,336.630 |
 | v125无符号Booth加伪Wallace | 1.105023 | 393.543 | 34,561.630 |
 | v126带符号Booth加伪Wallace | 1.105023 | 407.319 | 34,468.770 |
+| v127两位分组地址加法 | 1.105023 | 350.685 | 34,466.437 |
 | 窗口起点v115 | 1.105023 | 394.605 | 35,380.763 |
 | main e16f5b1＋同高性能配置 | 1.105023 | 384.240 | 35,412.183 |
 
@@ -43,6 +54,10 @@ v121分支年龄直传：高W2完整19/19，六perf实测；[同源PPA核验](..
 v122并行生产者标签比较：高W2完整19/19，六perf实测；[同源PPA核验](../build/three_hour_20261027/freq_parallel_issue_tag_match_v122/verification.json)。
 v125无符号Booth加伪Wallace：高W2完整19/19，六perf实测；[同源PPA核验](../build/three_hour_20261027/freq_booth_wallace_multiplier_v125/verification.json)。
 v126带符号Booth加伪Wallace：高W2完整19/19，六perf实测；[同源PPA核验](../build/three_hour_20261027/freq_signed_booth_wallace_v126/verification.json)。
+v127两位分组地址加法：三项冒烟通过；高W2/W1各14项及默认19项通过，因空间保护且频率负收益停止余项，六perf实测；[同源PPA核验](../build/three_hour_20261027/freq_booth_agu2_v127/verification.json)。
+
+15:47用户调整后续安排：本阶段保留v126/40ec8b8，转入新授权的两小时窗口，先一次opt、核验后合main，再继续提频。本阶段没有opt。v126三套各19/19，乘法4,013,072组及ALU713,728项检查通过，未改模块复用v121完整run_all ALL PASS；仓库Booth与ALU测试入口已新跑通过。复现配置见 [Booth配置](../tools/perf_stats/profiles/frequency-booth-wallace-20261029.json)。
+v127 diagnose350.685MHz，较v126下降13.904%，不采用；高W2/W1各14/19、默认19/19通过后，Windows C盘短暂低于20GiB安全阈值，停止其余测试。Booth代码未改动，原本已完整验证的v126继续有效。v123/v124仅保留功能原型，三套各19/19，排队综合按用户乘法器优先级取消，无PPA、不加入完整核心表。
 
 ## 2026-10-29 两小时提频窗口（已完成）
 
@@ -688,6 +703,7 @@ load/store 放入旧的 a0/a1 缓冲。优先做分析和方案设计，单次�
 | 2026-10-29 | [冻结v122并行生产者标签比较](../build/three_hour_20261027/freq_parallel_issue_tag_match_v122/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 35,336.630 (diag) | 390.244 (diag) | 第二窗口提频对照；高W2 19/19；最终以opt判断 |
 | 2026-10-29 | [冻结v125无符号Booth加伪Wallace](../build/three_hour_20261027/freq_booth_wallace_multiplier_v125/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,561.630 (diag) | 393.543 (diag) | 第二窗口提频对照；高W2 19/19；最终以opt判断 |
 | 2026-10-29 | [冻结v126带符号Booth加伪Wallace](../build/three_hour_20261027/freq_signed_booth_wallace_v126/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,468.770 (diag) | 407.319 (diag) | 第二窗口提频对照；高W2 19/19；最终以opt判断 |
+| 2026-10-29 | [冻结v127两位分组地址加法](../build/three_hour_20261027/freq_booth_agu2_v127/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,466.437 (diag) | 350.685 (diag) | 第二窗口提频对照；三项冒烟与六perf；高W2/W1各14项、默认19项通过；频率负收益停止余项，不采用 |
 
 P2 基线 opt 综合：comb 16,361.326、seq 5,648.117、SRAM 2,278.903 µm²，
 min period 17.8320 ns（目标 2 ns，WNS −15.8320 ns）。diagnose 为 25,025.438 µm²、
@@ -892,6 +908,7 @@ ALU，必须先确认 IPC 不低于 0.60。
 | v122并行生产者标签比较；第二窗口提频 | [冻结v122并行生产者标签比较](../build/three_hour_20261027/freq_parallel_issue_tag_match_v122/verification.json) | 1.105023 | 0.836251 | 35,336.630 | 390.244 | — | — |
 | v125无符号Booth加伪Wallace；第二窗口提频 | [冻结v125无符号Booth加伪Wallace](../build/three_hour_20261027/freq_booth_wallace_multiplier_v125/verification.json) | 1.105023 | 0.836251 | 34,561.630 | 393.543 | — | — |
 | v126带符号Booth加伪Wallace；第二窗口提频 | [冻结v126带符号Booth加伪Wallace](../build/three_hour_20261027/freq_signed_booth_wallace_v126/verification.json) | 1.105023 | 0.836251 | 34,468.770 | 407.319 | — | — |
+| v127两位分组地址加法；第二窗口提频 | [冻结v127两位分组地址加法](../build/three_hour_20261027/freq_booth_agu2_v127/verification.json) | 1.105023 | — | 34,466.437 | 350.685 | — | — |
 
 新增行的“—”表示没有对应同源 opt 数据；不复用历史 main 或其他候选的 opt。
 

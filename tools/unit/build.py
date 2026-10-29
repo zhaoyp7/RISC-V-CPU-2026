@@ -29,6 +29,8 @@ import shutil
 import subprocess
 import sys
 
+from pch_cache import prune_verilator_pch
+
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = ROOT / "scripts"
 if str(SCRIPTS) not in sys.path:
@@ -146,6 +148,16 @@ def main() -> int:
     environment = os.environ.copy()
     environment.setdefault("MAKE", shutil.which("make") or "make")
     subprocess.run(command, check=True, env=environment)
+
+    # A PCH can be much larger than the resulting test binary.  Keeping one
+    # pair for every parameter variant previously exhausted the Windows host
+    # disk even though WSL still reported plenty of guest filesystem space.
+    # Explicitly retain it only when requested for incremental compilation.
+    if environment.get("CPU_KEEP_PCH") != "1":
+        count, removed_bytes = prune_verilator_pch(objects)
+        if count:
+            print(f"[build] removed {count} regenerable PCH caches "
+                  f"({removed_bytes / 1024**2:.1f} MiB)", flush=True)
 
     if args.no_run:
         print(binary)
