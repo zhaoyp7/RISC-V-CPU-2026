@@ -16,7 +16,8 @@ module lsq #(
   parameter integer W = `CPU_ISSUE_WIDTH,
   parameter integer D = `CPU_LSQ_DEPTH,
   parameter integer STORE_DATA_CAPTURE = 0,
-  parameter integer ORDERED_STORE_COMMIT = 0
+  parameter integer ORDERED_STORE_COMMIT = 0,
+  parameter integer PAIRWISE_AGE = 1
 ) (
   input  logic clk,
   input  logic reset,
@@ -244,6 +245,40 @@ module lsq #(
     ((STORE_DATA_CAPTURE && raw_drain_unshifted && raw_drain_mask!=4'hf) ?
       raw_drain_data << {raw_drain_addr[1:0],3'b000} : raw_drain_data);
 
+  localparam integer AGE_PAIRS=(D>1)?D*(D-1)/2:1;
+  logic [AGE_PAIRS-1:0] age_low_newer, snap_age_low_newer;
+  wire [W*32-1:0] age_alloc_seq;
+  wire [W*D-1:0] age_alloc_gt,age_alloc_ge;
+  generate if(PAIRWISE_AGE)begin:gen_registered_age
+    for(genvar lane=0;lane<W;lane=lane+1)begin:gen_age_alloc
+      assign age_alloc_seq[lane*32+:32]=seq_base+32'(lane);
+      for(genvar slot=0;slot<D;slot=slot+1)begin:gen_age_cmp
+        assign age_alloc_gt[lane*D+slot]=age_alloc_seq[lane*32+:32]>seq[slot*32+:32];
+        assign age_alloc_ge[lane*D+slot]=age_alloc_seq[lane*32+:32]>=seq[slot*32+:32];
+      end
+    end
+    for(genvar hi=1;hi<D;hi=hi+1)begin:gen_age_hi
+      for(genvar lo=0;lo<hi;lo=lo+1)begin:gen_age_lo
+        localparam integer P=hi*(hi-1)/2+lo;
+        logic next_age,write_age;
+        always_comb begin
+          next_age=age_low_newer[P];write_age=0;
+          for(integer a=0;a<W;a=a+1)begin
+            if(alloc_valid[a]&&alloc_id[a*LW+:LW]==LW'(lo))begin next_age=age_alloc_ge[a*D+hi];write_age=1;end
+            if(alloc_valid[a]&&alloc_id[a*LW+:LW]==LW'(hi))begin next_age=!age_alloc_gt[a*D+lo];write_age=1;end
+          end
+          for(integer a=0;a<W;a=a+1)for(integer b=0;b<W;b=b+1)
+            if(alloc_valid[a]&&alloc_id[a*LW+:LW]==LW'(lo)&&alloc_valid[b]&&alloc_id[b*LW+:LW]==LW'(hi))
+              next_age=age_alloc_seq[a*32+:32]>=age_alloc_seq[b*32+:32];
+        end
+        always_ff @(posedge clk)begin
+          if(reset)age_low_newer[P]<=0;
+          else if(alloc_ready&&alloc_fire&&write_age)age_low_newer[P]<=next_age;
+        end
+      end
+    end
+  end endgenerate
+
   // ---- query stage 1: independent comparisons and a coherent snapshot ------
   // 不只保存 slot id：store 可在下一拍释放并复用。候选的 seq/data/full
   // 必须随匹配结果一起保存，直到响应被消费。
@@ -276,7 +311,8 @@ module lsq #(
       // Payload may be sampled whenever the snapshot slot can be replaced.
       // Request validity controls ownership only; stalled live snapshots hold.
       if(query_ready)begin
-        snap_seq <= seq;
+        if(PAIRWISE_AGE)snap_age_low_newer <= age_low_newer;
+        else snap_seq <= seq;
         snap_data <= wdata;
       end
       if (query_resp_ready || query_flush)
@@ -292,6 +328,53 @@ module lsq #(
     end
   end
 
+  logic any_unknown,same_found,same_full;
+  logic [31:0] same_seq,same_data;
+  assign any_unknown=snap_unknown;
+  generate if(PAIRWISE_AGE)begin:gen_pairwise_query
+    wire [D-1:0] winner;
+    for(genvar slot=0;slot<D;slot=slot+1)begin:gen_winner
+      wire [D-1:0] beats;
+      for(genvar other=0;other<D;other=other+1)begin:gen_beats
+        if(other<slot)assign beats[other]=snap_match[other]&&snap_age_low_newer[slot*(slot-1)/2+other];
+        else if(other>slot)assign beats[other]=snap_match[other]&&!snap_age_low_newer[other*(other-1)/2+slot];
+        else assign beats[other]=0;
+      end
+      assign winner[slot]=snap_match[slot]&&!(|beats);
+    end
+    always_comb begin
+      same_found=|snap_match;same_full=0;same_data=0;same_seq=0;
+      for(integer n=0;n<D;n=n+1)begin
+        same_full=same_full||(winner[n]&&snap_full[n]);
+        same_data=same_data|(snap_data[n*32+:32]&{32{winner[n]}});
+      end
+      if(!same_found)begin same_data=snap_data[0+:32];same_full=snap_full[0];end
+    end
+`ifndef SYNTHESIS
+    // Independent full-width scan checks cached order and snapshot ownership.
+    logic [D*32-1:0] reference_seq;
+    always_ff @(posedge clk)if(!reset&&query_ready)reference_seq<=seq;
+    always_ff @(posedge clk)if(!reset&&snap_valid&&query_resp_ready)begin
+      automatic integer best=-1;
+      automatic logic [31:0] best_seq=0;
+      for(integer k=0;k<D;k=k+1)if(snap_match[k]&&
+          (best<0||reference_seq[k*32+:32]>best_seq))begin
+        best=k;best_seq=reference_seq[k*32+:32];
+      end
+      if(best<0)begin
+        if(winner!='0)$fatal(1,"cached LSQ age selected absent store");
+      end else begin
+        if(winner!=(D'(1)<<best))$fatal(1,"cached LSQ age differs from full-width scan");
+        if(same_data!=snap_data[best*32+:32]||same_full!=snap_full[best])
+          $fatal(1,"cached LSQ age selected mismatched snapshot payload");
+      end
+    end
+    always_ff @(posedge clk)if(!reset&&snap_valid)begin
+      if(!$onehot0(winner))$fatal(1,"LSQ age snapshot has multiple forwarding winners");
+      if((|snap_match)!=(|winner))$fatal(1,"LSQ age snapshot lost matching store");
+    end
+`endif
+  end else begin:gen_sequence_tree
   // ---- query stage 2: balanced youngest-match selection -------------------
   wire qt_valid [0:2*QLEAVES-1] /* verilator split_var */;
   wire qt_full [0:2*QLEAVES-1] /* verilator split_var */;
@@ -301,7 +384,6 @@ module lsq #(
   assign qt_full[0] = 1'b0;
   assign qt_seq[0] = '0;
   assign qt_data[0] = '0;
-  generate
     for (qg = 0; qg < QLEAVES; qg = qg + 1) begin : gen_query_leaf
       if (qg < D) begin : gen_entry
         assign qt_valid[QLEAVES+qg] = snap_match[qg];
@@ -327,17 +409,13 @@ module lsq #(
       assign qt_data[qg] = take_right ? qt_data[(2*qg+1)] :
                                                 qt_data[2*qg];
     end
-  endgenerate
 
-  logic        any_unknown;
-  logic        same_found, same_full;
-  logic [31:0] same_seq, same_data;
 
-  assign any_unknown = snap_unknown;
   assign same_found = qt_valid[1];
   assign same_full = qt_full[1];
   assign same_seq = qt_seq[1];
   assign same_data = qt_data[1];
+  end endgenerate
   assign query_blocked = snap_valid && (any_unknown || (same_found && !same_full));
   assign query_fwd_valid = snap_valid && !any_unknown && same_found && same_full;
   assign query_fwd_data = same_data;
