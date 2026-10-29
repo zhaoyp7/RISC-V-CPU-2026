@@ -88,6 +88,7 @@ run "frontend W=1" env FRONTEND_W=1 sh test/frontend_test/run.sh
 run "frontend W=2" env FRONTEND_W=2 sh test/frontend_test/run.sh
 run "BPU training / frontend response queues W1/W2" sh test/bpu_training_test/run.sh
 run "LSQ query snapshot depth8/depth16/depth32" sh test/lsq_query_test/run.sh
+run "LSQ youngest-store subsets / full-width age boundaries" sh test/lsq_age_test/run.sh
 run "decoupled store source / ordering and CDB capture" sh test/store_capture_test/run.sh
 run "buffered execution lookahead / mixed dependency chains W1/W2" sh test/execution_lookahead_test/run.sh
 run "squash sequence / independent accepted-dispatch ages W1/W2" sh test/squash_sequence_test/run.sh
