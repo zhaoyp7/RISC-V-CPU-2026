@@ -1,0 +1,63 @@
+{
+  "name": "frequency-direct-squash-sequence-20261029",
+  "source_commit": "96a8293ec705ea84e84dc12b551bdc47c6d8541d",
+  "source_tag": "freq-direct-squash-sequence-diagnose-20261029",
+  "generator": "tools/config_gen.py",
+  "generator_args": [
+    "--issue-width",
+    "2",
+    "--rob",
+    "32",
+    "--prf",
+    "64",
+    "--dcache-enable",
+    "1",
+    "--dcache-index-bits",
+    "2",
+    "--dcache-ways",
+    "2",
+    "--line-cache-enable",
+    "1",
+    "--line-cache-index-bits",
+    "9"
+  ],
+  "generated_cpu_config_sha256": "438e66e6183a721296ab13b4b384f9a5f00b90036cae9ad2652080e5559184df",
+  "default_cpu_config_modified": false,
+  "measurement_mode": "diagnose",
+  "ipc_geomean": 1.1050225312414483,
+  "fmax_mhz": 397.66990291262135,
+  "area_um2": 34683.547846000896,
+  "score_screen": {
+    "ipc_strictly_greater_than": 1.0985,
+    "area_strictly_less_than_um2": 36000,
+    "frequency_at_least_mhz": 300,
+    "final_opt_confirmed": false,
+    "area_limit_applies_to": "opt"
+  },
+  "verification_artifact": "build/three_hour_20261027/freq_direct_squash_sequence_v121/validation.json",
+  "unit_scope": "Fresh repository run_all ALL PASS, including independent dispatch-order squash age regression W1/W2.",
+  "correctness_profiles": [
+    {
+      "name": "freq_direct_squash_sequence_v121",
+      "passed": 19,
+      "total": 19,
+      "ipc": 1.1050225312414483
+    },
+    {
+      "name": "freq_sequence_v121_w1",
+      "passed": 19,
+      "total": 19,
+      "ipc": 0.8362511237607829
+    },
+    {
+      "name": "freq_sequence_v121_default_w2",
+      "passed": 19,
+      "total": 19,
+      "ipc": 0.6567251193518457
+    }
+  ],
+  "fresh_repository_entry_suites": [
+    "run_all"
+  ],
+  "opt_policy": "Requires a new explicit user request. No completed OPT result for this source."
+}

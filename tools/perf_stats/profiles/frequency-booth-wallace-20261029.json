@@ -1,0 +1,64 @@
+{
+  "name": "frequency-booth-wallace-20261029",
+  "source_commit": "40ec8b8d9ada7250cd34141431464648373d8194",
+  "source_tag": "freq-booth-wallace-diagnose-20261029",
+  "generator": "tools/config_gen.py",
+  "generator_args": [
+    "--issue-width",
+    "2",
+    "--rob",
+    "32",
+    "--prf",
+    "64",
+    "--dcache-enable",
+    "1",
+    "--dcache-index-bits",
+    "2",
+    "--dcache-ways",
+    "2",
+    "--line-cache-enable",
+    "1",
+    "--line-cache-index-bits",
+    "9"
+  ],
+  "generated_cpu_config_sha256": "438e66e6183a721296ab13b4b384f9a5f00b90036cae9ad2652080e5559184df",
+  "default_cpu_config_modified": false,
+  "measurement_mode": "diagnose",
+  "ipc_geomean": 1.1050225312414483,
+  "fmax_mhz": 407.3190135242641,
+  "area_um2": 34468.76986600094,
+  "score_screen": {
+    "ipc_strictly_greater_than": 1.0985,
+    "area_strictly_less_than_um2": 36000,
+    "frequency_at_least_mhz": 300,
+    "final_opt_confirmed": false,
+    "area_limit_applies_to": "opt"
+  },
+  "verification_artifact": "build/three_hour_20261027/freq_signed_booth_wallace_v126/validation.json",
+  "unit_scope": "Fresh Booth full-product reference (4013072 checks), ALU ENABLE_DIV 0/1 (713728 checks), and three 19/19 core configurations. Unchanged modules reuse v121 fresh run_all ALL PASS; no fresh whole-suite claim for v126.",
+  "correctness_profiles": [
+    {
+      "name": "freq_signed_booth_wallace_v126",
+      "passed": 19,
+      "total": 19,
+      "ipc": 1.1050225312414483
+    },
+    {
+      "name": "freq_signed_booth_v126_w1",
+      "passed": 19,
+      "total": 19,
+      "ipc": 0.8362511237607829
+    },
+    {
+      "name": "freq_signed_booth_v126_default_w2",
+      "passed": 19,
+      "total": 19,
+      "ipc": 0.6567251193518457
+    }
+  ],
+  "fresh_repository_entry_suites": [
+    "booth_multiplier_test",
+    "alu_test"
+  ],
+  "opt_policy": "Requires a new explicit user request. No completed OPT result for this source."
+}
