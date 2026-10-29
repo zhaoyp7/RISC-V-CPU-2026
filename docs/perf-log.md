@@ -2,7 +2,7 @@
 
 > 本轮最新评分目标：IPC **>1.0985**、面积 **<36,000µm²**、频率至少300MHz；满足后优先提高频率（400MHz加2分、500MHz加4分）。当前最终综合口径为同源opt，diagnose保留作趋势对照。
 
-## 2026-10-29 C盘空间事件（重型任务停止）
+## 2026-10-29 C盘空间事件（已恢复）
 
 用户再次报告C盘约50GB空间下降后，已禁止本地助手启动新的编译、仿真或综合；v126的opt尚未启动，main仍为e16f5b1。此前反复保留各配置的编译缓存和综合中间网表，使构建目录再次累计增长；没有完整的宿主VHD逐时大小记录，不能把全部50GB归因于某一类文件。
 
@@ -18,7 +18,25 @@
 
 22:16用户完成宿主磁盘回收后，C盘空闲实测恢复至约81.8GiB；build约32.5GiB，满足既定空间保护条件。重启后再次核对Booth候选24项冻结输入、当前23项非配置源码均保留；课程工具的临时ASAP7解包目录已失效。22:19重新进入原AppImage查询Yosys版本，恢复工具解包目录后，9个库文件的SHA均与原报告一致，C盘仍约81.7GiB。下一阶段仍为该候选的一次opt、与当前main同模式对照、核验后合并，再据最终关键路径提频；本次没有启动RTL编译或综合，main仍为e16f5b1。[空间及工具恢复核验](../build/three_hour_20261027/disk-space-recovered-20261029.json)。
 
-## 当前 opt 检查点：a5835fe（2026-10-29）
+## Booth候选opt：40ec8b8（2026-10-29，已完成）
+
+结果标签 `freq-booth-wallace-opt-20261029`；生产源码 `freq-booth-wallace-diagnose-20261029` /40ec8b8。高性能配置W2 /ROB32 /PRF64 /IQ8 /LSQ16 /CDB2、16KiB数据缓存、3位局部历史预测；默认ROB16 /PRF48、缓存关闭配置不变。下表PPA仅属于高性能配置。
+
+| 实测版本／模式 | W2 IPC | 频率 MHz | 面积 µm² | IPC×频率 |
+| --- | ---: | ---: | ---: | ---: |
+| Booth候选 opt | 1.105023 | 413.570 | 33,292.528 | 457.004 |
+| main e16f5b1 opt基线 | 1.105023 | 420.361 | 34,240.214 | 464.509 |
+| 同源Booth diagnose | 1.105023 | 407.319 | 34,468.770 | 450.097 |
+
+相对main同模式opt：频率 **-1.616%**，面积 **-2.768%**，吞吐 **-1.616%**，IPC不变。相对同源diagnose：频率 **+1.535%**、面积 **-3.412%**。
+本次只跑一轮opt，实际耗时 **16.00分钟**；24输入、23项Git／仓库源码、工具、9库、时序／ABC约束和SRAM实例形状及数量均核对，原diagnose报告未改变。
+复用同源高性能W2/W1及默认W2三套各19/19，普通／统计版六项输入、答案和周期一致；乘法器4,013,072项、ALU713,728项检查通过，未改模块复用v121完整run_all ALL PASS，不记作本版重新跑全套。
+opt门槛核验：IPC>1.0985、面积<36,000µm²、频率≥300MHz的综合条件为 **通过**；按既有评分表指标对应分数 **102**。面积余量 **2,707.472µm²**。
+首条opt路径 `_542685_/QN` → `_534485_/D`，D端到达 **2.363ns**。当前main仍为e16f5b1，本文不把候选PPA套用于默认配置。
+保留决定：该组改动较main省 **947.685µm²**，但频率低 **6.791MHz**。当前目标优先提频，因此保留独立opt候选及原main，不按先前计划直接合并低频版本；后续合并需结合这项实际取舍决定。原main opt标签与Booth生产标签均保留，本轮未追加opt。[候选保留记录](../build/three_hour_20261027/freq_signed_booth_wallace_v126/opt-decision.json)。
+证据：[opt同源核验](../build/three_hour_20261027/freq_signed_booth_wallace_v126/opt-verification.json)、[main同模式对比](../build/three_hour_20261027/freq_signed_booth_wallace_v126/main-opt-comparison.json)、[功能验证范围](../build/three_hour_20261027/freq_signed_booth_wallace_v126/validation.json)。复现：[Booth高性能配置](../tools/perf_stats/profiles/frequency-booth-wallace-20261029.json)。
+
+## main比较基线 opt 检查点：a5835fe（2026-10-29）
 
 最终综合标签 `ipc-tier3-opt-20261029`；生产源码标签 `ipc-tier3-class-priority-20261029`；已从 `feat/ipc-frontend-recovery-20261027` 合入本地 `main`。
 高性能配置：W2 / ROB32 / PRF64 / IQ8 / LSQ16 / CDB2、16KiB数据缓存、3位局部历史预测。默认配置仍为ROB16 / PRF48 / IQ8、数据缓存关闭，本节PPA属于上述高性能配置。
@@ -405,7 +423,7 @@ ce32682/ROB32 W2六项perf请求→响应均13拍，结果FIFO→写回约1.00�
 上述前置建议已完成：三组diagnose结果与当前判断见最上方PPA对照。
 完整交叉对照、逐例数据和口径见[延迟与窗口实验](experiments/ipc-sensitivity.md)，归档build/ipc_sensitivity_20261025/。
 
-## 分 benchmark（当前诊断候选 40ec8b8 与合并前 main 5a1d8d6）
+## 分 benchmark（当前Booth候选 40ec8b8 与合并前 main 5a1d8d6）
 
 官方六项perf，latency10、MAX_CYCLES50,000,000。候选为当前Booth高性能配置；右侧main列是合并前5a1d8d6的历史默认配置，不代表当前e16f5b1。当前main的同高性能配置IPC也是1.105023，默认W2为0.656725。
 
@@ -430,7 +448,7 @@ ce32682/ROB32 W2六项perf请求→响应均13拍，结果FIFO→写回约1.00�
 | perf_towers | 5,711 | 5,703 | -0.140% |
 | perf_vvadd | 3,227 | 3,227 | +0.000% |
 
-## 当前诊断候选 40ec8b8 性能计数器（2026-10-29）
+## 当前Booth候选 40ec8b8 性能计数器（2026-10-29）
 
 只读统计版与普通版输入、答案、周期相同；等待项可能重叠，不相加。 当前Booth版已重新运行统计对照，[统计结果](../build/three_hour_20261027/freq_signed_booth_wallace_v126/statistics/results.json)与上方逐项perf一致。
 
@@ -699,7 +717,7 @@ load/store 放入旧的 a0/a1 缓冲。优先做分析和方案设计，单次�
 | 2026-10-29 | `ipc-tier3-class-priority-20261029` | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 35,412.183 (diag) | 384.240 (diag) | 当前诊断达标保留；三组19/19；改动IQ/后端专项重跑，未改模块复用v110全套 |
 | 2026-10-29 | `ipc-tier3-opt-20261029` | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,240.214 (opt) | 420.361 (opt) | 当前opt保留；同源三组19/19，23非配置Git源码及24输入核验 |
 | 2026-10-29 | [冻结v112寄存访存提示](../build/three_hour_20261027/freq_registered_memory_owner_v112/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 35,443.166 (diag) | 375.092 (diag) | 两小时提频对照；高W219/19；最终以opt判断 |
-| 2026-10-29 | [冻结v113恢复计数平衡树](../build/three_hour_20261027/freq_balanced_recovery_count_v113/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 35,377.760 (diag) | 393.846 (diag) | 两小时提频对照；高W20/19；最终以opt判断 |
+| 2026-10-29 | [冻结v113恢复计数平衡树](../build/three_hour_20261027/freq_balanced_recovery_count_v113/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 35,377.760 (diag) | 393.846 (diag) | 三项冒烟、六perf及恢复计数专项；完整回归见组合v115；最终以opt判断 |
 | 2026-10-29 | [冻结v114寄存提示加恢复树](../build/three_hour_20261027/freq_owner_and_recovery_tree_v114/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 35,388.841 (diag) | 368.478 (diag) | 两小时提频对照；高W219/19；最终以opt判断 |
 | 2026-10-29 | [冻结v115恢复树加快照使能](../build/three_hour_20261027/freq_recovery_tree_snapshot_v115/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 35,380.763 (diag) | 394.605 (diag) | 两小时提频对照；高W219/19；最终以opt判断 |
 | 2026-10-29 | [冻结v117控制旁路独立提示](../build/three_hour_20261027/freq_uncancelled_control_hint_v117/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 35,332.999 (diag) | 383.234 (diag) | 两小时提频对照；高W2 19/19；最终以opt判断 |
@@ -708,7 +726,7 @@ load/store 放入旧的 a0/a1 缓冲。优先做分析和方案设计，单次�
 | 2026-10-29 | [冻结v121分支年龄直传](../build/three_hour_20261027/freq_direct_squash_sequence_v121/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,683.548 (diag) | 397.670 (diag) | 第二窗口提频对照；高W2 19/19；最终以opt判断 |
 | 2026-10-29 | [冻结v122并行生产者标签比较](../build/three_hour_20261027/freq_parallel_issue_tag_match_v122/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 35,336.630 (diag) | 390.244 (diag) | 第二窗口提频对照；高W2 19/19；最终以opt判断 |
 | 2026-10-29 | [冻结v125无符号Booth加伪Wallace](../build/three_hour_20261027/freq_booth_wallace_multiplier_v125/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,561.630 (diag) | 393.543 (diag) | 第二窗口提频对照；高W2 19/19；最终以opt判断 |
-| 2026-10-29 | [冻结v126带符号Booth加伪Wallace](../build/three_hour_20261027/freq_signed_booth_wallace_v126/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,468.770 (diag) | 407.319 (diag) | 第二窗口提频对照；高W2 19/19；最终以opt判断 |
+| 2026-10-29 | `freq-booth-wallace-opt-20261029` | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 33,292.528 (opt) | 413.570 (opt) | Booth最终综合候选；来源40ec8b8；三套19/19；未改模块复用v121完整单测 |
 | 2026-10-29 | [冻结v127两位分组地址加法](../build/three_hour_20261027/freq_booth_agu2_v127/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,466.437 (diag) | 350.685 (diag) | 第二窗口提频对照；三项冒烟与六perf；高W2/W1各14项、默认19项通过；频率负收益停止余项，不采用 |
 
 P2 基线 opt 综合：comb 16,361.326、seq 5,648.117、SRAM 2,278.903 µm²，
@@ -913,7 +931,7 @@ ALU，必须先确认 IPC 不低于 0.60。
 | v121分支年龄直传；第二窗口提频 | [冻结v121分支年龄直传](../build/three_hour_20261027/freq_direct_squash_sequence_v121/verification.json) | 1.105023 | 0.836251 | 34,683.548 | 397.670 | — | — |
 | v122并行生产者标签比较；第二窗口提频 | [冻结v122并行生产者标签比较](../build/three_hour_20261027/freq_parallel_issue_tag_match_v122/verification.json) | 1.105023 | 0.836251 | 35,336.630 | 390.244 | — | — |
 | v125无符号Booth加伪Wallace；第二窗口提频 | [冻结v125无符号Booth加伪Wallace](../build/three_hour_20261027/freq_booth_wallace_multiplier_v125/verification.json) | 1.105023 | 0.836251 | 34,561.630 | 393.543 | — | — |
-| v126带符号Booth加伪Wallace；第二窗口提频 | [冻结v126带符号Booth加伪Wallace](../build/three_hour_20261027/freq_signed_booth_wallace_v126/verification.json) | 1.105023 | 0.836251 | 34,468.770 | 407.319 | — | — |
+| v126带符号Booth加伪Wallace；opt已完成 | [opt同源核验](../build/three_hour_20261027/freq_signed_booth_wallace_v126/opt-verification.json) | 1.105023 | 0.836251 | 34,468.770 | 407.319 | 33,292.528 | 413.570 |
 | v127两位分组地址加法；第二窗口提频 | [冻结v127两位分组地址加法](../build/three_hour_20261027/freq_booth_agu2_v127/verification.json) | 1.105023 | — | 34,466.437 | 350.685 | — | — |
 
 新增行的“—”表示没有对应同源 opt 数据；不复用历史 main 或其他候选的 opt。

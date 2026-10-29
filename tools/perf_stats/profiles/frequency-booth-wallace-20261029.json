@@ -23,15 +23,15 @@
   ],
   "generated_cpu_config_sha256": "438e66e6183a721296ab13b4b384f9a5f00b90036cae9ad2652080e5559184df",
   "default_cpu_config_modified": false,
-  "measurement_mode": "diagnose",
+  "measurement_mode": "opt",
   "ipc_geomean": 1.1050225312414483,
-  "fmax_mhz": 407.3190135242641,
-  "area_um2": 34468.76986600094,
+  "fmax_mhz": 413.5702746365105,
+  "area_um2": 33292.528365979706,
   "score_screen": {
     "ipc_strictly_greater_than": 1.0985,
     "area_strictly_less_than_um2": 36000,
     "frequency_at_least_mhz": 300,
-    "final_opt_confirmed": false,
+    "final_opt_confirmed": true,
     "area_limit_applies_to": "opt"
   },
   "verification_artifact": "build/three_hour_20261027/freq_signed_booth_wallace_v126/validation.json",
@@ -60,5 +60,12 @@
     "booth_multiplier_test",
     "alu_test"
   ],
-  "opt_policy": "Requires a new explicit user request. No completed OPT result for this source."
+  "opt_policy": "One explicitly authorized OPT completed. Additional OPT requires a new explicit user request.",
+  "opt_checkpoint_tag": "freq-booth-wallace-opt-20261029",
+  "diagnose_reference": {
+    "fmax_mhz": 407.3190135242641,
+    "area_um2": 34468.76986600094
+  },
+  "opt_verification_artifact": "build/three_hour_20261027/freq_signed_booth_wallace_v126/opt-verification.json",
+  "adoption_status": "Independent OPT candidate retained; current main kept because its OPT frequency is higher"
 }
