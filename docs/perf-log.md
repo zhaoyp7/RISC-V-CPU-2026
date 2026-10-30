@@ -9,12 +9,16 @@
 | 同模式diagnose | IPC | MHz | 面积 µm² |
 | --- | ---: | ---: | ---: |
 | PRF并行读选择 | 1.105023 | 421.226 | 34,177.972 |
+| 乘法末级分组进位 | 1.105023 | 416.768 | 34,563.759 |
+| ALU缓冲源标签预译码 | 1.105023 | 422.617 | 34,184.402 |
 | 窗口起点v131 | 1.105023 | 419.328 | 34,543.930 |
 | main 8a6fbdd同高性能配置 | 1.105023 | 419.328 | 34,543.930 |
 
 PRF并行读选择：三套配置各19/19，六perf与统计版同周期；改动模块专项通过，未改模块复用已记录全套结果；三套19/19；独立诊断检查点，main与opt标签保留；[同源PPA核验](../build/three_hour_20261027/freq_prf_read_postopt_v137/verification.json)、[当轮三方对照](../build/three_hour_20261027/freq_prf_read_postopt_v137/window-hour-comparison.json)。
+乘法末级分组进位：三套配置各19/19，六perf与统计版同周期；改动模块专项通过，未改模块复用已记录全套结果；总体诊断频率／面积无收益，未采用；ALU1相关路径2.294→2.020ns，保留组合候选；[同源PPA核验](../build/three_hour_20261027/freq_mul_final_prefix_v138/verification.json)、[当轮三方对照](../build/three_hour_20261027/freq_mul_final_prefix_v138/window-hour-comparison.json)。
+ALU缓冲源标签预译码：三套配置各19/19，六perf与统计版同周期；改动模块专项通过，未改模块复用已记录全套结果；三套19/19；普通／预译码读口48,220项通过；保留诊断检查点；[同源PPA核验](../build/three_hour_20261027/freq_prf_registered_decode_v140/verification.json)、[当轮三方对照](../build/three_hour_20261027/freq_prf_registered_decode_v140/window-hour-comparison.json)。
 
-当前保留实验源：`freq_prf_read_postopt_v137`；没有以diagnose替代最终opt判断。
+当前保留实验源：`freq_prf_registered_decode_v140`；没有以diagnose替代最终opt判断。
 
 ## 2026-10-30 main频率检查点opt（已合入）
 
@@ -795,6 +799,8 @@ load/store 放入旧的 a0/a1 缓冲。优先做分析和方案设计，单次�
 | 2026-10-30 | [冻结v132 LSQ固定槽位数据写入](../build/three_hour_20261027/freq_lsq_static_payload_v132/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,553.217 (diag) | 409.109 (diag) | 三项冒烟和六perf通过；高W2 19/19；频率−0.959%、面积+0.055%；不采用；三小时控制链试验，保留决定见窗口记录 |
 | 2026-10-30 | `freq-lsq-metadata-opt-20261030` / ae8a945 | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 33,346.431 (opt) | 476.723 (opt) | 已合本地main；同源三套各19/19；派发/x0合并回归通过；额外全套复跑中断；opt检查点保留 |
 | 2026-10-30 | [冻结v137 PRF并行读选择](../build/three_hour_20261027/freq_prf_read_postopt_v137/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,177.972 (diag) | 421.226 (diag) | 三套配置各19/19，六perf与统计版同周期；改动模块专项通过，未改模块复用已记录全套结果；三套19/19；独立诊断检查点，main与opt标签保留；一小时提频试验，保留决定见窗口记录 |
+| 2026-10-30 | [冻结v140 ALU缓冲源标签预译码](../build/three_hour_20261027/freq_prf_registered_decode_v140/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,184.402 (diag) | 422.617 (diag) | 三套配置各19/19，六perf与统计版同周期；改动模块专项通过，未改模块复用已记录全套结果；三套19/19；普通／预译码读口48,220项通过；保留诊断检查点；一小时提频试验，保留决定见窗口记录 |
+| 2026-10-30 | [冻结v138 乘法末级分组进位](../build/three_hour_20261027/freq_mul_final_prefix_v138/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,563.759 (diag) | 416.768 (diag) | 三套配置各19/19，六perf与统计版同周期；改动模块专项通过，未改模块复用已记录全套结果；总体诊断频率／面积无收益，未采用；ALU1相关路径2.294→2.020ns，保留组合候选；一小时提频试验，保留决定见窗口记录 |
 
 P2 基线 opt 综合：comb 16,361.326、seq 5,648.117、SRAM 2,278.903 µm²，
 min period 17.8320 ns（目标 2 ns，WNS −15.8320 ns）。diagnose 为 25,025.438 µm²、
@@ -1006,6 +1012,8 @@ ALU，必须先确认 IPC 不低于 0.60。
 | v132 LSQ固定槽位数据写入；三小时控制链 | [冻结v132 LSQ固定槽位数据写入](../build/three_hour_20261027/freq_lsq_static_payload_v132/verification.json) | 1.105023 | — | 34,553.217 | 409.109 | — | — |
 | v131 LSQ快照元数据预采样；opt已完成 | [opt核验](../build/three_hour_20261027/freq_lsq_metadata_ready_v131/opt-verification.json) | 1.105023 | 0.836251 | 34,543.930 | 419.328 | 33,346.431 | 476.723 |
 | v137 PRF并行读选择；一小时提频 | [冻结v137 PRF并行读选择](../build/three_hour_20261027/freq_prf_read_postopt_v137/verification.json) | 1.105023 | — | 34,177.972 | 421.226 | — | — |
+| v140 ALU缓冲源标签预译码；一小时提频 | [冻结v140 ALU缓冲源标签预译码](../build/three_hour_20261027/freq_prf_registered_decode_v140/verification.json) | 1.105023 | — | 34,184.402 | 422.617 | — | — |
+| v138 乘法末级分组进位；一小时提频 | [冻结v138 乘法末级分组进位](../build/three_hour_20261027/freq_mul_final_prefix_v138/verification.json) | 1.105023 | — | 34,563.759 | 416.768 | — | — |
 
 新增行的“—”表示没有对应同源 opt 数据；不复用历史 main 或其他候选的 opt。
 

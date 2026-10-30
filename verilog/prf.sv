@@ -13,13 +13,15 @@
 
 module prf #(
   parameter integer W = `CPU_ISSUE_WIDTH,
-  parameter integer R = `CPU_CDB_NUM
+  parameter integer R = `CPU_CDB_NUM,
+  parameter logic [2*W-1:0] PREDECODED_READS = '0
 ) (
   input  logic clk,
   input  logic reset,
 
   // 读口：lane p 的地址位于 [p*PW +: PW]
   input  logic [2*W*`CPU_PRF_IDX_W-1:0] raddr,
+  input logic [2*W*`CPU_PRF_SIZE-1:0] rselect,
   output logic [2*W*32-1:0]             rdata,
 
   // 写口：CDB lane r
@@ -39,7 +41,7 @@ module prf #(
     wire [PRF-1:0] select;
     assign select[0]=1'b0;
     for(genvar row=1;row<PRF;row=row+1)begin:gen_read_decode
-      assign select[row]=raddr[port*PW+:PW]==PW'(row);
+      assign select[row]=PREDECODED_READS[port] ? rselect[port*PRF+row] : raddr[port*PW+:PW]==PW'(row);
     end
     always_comb begin
       rdata[port*32+:32]=0;
@@ -47,6 +49,18 @@ module prf #(
         rdata[port*32+:32]=rdata[port*32+:32] | (regs[row] & {32{select[row]}});
     end
   end
+
+`ifndef SYNTHESIS
+  always_ff @(posedge clk)if(!reset)begin
+    for(integer port=0;port<2*W;port=port+1)begin
+      if(PREDECODED_READS[port] && raddr[port*PW+:PW]<PRF)begin
+        automatic logic [31:0] expected;
+        expected=raddr[port*PW+:PW]==0 ? 32'b0 : regs[raddr[port*PW+:PW]];
+        if(rdata[port*32+:32]!=expected)$fatal(1,"predecoded PRF read differs from binary-tag reference");
+      end
+    end
+  end
+`endif
 
   integer r, k;
   always_ff @(posedge clk) begin

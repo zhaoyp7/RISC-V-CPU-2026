@@ -470,6 +470,25 @@ module backend_ooo #(
   // ---------------------------------------------------------------------------
   logic [6*PW-1:0] prf_raddr;
   logic [6*32-1:0] prf_rdata;
+  localparam integer PRF_WORDS=`CPU_PRF_SIZE;
+  logic [4*PRF_WORDS-1:0] buffered_prf_select;
+  wire [6*PRF_WORDS-1:0] prf_rselect={buffered_prf_select,{(2*PRF_WORDS){1'b0}}};
+  // Decode each source tag at the same edge that owns its execution buffer.
+  // Memory still uses the two direct binary-tag ports.
+  always_ff @(posedge clk)begin
+    if(reset)buffered_prf_select<={4{PRF_WORDS'(1)}};
+    else begin
+      if(a1_push && !(sq_valid && a1_input_seq>squash_seq))begin
+        buffered_prf_select[0+:PRF_WORDS]<=PRF_WORDS'(1)<<a1_input_uop[`CPU_DISPATCH_SRC1_TAG_OFF+:PW];
+        buffered_prf_select[PRF_WORDS+:PRF_WORDS]<=PRF_WORDS'(1)<<a1_input_uop[`CPU_DISPATCH_SRC2_TAG_OFF+:PW];
+      end
+      if(a0_push && !(sq_valid && a0_input_seq>squash_seq))begin
+        buffered_prf_select[2*PRF_WORDS+:PRF_WORDS]<=PRF_WORDS'(1)<<a0_input_uop[`CPU_DISPATCH_SRC1_TAG_OFF+:PW];
+        buffered_prf_select[3*PRF_WORDS+:PRF_WORDS]<=PRF_WORDS'(1)<<a0_input_uop[`CPU_DISPATCH_SRC2_TAG_OFF+:PW];
+      end
+    end
+  end
+
   logic [R-1:0]      prf_we;
   logic [R*PW-1:0]   prf_waddr;
   logic [R*32-1:0]   prf_wdata;
@@ -514,10 +533,11 @@ module backend_ooo #(
     end
   end
 
-  prf #(.W(3), .R(R)) u_prf (
+  prf #(.W(3), .R(R), .PREDECODED_READS(6'b111100)) u_prf (
     .clk   (clk),
     .reset (reset),
     .raddr (prf_raddr),
+    .rselect(prf_rselect),
     .rdata (prf_rdata),
     .we    (prf_we),
     .waddr (prf_waddr),
