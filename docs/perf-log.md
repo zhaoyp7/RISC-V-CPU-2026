@@ -2,7 +2,7 @@
 
 > 本轮最新评分目标：IPC **>1.0985**、面积 **<36,000µm²**、频率至少300MHz；满足后优先提高频率（400MHz加2分、500MHz加4分）。当前最终综合口径为同源opt，diagnose保留作趋势对照。
 
-## 2026-10-29 夜间三小时控制链提频（进行中）
+## 2026-10-29 夜间三小时控制链提频（已收束，执行空档中断）
 
 授权时段23:43:45至10月30日02:43:45；以Booth v126/40ec8b8为实验起点，main e16f5b1保留。根据已完成opt的关键路径优化调度／访存控制；本窗口仅串行diagnose，不新增opt。IPC保持>1.0985，最终面积上限36k按opt判断；默认配置不改。编译完成即清理PCH，宿主C盘保护线30GiB，build保留上限64GiB。
 
@@ -19,12 +19,16 @@
 仲裁相位独热寄存：三套配置各19/19，六perf与统计版同周期；改动模块专项通过，未改模块复用已记录全套结果；[同源PPA核验](../build/three_hour_20261027/freq_onehot_phase_hint_v128/verification.json)、[当轮三方对照](../build/three_hour_20261027/freq_onehot_phase_hint_v128/window3-comparison.json)。
 相位无关访存提示：三套配置各19/19，六perf与统计版同周期；改动模块专项通过，未改模块复用已记录全套结果；[同源PPA核验](../build/three_hour_20261027/freq_phase_free_memory_hint_v129/verification.json)、[当轮三方对照](../build/three_hour_20261027/freq_phase_free_memory_hint_v129/window3-comparison.json)。
 LSQ年龄关系快照：三套配置各19/19，六perf与统计版同周期；改动模块专项通过，未改模块复用已记录全套结果；[同源PPA核验](../build/three_hour_20261027/freq_lsq_age_snapshot_v130/verification.json)、[当轮三方对照](../build/three_hour_20261027/freq_lsq_age_snapshot_v130/window3-comparison.json)。
-LSQ快照元数据预采样：三套配置各19/19，六perf与统计版同周期；改动模块专项通过，未改模块复用已记录全套结果；三套完整验证后保留为检查点；[同源PPA核验](../build/three_hour_20261027/freq_lsq_metadata_ready_v131/verification.json)、[当轮三方对照](../build/three_hour_20261027/freq_lsq_metadata_ready_v131/window3-comparison.json)。
+LSQ快照元数据预采样：三套配置各19/19，六perf与统计版同周期；改动模块专项通过，未改模块复用已记录全套结果；另行全套复跑在IQ阶段中断，不计ALL PASS；三套完整验证后保留为检查点；[同源PPA核验](../build/three_hour_20261027/freq_lsq_metadata_ready_v131/verification.json)、[当轮三方对照](../build/three_hour_20261027/freq_lsq_metadata_ready_v131/window3-comparison.json)。
 LSQ固定槽位数据写入：三项冒烟和六perf通过；高W2 19/19；频率−0.959%、面积+0.055%；不采用；[同源PPA核验](../build/three_hour_20261027/freq_lsq_static_payload_v132/verification.json)、[当轮三方对照](../build/three_hour_20261027/freq_lsq_static_payload_v132/window3-comparison.json)。
 
 吞吐敏感性：新load地址先寄存后查询实测IPC1.078049（相对基线-2.441%），低于1.0985；三项冒烟、六perf通过，不启动综合、不采用，不加入完整核心PPA表。
 
 当前保留实验源：`freq_lsq_metadata_ready_v131`；没有以diagnose替代最终opt判断。
+
+已完成5轮有效diagnose，最终保留 `ae8a945` / `freq-lsq-metadata-ready-20261030`，同源三套配置各19/19、改动模块专项与LSQ独立参考1,298,266项通过。未改模块继续复用v121已有全套结果；另行全套复跑在IQ阶段中断，没有本版新跑ALL PASS结论。
+
+原定02:43:45结束；可观察进展在01:36后出现空档，07:49恢复观察时截止保护结束了在途任务，原因未确认，不能把空档计作连续优化时间。v133综合中断且无报告，v134/v135排队后被截止预检拒绝，均不加入完整核心PPA表；其冻结输入、已有功能结果及中断日志保留。所有5项后台会话已确认终止，综合锁空闲，仓库非配置源码仍与保留版一致；本窗口未新增opt、未合main、未推送。
 
 ## 2026-10-29 C盘空间事件（已恢复）
 
@@ -756,7 +760,7 @@ load/store 放入旧的 a0/a1 缓冲。优先做分析和方案设计，单次�
 | 2026-10-30 | [冻结v129 相位无关访存提示](../build/three_hour_20261027/freq_phase_free_memory_hint_v129/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,468.493 (diag) | 409.273 (diag) | 三套配置各19/19，六perf与统计版同周期；改动模块专项通过，未改模块复用已记录全套结果；三小时控制链试验，保留决定见窗口记录 |
 | 2026-10-30 | [冻结v130 LSQ年龄关系快照](../build/three_hour_20261027/freq_lsq_age_snapshot_v130/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,534.292 (diag) | 413.070 (diag) | 三套配置各19/19，六perf与统计版同周期；改动模块专项通过，未改模块复用已记录全套结果；三小时控制链试验，保留决定见窗口记录 |
 | 2026-10-30 | [冻结v132 LSQ固定槽位数据写入](../build/three_hour_20261027/freq_lsq_static_payload_v132/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,553.217 (diag) | 409.109 (diag) | 三项冒烟和六perf通过；高W2 19/19；频率−0.959%、面积+0.055%；不采用；三小时控制链试验，保留决定见窗口记录 |
-| 2026-10-30 | [冻结v131 LSQ快照元数据预采样](../build/three_hour_20261027/freq_lsq_metadata_ready_v131/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,543.930 (diag) | 419.328 (diag) | 三套配置各19/19，六perf与统计版同周期；改动模块专项通过，未改模块复用已记录全套结果；三套完整验证后保留为检查点；三小时控制链试验，保留决定见窗口记录 |
+| 2026-10-30 | [冻结v131 LSQ快照元数据预采样](../build/three_hour_20261027/freq_lsq_metadata_ready_v131/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,543.930 (diag) | 419.328 (diag) | 三套配置各19/19，六perf与统计版同周期；改动模块专项通过，未改模块复用已记录全套结果；另行全套复跑在IQ阶段中断，不计ALL PASS；三套完整验证后保留为检查点；三小时控制链试验，保留决定见窗口记录 |
 
 P2 基线 opt 综合：comb 16,361.326、seq 5,648.117、SRAM 2,278.903 µm²，
 min period 17.8320 ns（目标 2 ns，WNS −15.8320 ns）。diagnose 为 25,025.438 µm²、
