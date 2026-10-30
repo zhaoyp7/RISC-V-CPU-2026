@@ -2,22 +2,24 @@
 
 > 本轮最新评分目标：IPC **>1.0985**、面积 **<36,000µm²**、频率至少300MHz；满足后优先提高频率（400MHz加2分、500MHz加4分）。当前最终综合口径为同源opt，diagnose保留作趋势对照。
 
-## 2026-10-30 LSQ快照检查点opt（已完成）
+## 2026-10-30 main频率检查点opt（已合入）
 
 源码 `ae8a945` / `freq-lsq-metadata-ready-20261030`；结果标签 `freq-lsq-metadata-opt-20261030`。高性能配置W2/ROB32/PRF64/IQ8/LSQ16/CDB2、16KiB数据缓存、3位局部历史；默认ROB16/PRF48、缓存关闭配置不改。下表PPA只属于上述高性能配置。本次为用户新授权的一轮opt，独立于已结束的夜间三小时窗口。
 
 | 同源／同模式对照 | IPC | MHz | 面积 µm² | IPC×频率 |
 | --- | ---: | ---: | ---: | ---: |
-| 当前候选 opt | 1.105023 | 476.723 | 33,346.431 | 526.789 |
-| main e16f5b1 opt | 1.105023 | 420.361 | 34,240.214 | 464.509 |
-| 同源候选 diagnose | 1.105023 | 419.328 | 34,543.930 | 463.367 |
+| 当前main opt | 1.105023 | 476.723 | 33,346.431 | 526.789 |
+| 合并前main e16f5b1 opt | 1.105023 | 420.361 | 34,240.214 | 464.509 |
+| 同源 diagnose | 1.105023 | 419.328 | 34,543.930 | 463.367 |
 
-相对main opt：频率 **+13.408%**、面积 **-2.610%**、吞吐 **+13.408%**，IPC不变。相对同源diagnose：频率 **+13.687%**、面积 **-3.467%**。
+相对合并前main opt：频率 **+13.408%**、面积 **-2.610%**、吞吐 **+13.408%**，IPC不变。相对同源diagnose：频率 **+13.687%**、面积 **-3.467%**。
 一次opt实际耗时 **15.69分钟**；24冻结输入、23项仓库／Git源码、工具、9库、时序／ABC约束、SRAM形状及数量均核对，原diagnose报告SHA不变。
 复用同源高W2、高W1、默认W2三套各19/19、六perf与统计版输入／答案／周期一致；LSQ专项及独立年龄参考1,298,266项、两档后端专项通过，未改模块复用已记录v121全套结果。另行全套复跑曾在IQ阶段中断，不计为本版新跑ALL PASS。
 门槛核验：IPC>1.0985、面积<36,000µm²、频率≥300MHz：**通过**；对应既有评分表 **102**，面积余量 **2,653.569µm²**。
-首条opt路径 `_533291_/QN` → `_548247_/D`，到达 **2.043ns**。当前main仍为e16f5b1，本次不自动合并或推送。
+首条opt路径 `_533291_/QN` → `_548247_/D`，到达 **2.043ns**。2026-10-30已按用户指令快进合入本地main；上表e16f5b1为合并前main，PPA仍只属于指定高性能配置。
 证据：[opt同源核验](../build/three_hour_20261027/freq_lsq_metadata_ready_v131/opt-verification.json)、[main同模式对照](../build/three_hour_20261027/freq_lsq_metadata_ready_v131/main-opt-comparison.json)、[功能覆盖范围](../build/three_hour_20261027/freq_lsq_metadata_ready_v131/validation.json)。复现：[高性能配置档案](../tools/perf_stats/profiles/frequency-lsq-metadata-20261030.json)。
+
+合并来源 `2591496`（RTL源码 `ae8a945`），主线检查点标签 `main-freq-opt-20261030`；合并前main保存在 `main-pre-freq-merge-20261030`。合并后23个非配置输入与opt逐项SHA相同，默认配置及官方构建／SRAM文件未变；派发握手W1/W2各72项、x0 W1/W2各265/529项新跑均0失败，配置生成检查通过。同源整核三套19/19继续有效，未重复综合或宣称新增全套ALL PASS。opt标签及原性能分支保留，未推送。[合并核验](../build/main_freq_opt_merge_20261030/post-merge.json)。
 
 ## 2026-10-29 夜间三小时控制链提频（已收束，执行空档中断）
 
@@ -81,7 +83,7 @@ opt门槛核验：IPC>1.0985、面积<36,000µm²、频率≥300MHz的综合条�
 保留决定：该组改动较main省 **947.685µm²**，但频率低 **6.791MHz**。当前目标优先提频，因此保留独立opt候选及原main，不按先前计划直接合并低频版本；后续合并需结合这项实际取舍决定。原main opt标签与Booth生产标签均保留，本轮未追加opt。[候选保留记录](../build/three_hour_20261027/freq_signed_booth_wallace_v126/opt-decision.json)。
 证据：[opt同源核验](../build/three_hour_20261027/freq_signed_booth_wallace_v126/opt-verification.json)、[main同模式对比](../build/three_hour_20261027/freq_signed_booth_wallace_v126/main-opt-comparison.json)、[功能验证范围](../build/three_hour_20261027/freq_signed_booth_wallace_v126/validation.json)。复现：[Booth高性能配置](../tools/perf_stats/profiles/frequency-booth-wallace-20261029.json)。
 
-## main比较基线 opt 检查点：a5835fe（2026-10-29）
+## 合并前main比较基线 opt 检查点：a5835fe（2026-10-29）
 
 最终综合标签 `ipc-tier3-opt-20261029`；生产源码标签 `ipc-tier3-class-priority-20261029`；已从 `feat/ipc-frontend-recovery-20261027` 合入本地 `main`。
 高性能配置：W2 / ROB32 / PRF64 / IQ8 / LSQ16 / CDB2、16KiB数据缓存、3位局部历史预测。默认配置仍为ROB16 / PRF48 / IQ8、数据缓存关闭，本节PPA属于上述高性能配置。
@@ -777,7 +779,7 @@ load/store 放入旧的 a0/a1 缓冲。优先做分析和方案设计，单次�
 | 2026-10-30 | [冻结v129 相位无关访存提示](../build/three_hour_20261027/freq_phase_free_memory_hint_v129/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,468.493 (diag) | 409.273 (diag) | 三套配置各19/19，六perf与统计版同周期；改动模块专项通过，未改模块复用已记录全套结果；三小时控制链试验，保留决定见窗口记录 |
 | 2026-10-30 | [冻结v130 LSQ年龄关系快照](../build/three_hour_20261027/freq_lsq_age_snapshot_v130/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,534.292 (diag) | 413.070 (diag) | 三套配置各19/19，六perf与统计版同周期；改动模块专项通过，未改模块复用已记录全套结果；三小时控制链试验，保留决定见窗口记录 |
 | 2026-10-30 | [冻结v132 LSQ固定槽位数据写入](../build/three_hour_20261027/freq_lsq_static_payload_v132/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,553.217 (diag) | 409.109 (diag) | 三项冒烟和六perf通过；高W2 19/19；频率−0.959%、面积+0.055%；不采用；三小时控制链试验，保留决定见窗口记录 |
-| 2026-10-30 | `freq-lsq-metadata-opt-20261030` / ae8a945 | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 33,346.431 (opt) | 476.723 (opt) | 同源三套各19/19；改动模块专项通过，未改模块复用v121全套；额外全套复跑中断；独立opt检查点 |
+| 2026-10-30 | `freq-lsq-metadata-opt-20261030` / ae8a945 | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 33,346.431 (opt) | 476.723 (opt) | 已合本地main；同源三套各19/19；派发/x0合并回归通过；额外全套复跑中断；opt检查点保留 |
 
 P2 基线 opt 综合：comb 16,361.326、seq 5,648.117、SRAM 2,278.903 µm²，
 min period 17.8320 ns（目标 2 ns，WNS −15.8320 ns）。diagnose 为 25,025.438 µm²、

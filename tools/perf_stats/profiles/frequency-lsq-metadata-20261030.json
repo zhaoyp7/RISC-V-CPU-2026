@@ -64,10 +64,13 @@
     "area_um2": 34543.929766001434
   },
   "opt_verification_artifact": "build/three_hour_20261027/freq_lsq_metadata_ready_v131/opt-verification.json",
-  "adoption_status": "Independent OPT checkpoint; main unchanged pending user direction",
+  "adoption_status": "Merged to local main by explicit user instruction; default configuration unchanged; not pushed",
   "fresh_frozen_module_suites": [
     "LSQ query/store-capture matrix",
     "LSQ age subsets and boundaries",
     "backend W1/W2"
-  ]
+  ],
+  "adoption_tag": "main-freq-opt-20261030",
+  "main_before_merge": "e16f5b17fde0ef9d81c5e0a3f9e0ba8ec5a07455",
+  "adoption_verification_artifact": "build/main_freq_opt_merge_20261030/post-merge.json"
 }
