@@ -9,12 +9,17 @@
 | 同模式diagnose | IPC | MHz | 面积 µm² |
 | --- | ---: | ---: | ---: |
 | 预译码加乘法末级分组进位 | 1.105023 | 421.920 | 34,116.138 |
+| Booth稀疏符号扩展 | 1.105023 | 420.880 | 34,133.022 |
 | 窗口起点v140 | 1.105023 | 422.617 | 34,184.402 |
 | main 8a6fbdd | 1.105023 | 419.328 | 34,543.930 |
 
-预译码加乘法末级分组进位：三套配置各19/19，普通／统计版同周期；改动模块专项通过，未改模块复用已有结果；三套19/19；总体频率略降、面积略降；保留组合候选，等待局部ALU路径对比；[同源核验](../build/three_hour_20261027/freq_prf_prefix_combined_v141/verification.json)、[当轮三方对照](../build/three_hour_20261027/freq_prf_prefix_combined_v141/window-twohour-comparison.json)。
+预译码加乘法末级分组进位：三套配置各19/19，普通／统计版同周期；改动模块专项通过，未改模块复用已有结果；三套19/19；总体频率略降、面积略降；ALU1相关路径2.231→1.948ns，保留组合候选；[同源核验](../build/three_hour_20261027/freq_prf_prefix_combined_v141/verification.json)、[当轮三方对照](../build/three_hour_20261027/freq_prf_prefix_combined_v141/window-twohour-comparison.json)。
+
+Booth稀疏符号扩展：三套配置各19/19，普通／统计版同周期；改动模块专项通过，未改模块复用已有结果；三套19/19；相对预译码基线频率-0.411%、面积-0.150%；暂不采用；[同源核验](../build/three_hour_20261027/freq_booth_sparse_sign_v142/verification.json)、[当轮三方对照](../build/three_hour_20261027/freq_booth_sparse_sign_v142/window-twohour-comparison.json)。
 
 当前保留实验源：`freq_prf_registered_decode_v140`；最终opt尚未启动。
+
+局部时序补充：同一diagnose映射口径下，v140 ALU0／ALU1相关最差完整路径为2.217／2.231ns，v141组合版为1.927／1.948ns；路径含PRF及外围逻辑，不是纯乘法器延迟。v141整核当前受数据缓存→LSU→IQ→LSQ表项更新控制链约束，IQ内晚到输入已映射为lookahead_load_valid；据此优先验证IQ双路预选及其与乘法末级分组进位的组合。
 
 ## 2026-10-30 PRF预译码单次opt（已完成）
 
@@ -838,7 +843,8 @@ load/store 放入旧的 a0/a1 缓冲。优先做分析和方案设计，单次�
 | 2026-10-30 | [冻结v137 PRF并行读选择](../build/three_hour_20261027/freq_prf_read_postopt_v137/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,177.972 (diag) | 421.226 (diag) | 三套配置各19/19，六perf与统计版同周期；改动模块专项通过，未改模块复用已记录全套结果；三套19/19；独立诊断检查点，main与opt标签保留；一小时提频试验，保留决定见窗口记录 |
 | 2026-10-30 | [冻结v138 乘法末级分组进位](../build/three_hour_20261027/freq_mul_final_prefix_v138/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,563.759 (diag) | 416.768 (diag) | 三套配置各19/19，六perf与统计版同周期；改动模块专项通过，未改模块复用已记录全套结果；总体诊断频率／面积无收益，未采用；ALU1相关路径2.294→2.020ns，保留组合候选；一小时提频试验，保留决定见窗口记录 |
 | 2026-10-30 | `freq-prf-predecode-opt-20261030` / e1eca9e | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 32,862.550 (opt) | 493.494 (opt) | 同源三套各19/19；普通／预译码PRF与两宽后端专项通过；未改模块复用已有全套；独立opt检查点，main未改 |
-| 2026-10-30 | [冻结v141 预译码加乘法末级分组进位](../build/three_hour_20261027/freq_prf_prefix_combined_v141/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,116.138 (diag) | 421.920 (diag) | 三套配置各19/19，普通／统计版同周期；改动模块专项通过，未改模块复用已有结果；三套19/19；总体频率略降、面积略降；保留组合候选，等待局部ALU路径对比；两小时提频试验 |
+| 2026-10-30 | [冻结v142 Booth稀疏符号扩展](../build/three_hour_20261027/freq_booth_sparse_sign_v142/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,133.022 (diag) | 420.880 (diag) | 三套配置各19/19，普通／统计版同周期；改动模块专项通过，未改模块复用已有结果；三套19/19；相对预译码基线频率-0.411%、面积-0.150%；暂不采用；两小时提频试验 |
+| 2026-10-30 | [冻结v141 预译码加乘法末级分组进位](../build/three_hour_20261027/freq_prf_prefix_combined_v141/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,116.138 (diag) | 421.920 (diag) | 三套配置各19/19，普通／统计版同周期；改动模块专项通过，未改模块复用已有结果；三套19/19；总体频率略降、面积略降；ALU1相关路径2.231→1.948ns，保留组合候选；两小时提频试验 |
 
 P2 基线 opt 综合：comb 16,361.326、seq 5,648.117、SRAM 2,278.903 µm²，
 min period 17.8320 ns（目标 2 ns，WNS −15.8320 ns）。diagnose 为 25,025.438 µm²、
@@ -1052,6 +1058,7 @@ ALU，必须先确认 IPC 不低于 0.60。
 | v137 PRF并行读选择；一小时提频 | [冻结v137 PRF并行读选择](../build/three_hour_20261027/freq_prf_read_postopt_v137/verification.json) | 1.105023 | 0.836251 | 34,177.972 | 421.226 | — | — |
 | v138 乘法末级分组进位；一小时提频 | [冻结v138 乘法末级分组进位](../build/three_hour_20261027/freq_mul_final_prefix_v138/verification.json) | 1.105023 | 0.836251 | 34,563.759 | 416.768 | — | — |
 | v140 ALU缓冲源标签预译码；opt已完成 | [opt核验](../build/three_hour_20261027/freq_prf_registered_decode_v140/opt-verification.json) | 1.105023 | 0.836251 | 34,184.402 | 422.617 | 32,862.550 | 493.494 |
+| v142 Booth稀疏符号扩展；两小时提频 | [冻结v142 Booth稀疏符号扩展](../build/three_hour_20261027/freq_booth_sparse_sign_v142/verification.json) | 1.105023 | 0.836251 | 34,133.022 | 420.880 | — | — |
 | v141 预译码加乘法末级分组进位；两小时提频 | [冻结v141 预译码加乘法末级分组进位](../build/three_hour_20261027/freq_prf_prefix_combined_v141/verification.json) | 1.105023 | 0.836251 | 34,116.138 | 421.920 | — | — |
 
 新增行的“—”表示没有对应同源 opt 数据；不复用历史 main 或其他候选的 opt。
