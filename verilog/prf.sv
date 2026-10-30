@@ -33,13 +33,18 @@ module prf #(
 
   logic [31:0] regs [0:PRF-1];
 
-  integer p;
-  always_comb begin
-    for (p = 0; p < 2*W; p = p + 1) begin
-      if (raddr[p*PW +: PW] == '0)
-        rdata[p*32 +: 32] = 32'b0;
-      else
-        rdata[p*32 +: 32] = regs[raddr[p*PW +: PW]];
+  // Decode tags in parallel, then reduce selected data. Register zero is
+  // excluded from the data cone and remains a constant on every read port.
+  for(genvar port=0;port<2*W;port=port+1)begin:gen_read_port
+    wire [PRF-1:0] select;
+    assign select[0]=1'b0;
+    for(genvar row=1;row<PRF;row=row+1)begin:gen_read_decode
+      assign select[row]=raddr[port*PW+:PW]==PW'(row);
+    end
+    always_comb begin
+      rdata[port*32+:32]=0;
+      for(integer row=1;row<PRF;row=row+1)
+        rdata[port*32+:32]=rdata[port*32+:32] | (regs[row] & {32{select[row]}});
     end
   end
 

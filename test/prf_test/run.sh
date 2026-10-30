@@ -1,5 +1,5 @@
 #!/bin/sh
-# PRF unit test: default W=1/R=1 and W=2/R=2.
+# PRF unit test: two, four and six read ports with a 64-word reference.
 set -eu
 
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -12,9 +12,10 @@ run_one() {
         --top prf \
         --tb "$here/prf_tb.cpp" \
         --sources "$root/verilog/rv32_defs.sv" "$root/verilog/cpu_config.sv" "$root/verilog/prf.sv" \
-        --define "CPU_ISSUE_WIDTH=$w" --define "CPU_CDB_NUM=$r" \
+        --define "CPU_ISSUE_WIDTH=$w" --define "CPU_CDB_NUM=$r" --define CPU_PRF_SIZE=64 \
         --cxx-define "TB_W=$w" --cxx-define "TB_R=$r"
 }
 
 run_one 1 1
 run_one 2 2
+run_one 3 2
