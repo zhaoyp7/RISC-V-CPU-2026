@@ -170,5 +170,33 @@ module mul_booth_wallace (
     assign tree[level+1][OUTPUTS*64+:(ROWS-OUTPUTS)*64]='0;
   end
   // Modulo-2^64 arithmetic gives the full signed/unsigned 32x32 bit pattern.
-  assign product=tree[LEVELS][0+:64]+tree[LEVELS][64+:64];
+  function automatic [63:0] final_prefix_add(input logic [63:0] a,b);
+    logic [4:0] sum0 [0:15];
+    logic [3:0] sum1 [1:15];
+    logic [15:0] group_p [0:4],group_g [0:4];
+    integer block_idx,level_idx;
+    begin
+      for(block_idx=0;block_idx<16;block_idx=block_idx+1)begin
+        sum0[block_idx]={1'b0,a[block_idx*4+:4]}+{1'b0,b[block_idx*4+:4]};
+        if(block_idx!=0)sum1[block_idx]=a[block_idx*4+:4]+b[block_idx*4+:4]+4'd1;
+        group_p[0][block_idx]=&(a[block_idx*4+:4]^b[block_idx*4+:4]);
+        group_g[0][block_idx]=sum0[block_idx][4];
+      end
+      for(level_idx=0;level_idx<4;level_idx=level_idx+1)
+        for(block_idx=0;block_idx<16;block_idx=block_idx+1)begin
+          if(block_idx>=(1<<level_idx))begin
+            group_g[level_idx+1][block_idx]=group_g[level_idx][block_idx] |
+              (group_p[level_idx][block_idx]&group_g[level_idx][block_idx-(1<<level_idx)]);
+            group_p[level_idx+1][block_idx]=group_p[level_idx][block_idx]&group_p[level_idx][block_idx-(1<<level_idx)];
+          end else begin
+            group_g[level_idx+1][block_idx]=group_g[level_idx][block_idx];
+            group_p[level_idx+1][block_idx]=group_p[level_idx][block_idx];
+          end
+        end
+      final_prefix_add[3:0]=sum0[0][3:0];
+      for(block_idx=1;block_idx<16;block_idx=block_idx+1)
+        final_prefix_add[block_idx*4+:4]=group_g[4][block_idx-1]?sum1[block_idx]:sum0[block_idx][3:0];
+    end
+  endfunction
+  assign product=final_prefix_add(tree[LEVELS][0+:64],tree[LEVELS][64+:64]);
 endmodule
