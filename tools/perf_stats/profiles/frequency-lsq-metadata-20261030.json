@@ -1,0 +1,73 @@
+{
+  "name": "frequency-lsq-metadata-20261030",
+  "source_commit": "ae8a9453c68bfac2d6e6c93837b1e4d5ebc9c119",
+  "source_tag": "freq-lsq-metadata-ready-20261030",
+  "generator": "tools/config_gen.py",
+  "generator_args": [
+    "--issue-width",
+    "2",
+    "--rob",
+    "32",
+    "--prf",
+    "64",
+    "--dcache-enable",
+    "1",
+    "--dcache-index-bits",
+    "2",
+    "--dcache-ways",
+    "2",
+    "--line-cache-enable",
+    "1",
+    "--line-cache-index-bits",
+    "9"
+  ],
+  "generated_cpu_config_sha256": "438e66e6183a721296ab13b4b384f9a5f00b90036cae9ad2652080e5559184df",
+  "default_cpu_config_modified": false,
+  "measurement_mode": "opt",
+  "ipc_geomean": 1.1050225312414483,
+  "fmax_mhz": 476.7225325884544,
+  "area_um2": 33346.430625983325,
+  "score_screen": {
+    "ipc_strictly_greater_than": 1.0985,
+    "area_strictly_less_than_um2": 36000,
+    "frequency_at_least_mhz": 300,
+    "final_opt_confirmed": true,
+    "area_limit_applies_to": "opt"
+  },
+  "verification_artifact": "build/three_hour_20261027/freq_lsq_metadata_ready_v131/validation.json",
+  "unit_scope": "Fresh LSQ query/store-capture matrix, 1298266 independent age checks, two backend widths and three complete 19/19 core profiles. Unchanged modules reuse v121 fresh whole-suite evidence. Additional whole-suite attempt interrupted in IQ; no fresh whole-suite ALL PASS claim.",
+  "correctness_profiles": [
+    {
+      "name": "freq_lsq_metadata_ready_v131",
+      "passed": 19,
+      "total": 19,
+      "ipc": 1.1050225312414483
+    },
+    {
+      "name": "freq_metadata_v131_w1",
+      "passed": 19,
+      "total": 19,
+      "ipc": 0.8362511237607829
+    },
+    {
+      "name": "freq_metadata_v131_default_w2",
+      "passed": 19,
+      "total": 19,
+      "ipc": 0.6567251193518457
+    }
+  ],
+  "fresh_repository_entry_suites": [],
+  "opt_policy": "One explicitly authorized OPT completed. Additional OPT requires a new explicit user request.",
+  "opt_checkpoint_tag": "freq-lsq-metadata-opt-20261030",
+  "diagnose_reference": {
+    "fmax_mhz": 419.32841932841933,
+    "area_um2": 34543.929766001434
+  },
+  "opt_verification_artifact": "build/three_hour_20261027/freq_lsq_metadata_ready_v131/opt-verification.json",
+  "adoption_status": "Independent OPT checkpoint; main unchanged pending user direction",
+  "fresh_frozen_module_suites": [
+    "LSQ query/store-capture matrix",
+    "LSQ age subsets and boundaries",
+    "backend W1/W2"
+  ]
+}

@@ -2,6 +2,23 @@
 
 > 本轮最新评分目标：IPC **>1.0985**、面积 **<36,000µm²**、频率至少300MHz；满足后优先提高频率（400MHz加2分、500MHz加4分）。当前最终综合口径为同源opt，diagnose保留作趋势对照。
 
+## 2026-10-30 LSQ快照检查点opt（已完成）
+
+源码 `ae8a945` / `freq-lsq-metadata-ready-20261030`；结果标签 `freq-lsq-metadata-opt-20261030`。高性能配置W2/ROB32/PRF64/IQ8/LSQ16/CDB2、16KiB数据缓存、3位局部历史；默认ROB16/PRF48、缓存关闭配置不改。下表PPA只属于上述高性能配置。本次为用户新授权的一轮opt，独立于已结束的夜间三小时窗口。
+
+| 同源／同模式对照 | IPC | MHz | 面积 µm² | IPC×频率 |
+| --- | ---: | ---: | ---: | ---: |
+| 当前候选 opt | 1.105023 | 476.723 | 33,346.431 | 526.789 |
+| main e16f5b1 opt | 1.105023 | 420.361 | 34,240.214 | 464.509 |
+| 同源候选 diagnose | 1.105023 | 419.328 | 34,543.930 | 463.367 |
+
+相对main opt：频率 **+13.408%**、面积 **-2.610%**、吞吐 **+13.408%**，IPC不变。相对同源diagnose：频率 **+13.687%**、面积 **-3.467%**。
+一次opt实际耗时 **15.69分钟**；24冻结输入、23项仓库／Git源码、工具、9库、时序／ABC约束、SRAM形状及数量均核对，原diagnose报告SHA不变。
+复用同源高W2、高W1、默认W2三套各19/19、六perf与统计版输入／答案／周期一致；LSQ专项及独立年龄参考1,298,266项、两档后端专项通过，未改模块复用已记录v121全套结果。另行全套复跑曾在IQ阶段中断，不计为本版新跑ALL PASS。
+门槛核验：IPC>1.0985、面积<36,000µm²、频率≥300MHz：**通过**；对应既有评分表 **102**，面积余量 **2,653.569µm²**。
+首条opt路径 `_533291_/QN` → `_548247_/D`，到达 **2.043ns**。当前main仍为e16f5b1，本次不自动合并或推送。
+证据：[opt同源核验](../build/three_hour_20261027/freq_lsq_metadata_ready_v131/opt-verification.json)、[main同模式对照](../build/three_hour_20261027/freq_lsq_metadata_ready_v131/main-opt-comparison.json)、[功能覆盖范围](../build/three_hour_20261027/freq_lsq_metadata_ready_v131/validation.json)。复现：[高性能配置档案](../tools/perf_stats/profiles/frequency-lsq-metadata-20261030.json)。
+
 ## 2026-10-29 夜间三小时控制链提频（已收束，执行空档中断）
 
 授权时段23:43:45至10月30日02:43:45；以Booth v126/40ec8b8为实验起点，main e16f5b1保留。根据已完成opt的关键路径优化调度／访存控制；本窗口仅串行diagnose，不新增opt。IPC保持>1.0985，最终面积上限36k按opt判断；默认配置不改。编译完成即清理PCH，宿主C盘保护线30GiB，build保留上限64GiB。
@@ -760,7 +777,7 @@ load/store 放入旧的 a0/a1 缓冲。优先做分析和方案设计，单次�
 | 2026-10-30 | [冻结v129 相位无关访存提示](../build/three_hour_20261027/freq_phase_free_memory_hint_v129/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,468.493 (diag) | 409.273 (diag) | 三套配置各19/19，六perf与统计版同周期；改动模块专项通过，未改模块复用已记录全套结果；三小时控制链试验，保留决定见窗口记录 |
 | 2026-10-30 | [冻结v130 LSQ年龄关系快照](../build/three_hour_20261027/freq_lsq_age_snapshot_v130/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,534.292 (diag) | 413.070 (diag) | 三套配置各19/19，六perf与统计版同周期；改动模块专项通过，未改模块复用已记录全套结果；三小时控制链试验，保留决定见窗口记录 |
 | 2026-10-30 | [冻结v132 LSQ固定槽位数据写入](../build/three_hour_20261027/freq_lsq_static_payload_v132/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,553.217 (diag) | 409.109 (diag) | 三项冒烟和六perf通过；高W2 19/19；频率−0.959%、面积+0.055%；不采用；三小时控制链试验，保留决定见窗口记录 |
-| 2026-10-30 | [冻结v131 LSQ快照元数据预采样](../build/three_hour_20261027/freq_lsq_metadata_ready_v131/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,543.930 (diag) | 419.328 (diag) | 三套配置各19/19，六perf与统计版同周期；改动模块专项通过，未改模块复用已记录全套结果；另行全套复跑在IQ阶段中断，不计ALL PASS；三套完整验证后保留为检查点；三小时控制链试验，保留决定见窗口记录 |
+| 2026-10-30 | `freq-lsq-metadata-opt-20261030` / ae8a945 | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 33,346.431 (opt) | 476.723 (opt) | 同源三套各19/19；改动模块专项通过，未改模块复用v121全套；额外全套复跑中断；独立opt检查点 |
 
 P2 基线 opt 综合：comb 16,361.326、seq 5,648.117、SRAM 2,278.903 µm²，
 min period 17.8320 ns（目标 2 ns，WNS −15.8320 ns）。diagnose 为 25,025.438 µm²、
@@ -970,7 +987,7 @@ ALU，必须先确认 IPC 不低于 0.60。
 | v129 相位无关访存提示；三小时控制链 | [冻结v129 相位无关访存提示](../build/three_hour_20261027/freq_phase_free_memory_hint_v129/verification.json) | 1.105023 | — | 34,468.493 | 409.273 | — | — |
 | v130 LSQ年龄关系快照；三小时控制链 | [冻结v130 LSQ年龄关系快照](../build/three_hour_20261027/freq_lsq_age_snapshot_v130/verification.json) | 1.105023 | — | 34,534.292 | 413.070 | — | — |
 | v132 LSQ固定槽位数据写入；三小时控制链 | [冻结v132 LSQ固定槽位数据写入](../build/three_hour_20261027/freq_lsq_static_payload_v132/verification.json) | 1.105023 | — | 34,553.217 | 409.109 | — | — |
-| v131 LSQ快照元数据预采样；三小时控制链 | [冻结v131 LSQ快照元数据预采样](../build/three_hour_20261027/freq_lsq_metadata_ready_v131/verification.json) | 1.105023 | — | 34,543.930 | 419.328 | — | — |
+| v131 LSQ快照元数据预采样；opt已完成 | [opt核验](../build/three_hour_20261027/freq_lsq_metadata_ready_v131/opt-verification.json) | 1.105023 | 0.836251 | 34,543.930 | 419.328 | 33,346.431 | 476.723 |
 
 新增行的“—”表示没有对应同源 opt 数据；不复用历史 main 或其他候选的 opt。
 
