@@ -1,0 +1,67 @@
+{
+  "name": "frequency-twohour-best-20261030",
+  "source_commit": "4fbcd618baa87143bdb0c3b2218eda4524b8f10d",
+  "source_tag": "freq-prf-prefix-combo-trial-20261030",
+  "generator": "tools/config_gen.py",
+  "generator_args": [
+    "--issue-width",
+    "2",
+    "--rob",
+    "32",
+    "--prf",
+    "64",
+    "--dcache-enable",
+    "1",
+    "--dcache-index-bits",
+    "2",
+    "--dcache-ways",
+    "2",
+    "--line-cache-enable",
+    "1",
+    "--line-cache-index-bits",
+    "9"
+  ],
+  "generated_cpu_config_sha256": "438e66e6183a721296ab13b4b384f9a5f00b90036cae9ad2652080e5559184df",
+  "default_cpu_config_modified": false,
+  "measurement_mode": "opt",
+  "ipc_geomean": 1.1050225312414483,
+  "fmax_mhz": 487.6190476190476,
+  "area_um2": 32618.69908599411,
+  "score_screen": {
+    "ipc_strictly_greater_than": 1.0985,
+    "area_strictly_less_than_um2": 36000,
+    "frequency_at_least_mhz": 300,
+    "final_opt_confirmed": true,
+    "area_limit_applies_to": "opt"
+  },
+  "verification_artifact": "build/three_hour_20261027/freq_prf_prefix_combined_v141/validation.json",
+  "unit_scope": "Three complete 19/19 core configurations. Module-specific independent checks and identical-source reuse are bound in validation.json. No new whole-suite ALL PASS claim.",
+  "correctness_profiles": [
+    {
+      "name": "freq_prf_prefix_combined_v141",
+      "passed": 19,
+      "total": 19,
+      "ipc": 1.1050225312414483
+    },
+    {
+      "name": "freq_combo_v141_w1",
+      "passed": 19,
+      "total": 19,
+      "ipc": 0.8362511237607829
+    },
+    {
+      "name": "freq_combo_v141_default_w2",
+      "passed": 19,
+      "total": 19,
+      "ipc": 0.6567251193518457
+    }
+  ],
+  "opt_policy": "One explicitly authorized final OPT completed after extended optimization window. Further OPT requires a new user request.",
+  "opt_checkpoint_tag": "freq-twohour-best-opt-20261030",
+  "diagnose_reference": {
+    "fmax_mhz": 421.9200659250103,
+    "area_um2": 34116.13798600088
+  },
+  "opt_verification_artifact": "build/three_hour_20261027/freq_prf_prefix_combined_v141/opt-verification.json",
+  "adoption_status": "Not adopted: Fmax1.190% below retained493.494MHz baseline; result tag preserved, working tree restored to v140, main unchanged"
+}
