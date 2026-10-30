@@ -1,0 +1,75 @@
+{
+  "name": "frequency-prf-predecode-20261030",
+  "source_commit": "e1eca9e799de7f5b9920ab4ce0edfb65461ca67d",
+  "source_tag": "freq-prf-predecode-diagnose-20261030",
+  "generator": "tools/config_gen.py",
+  "generator_args": [
+    "--issue-width",
+    "2",
+    "--rob",
+    "32",
+    "--prf",
+    "64",
+    "--dcache-enable",
+    "1",
+    "--dcache-index-bits",
+    "2",
+    "--dcache-ways",
+    "2",
+    "--line-cache-enable",
+    "1",
+    "--line-cache-index-bits",
+    "9"
+  ],
+  "generated_cpu_config_sha256": "438e66e6183a721296ab13b4b384f9a5f00b90036cae9ad2652080e5559184df",
+  "default_cpu_config_modified": false,
+  "measurement_mode": "opt",
+  "ipc_geomean": 1.1050225312414483,
+  "fmax_mhz": 493.49397590361446,
+  "area_um2": 32862.549585992245,
+  "score_screen": {
+    "ipc_strictly_greater_than": 1.0985,
+    "area_strictly_less_than_um2": 36000,
+    "frequency_at_least_mhz": 300,
+    "final_opt_confirmed": true,
+    "area_limit_applies_to": "opt"
+  },
+  "verification_artifact": "build/three_hour_20261027/freq_prf_registered_decode_v140/validation.json",
+  "unit_scope": "Three complete 19/19 core profiles; 48220 normal and predecoded PRF checks, 23397 backend checks and 224 memory hint checks. Unchanged modules reuse recorded same-source evidence; no fresh whole-suite ALL PASS claim.",
+  "correctness_profiles": [
+    {
+      "name": "freq_prf_registered_decode_v140",
+      "passed": 19,
+      "total": 19,
+      "ipc": 1.1050225312414483
+    },
+    {
+      "name": "freq_predecode_v140_w1",
+      "passed": 19,
+      "total": 19,
+      "ipc": 0.8362511237607829
+    },
+    {
+      "name": "freq_predecode_v140_default_w2",
+      "passed": 19,
+      "total": 19,
+      "ipc": 0.6567251193518457
+    }
+  ],
+  "fresh_repository_entry_suites": [
+    "PRF masked read ports W1/W2/W3"
+  ],
+  "opt_policy": "One explicitly authorized OPT completed. Additional OPT requires a new explicit user request.",
+  "opt_checkpoint_tag": "freq-prf-predecode-opt-20261030",
+  "diagnose_reference": {
+    "fmax_mhz": 422.616591002889,
+    "area_um2": 34184.401546000845
+  },
+  "opt_verification_artifact": "build/three_hour_20261027/freq_prf_registered_decode_v140/opt-verification.json",
+  "adoption_status": "Independent OPT checkpoint; current main unchanged",
+  "fresh_frozen_module_suites": [
+    "PRF W1/W2/W3 normal and masked ports",
+    "backend W1/W2",
+    "universal memory hint"
+  ]
+}

@@ -2,6 +2,23 @@
 
 > 本轮最新评分目标：IPC **>1.0985**、面积 **<36,000µm²**、频率至少300MHz；满足后优先提高频率（400MHz加2分、500MHz加4分）。当前最终综合口径为同源opt，diagnose保留作趋势对照。
 
+## 2026-10-30 PRF预译码单次opt（已完成）
+
+源码 `e1eca9e` / `freq-prf-predecode-diagnose-20261030`；结果标签 `freq-prf-predecode-opt-20261030`。高性能配置W2/ROB32/PRF64/IQ8/LSQ16/CDB2、16KiB数据缓存、3位局部历史；默认ROB16/PRF48、缓存关闭配置不改。只包含已验证的PRF并行读选择与ALU缓冲源标签预译码，不包含乘法分组进位组合原型。本次为用户新授权的一轮opt，独立于已结束的一小时窗口。
+
+| 同配置对照 | IPC | MHz | 面积 µm² | IPC×频率 |
+| --- | ---: | ---: | ---: | ---: |
+| 预译码候选 opt | 1.105023 | 493.494 | 32,862.550 | 545.322 |
+| 当前main 8a6fbdd opt | 1.105023 | 476.723 | 33,346.431 | 526.789 |
+| 同源预译码 diagnose | 1.105023 | 422.617 | 34,184.402 | 467.001 |
+
+相对main opt：频率 **+3.518%**、面积 **-1.451%**、吞吐 **+3.518%**，IPC不变。相对同源diagnose：频率 **+16.771%**、面积 **-3.867%**。最终以opt实测为准，不按diagnose的相对收益外推。
+一次opt实际耗时 **19.69分钟**；24冻结输入、23项仓库／Git源码、工具、9库、时序／ABC约束、SRAM形状及数量均核对，原diagnose报告SHA不变。
+复用同源高W2、高W1、默认W2三套各19/19、六perf与统计版输入／答案／周期一致；普通／预译码PRF读口48,220项、两宽后端23,397项与访存提示224项通过。未改模块复用已有全套结果，本次没有新跑全套ALL PASS结论。
+门槛核验：IPC>1.0985、面积<36,000µm²、频率≥300MHz：**通过**；对应既有评分表 **102**，面积余量 **3,137.450µm²**。
+首条opt路径 `_525540_/QN` → `_526144_/D`，到达 **1.970ns**。结果独立保留；main仍为8a6fbdd，本次未合main或推送，也未启动第二轮opt。
+证据：[opt同源核验](../build/three_hour_20261027/freq_prf_registered_decode_v140/opt-verification.json)、[main同模式对照](../build/three_hour_20261027/freq_prf_registered_decode_v140/main-opt-comparison.json)、[功能覆盖范围](../build/three_hour_20261027/freq_prf_registered_decode_v140/validation.json)。复现：[高性能配置档案](../tools/perf_stats/profiles/frequency-prf-predecode-20261030.json)。
+
 ## 2026-10-30 main合并后一小时提频（已结束）
 
 授权时段08:32:25至09:32:25；从main 8a6fbdd / v131开始，已测opt为476.723MHz、33,346.431µm²。本窗口针对opt关键路径，只串行diagnose筛选，不新增opt；所有对照表均使用相同高性能配置、相同模式。IPC门槛>1.0985，面积36k最终按opt判断，默认配置不改；C盘30GiB、build64GiB保护线继续有效。
@@ -806,7 +823,7 @@ load/store 放入旧的 a0/a1 缓冲。优先做分析和方案设计，单次�
 | 2026-10-30 | `freq-lsq-metadata-opt-20261030` / ae8a945 | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 33,346.431 (opt) | 476.723 (opt) | 已合本地main；同源三套各19/19；派发/x0合并回归通过；额外全套复跑中断；opt检查点保留 |
 | 2026-10-30 | [冻结v137 PRF并行读选择](../build/three_hour_20261027/freq_prf_read_postopt_v137/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,177.972 (diag) | 421.226 (diag) | 三套配置各19/19，六perf与统计版同周期；改动模块专项通过，未改模块复用已记录全套结果；三套19/19；独立诊断检查点，main与opt标签保留；一小时提频试验，保留决定见窗口记录 |
 | 2026-10-30 | [冻结v138 乘法末级分组进位](../build/three_hour_20261027/freq_mul_final_prefix_v138/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,563.759 (diag) | 416.768 (diag) | 三套配置各19/19，六perf与统计版同周期；改动模块专项通过，未改模块复用已记录全套结果；总体诊断频率／面积无收益，未采用；ALU1相关路径2.294→2.020ns，保留组合候选；一小时提频试验，保留决定见窗口记录 |
-| 2026-10-30 | [冻结v140 ALU缓冲源标签预译码](../build/three_hour_20261027/freq_prf_registered_decode_v140/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,184.402 (diag) | 422.617 (diag) | 三套配置各19/19，六perf与统计版同周期；改动模块专项通过，未改模块复用已记录全套结果；三套19/19；普通／预译码读口48,220项通过；保留诊断检查点；一小时提频试验，保留决定见窗口记录 |
+| 2026-10-30 | `freq-prf-predecode-opt-20261030` / e1eca9e | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 32,862.550 (opt) | 493.494 (opt) | 同源三套各19/19；普通／预译码PRF与两宽后端专项通过；未改模块复用已有全套；独立opt检查点，main未改 |
 
 P2 基线 opt 综合：comb 16,361.326、seq 5,648.117、SRAM 2,278.903 µm²，
 min period 17.8320 ns（目标 2 ns，WNS −15.8320 ns）。diagnose 为 25,025.438 µm²、
@@ -1019,7 +1036,7 @@ ALU，必须先确认 IPC 不低于 0.60。
 | v131 LSQ快照元数据预采样；opt已完成 | [opt核验](../build/three_hour_20261027/freq_lsq_metadata_ready_v131/opt-verification.json) | 1.105023 | 0.836251 | 34,543.930 | 419.328 | 33,346.431 | 476.723 |
 | v137 PRF并行读选择；一小时提频 | [冻结v137 PRF并行读选择](../build/three_hour_20261027/freq_prf_read_postopt_v137/verification.json) | 1.105023 | 0.836251 | 34,177.972 | 421.226 | — | — |
 | v138 乘法末级分组进位；一小时提频 | [冻结v138 乘法末级分组进位](../build/three_hour_20261027/freq_mul_final_prefix_v138/verification.json) | 1.105023 | 0.836251 | 34,563.759 | 416.768 | — | — |
-| v140 ALU缓冲源标签预译码；一小时提频 | [冻结v140 ALU缓冲源标签预译码](../build/three_hour_20261027/freq_prf_registered_decode_v140/verification.json) | 1.105023 | 0.836251 | 34,184.402 | 422.617 | — | — |
+| v140 ALU缓冲源标签预译码；opt已完成 | [opt核验](../build/three_hour_20261027/freq_prf_registered_decode_v140/opt-verification.json) | 1.105023 | 0.836251 | 34,184.402 | 422.617 | 32,862.550 | 493.494 |
 
 新增行的“—”表示没有对应同源 opt 数据；不复用历史 main 或其他候选的 opt。
 
