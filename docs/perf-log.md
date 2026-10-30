@@ -11,6 +11,7 @@
 | 预译码加乘法末级分组进位 | 1.105023 | 421.920 | 34,116.138 |
 | Booth稀疏符号扩展 | 1.105023 | 420.880 | 34,133.022 |
 | IQ载入提示双路预选 | 1.105023 | 416.599 | 34,146.042 |
+| IQ预选加乘法末级分组进位 | 1.105023 | 415.079 | 34,157.531 |
 | 窗口起点v140 | 1.105023 | 422.617 | 34,184.402 |
 | main 8a6fbdd | 1.105023 | 419.328 | 34,543.930 |
 
@@ -19,6 +20,8 @@
 Booth稀疏符号扩展：三套配置各19/19，普通／统计版同周期；改动模块专项通过，未改模块复用已有结果；三套19/19；相对预译码基线频率-0.411%、面积-0.150%；暂不采用；[同源核验](../build/three_hour_20261027/freq_booth_sparse_sign_v142/verification.json)、[当轮三方对照](../build/three_hour_20261027/freq_booth_sparse_sign_v142/window-twohour-comparison.json)。
 
 IQ载入提示双路预选：三套配置各19/19，普通／统计版同周期；改动模块专项通过，未改模块复用已有结果；三套19/19；整体频率下降1.424%，暂不采用；组合候选继续；[同源核验](../build/three_hour_20261027/freq_iq_split_load_hint_v146/verification.json)、[当轮三方对照](../build/three_hour_20261027/freq_iq_split_load_hint_v146/window-twohour-comparison.json)。
+
+IQ预选加乘法末级分组进位：三套配置各19/19，普通／统计版同周期；改动模块专项通过，未改模块复用已有结果；三套19/19；整核频率下降1.784%，暂不采用；[同源核验](../build/three_hour_20261027/freq_iq_mul_combined_v147/verification.json)、[当轮三方对照](../build/three_hour_20261027/freq_iq_mul_combined_v147/window-twohour-comparison.json)。
 
 当前保留实验源：`freq_prf_registered_decode_v140`；最终opt尚未启动。
 
@@ -851,6 +854,7 @@ load/store 放入旧的 a0/a1 缓冲。优先做分析和方案设计，单次�
 | 2026-10-30 | [冻结v141 预译码加乘法末级分组进位](../build/three_hour_20261027/freq_prf_prefix_combined_v141/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,116.138 (diag) | 421.920 (diag) | 三套配置各19/19，普通／统计版同周期；改动模块专项通过，未改模块复用已有结果；三套19/19；总体频率略降、面积略降；ALU1相关路径2.231→1.948ns，保留组合候选；两小时提频试验 |
 | 2026-10-30 | [冻结v142 Booth稀疏符号扩展](../build/three_hour_20261027/freq_booth_sparse_sign_v142/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,133.022 (diag) | 420.880 (diag) | 三套配置各19/19，普通／统计版同周期；改动模块专项通过，未改模块复用已有结果；三套19/19；相对预译码基线频率-0.411%、面积-0.150%；暂不采用；两小时提频试验 |
 | 2026-10-30 | [冻结v146 IQ载入提示双路预选](../build/three_hour_20261027/freq_iq_split_load_hint_v146/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,146.042 (diag) | 416.599 (diag) | 三套配置各19/19，普通／统计版同周期；改动模块专项通过，未改模块复用已有结果；三套19/19；整体频率下降1.424%，暂不采用；组合候选继续；两小时提频试验 |
+| 2026-10-30 | [冻结v147 IQ预选加乘法末级分组进位](../build/three_hour_20261027/freq_iq_mul_combined_v147/verification.json) | W2/32/64/8/2/16/1KB×2 + D$16KiB | 1.105023 | 34,157.531 (diag) | 415.079 (diag) | 三套配置各19/19，普通／统计版同周期；改动模块专项通过，未改模块复用已有结果；三套19/19；整核频率下降1.784%，暂不采用；两小时提频试验 |
 
 P2 基线 opt 综合：comb 16,361.326、seq 5,648.117、SRAM 2,278.903 µm²，
 min period 17.8320 ns（目标 2 ns，WNS −15.8320 ns）。diagnose 为 25,025.438 µm²、
@@ -1067,6 +1071,7 @@ ALU，必须先确认 IPC 不低于 0.60。
 | v141 预译码加乘法末级分组进位；两小时提频 | [冻结v141 预译码加乘法末级分组进位](../build/three_hour_20261027/freq_prf_prefix_combined_v141/verification.json) | 1.105023 | 0.836251 | 34,116.138 | 421.920 | — | — |
 | v142 Booth稀疏符号扩展；两小时提频 | [冻结v142 Booth稀疏符号扩展](../build/three_hour_20261027/freq_booth_sparse_sign_v142/verification.json) | 1.105023 | 0.836251 | 34,133.022 | 420.880 | — | — |
 | v146 IQ载入提示双路预选；两小时提频 | [冻结v146 IQ载入提示双路预选](../build/three_hour_20261027/freq_iq_split_load_hint_v146/verification.json) | 1.105023 | 0.836251 | 34,146.042 | 416.599 | — | — |
+| v147 IQ预选加乘法末级分组进位；两小时提频 | [冻结v147 IQ预选加乘法末级分组进位](../build/three_hour_20261027/freq_iq_mul_combined_v147/verification.json) | 1.105023 | 0.836251 | 34,157.531 | 415.079 | — | — |
 
 新增行的“—”表示没有对应同源 opt 数据；不复用历史 main 或其他候选的 opt。
 
