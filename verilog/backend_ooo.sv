@@ -1074,6 +1074,7 @@ module backend_ooo #(
         alu_valid_q  <= 1'b1;
         alu_tag_q    <= a0_dest;
         alu_seq_q    <= a0_seq_q;
+        alu_value_q  <= wb_value;
         alu_exc_q    <= 1'b0;
       end
       if (alu1_valid_q && cdb_src_ready[1])
@@ -1082,6 +1083,7 @@ module backend_ooo #(
         alu1_valid_q <= 1'b1;
         alu1_tag_q   <= p_dest;
         alu1_seq_q   <= a1_seq_q;
+        alu1_value_q <= wb1_value;
         alu1_exc_q   <= 1'b0;
       end
 `ifdef LOCAL_TRACE
@@ -1128,30 +1130,6 @@ module backend_ooo #(
       end
     end
   end
-
-  // Data can be sampled whenever its result slot is replaceable. The
-  // existing qualified issue event still creates ownership in valid/tag/seq.
-  always_ff @(posedge clk)if(!reset)begin
-    if(!alu_valid_q || cdb_src_ready[0])alu_value_q<=wb_value;
-    if(!alu1_valid_q || cdb_src_ready[1])alu1_value_q<=wb1_value;
-  end
-`ifndef SYNTHESIS
-  // Shadow the previous qualified-capture semantics independently. Only
-  // live result slots are observable; stalled owners must retain their data.
-  logic [31:0] reference_alu_value,reference_alu1_value;
-  always_ff @(posedge clk)if(!reset)begin
-    if(alu_issue && needs_alu_result && !(!alu_valid_q || cdb_src_ready[0]))
-      $fatal(1,"ALU0 qualified capture without replaceable result slot");
-    if(alu1_issue && p_needs_alu_result && !(!alu1_valid_q || cdb_src_ready[1]))
-      $fatal(1,"ALU1 qualified capture without replaceable result slot");
-    if(alu_valid_q && alu_value_q!=reference_alu_value)
-      $fatal(1,"ALU0 live result differs from qualified-capture reference");
-    if(alu1_valid_q && alu1_value_q!=reference_alu1_value)
-      $fatal(1,"ALU1 live result differs from qualified-capture reference");
-    if(alu_issue && needs_alu_result)reference_alu_value<=wb_value;
-    if(alu1_issue && p_needs_alu_result)reference_alu1_value<=wb1_value;
-  end
-`endif
 
   // ---------------------------------------------------------------------------
   // complete / br_update 打包
