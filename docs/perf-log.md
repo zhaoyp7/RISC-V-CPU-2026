@@ -2,6 +2,14 @@
 
 > 本轮最新评分目标：IPC **>1.0985**、面积 **<36,000µm²**、频率至少300MHz；满足后优先提高频率（400MHz加2分、500MHz加4分）。当前最终综合口径为同源opt，diagnose保留作趋势对照。
 
+## 2026-10-31 最优提频候选合入 main
+
+按用户指令，将 `feat/freq-post-opt-20261030` 的 `530df7c` 快进合入本地 main，并推送 origin/main。最终生产 RTL 与已验证的 PRF 预译码源码 `e1eca9e` 完全一致；此前乘法末级分组进位等试验已回退，保留历史实验记录。
+
+相同高性能配置 W2/ROB32/PRF64/IQ8/LSQ16/CDB2、16KiB 数据缓存、3位局部历史下，新 main 采用 opt **493.494MHz / 32,862.550µm² / IPC 1.105023**；相对合并前 `8a6fbdd` 的 476.723MHz / 33,346.431µm²，频率及吞吐 **+3.518%**、面积 **−1.451%**、IPC 不变。默认配置未改变，上述 PPA 仅适用于对应高性能配置。
+
+合并前核验：工作树干净、远端 main 无分叉、差异格式检查通过、全部 verilog 与 `e1eca9e` 一致。复用同源三套配置各19/19、六项 perf 周期一致及模块专项记录；本次未新增综合或宣称新跑全套单测。证据：[opt 与 main 同配置对照](../build/three_hour_20261027/freq_prf_registered_decode_v140/main-opt-comparison.json)、[同源核验](../build/three_hour_20261027/freq_prf_registered_decode_v140/opt-verification.json)、[功能覆盖范围](../build/three_hour_20261027/freq_prf_registered_decode_v140/validation.json)。
+
 ## 2026-10-31 持续优化候选opt（已完成）
 
 用户授权持续优化，17:38续期两小时后选择最优候选完成一轮opt。所选方案：预译码加乘法末级分组进位，源码 `4fbcd61` / `freq-prf-prefix-combo-trial-20261030`；结果标签 `freq-twohour-best-opt-20261030`。高性能配置W2/ROB32/PRF64/IQ8/LSQ16/CDB2、16KiB数据缓存、3位局部历史；默认ROB16/PRF48、缓存关闭配置不改。
